@@ -20,6 +20,9 @@ export default function VendorDashboard() {
   const [pwNew, setPwNew] = useState("");
   const [pwNew2, setPwNew2] = useState("");
   const [pwMsg, setPwMsg] = useState("");
+  const [pushDevices, setPushDevices] = useState<number | null>(null);
+  const [pushKey, setPushKey] = useState("");
+  const [pushMsg, setPushMsg] = useState("");
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -28,6 +31,39 @@ export default function VendorDashboard() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    fetch("/api/vendor/push").then(async (r) => {
+      if (r.ok) { const d = await r.json(); setPushDevices(d.devices); setPushKey(d.publicKey); }
+    }).catch(() => {});
+  }, []);
+
+  const enablePush = async () => {
+    setPushMsg("");
+    try {
+      if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+        setPushMsg("This browser can't do notifications. On iPhone: share button → Add to Home Screen, then open the app from there and try again.");
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setPushMsg("Notifications were blocked — allow them in your browser settings and try again."); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const b64 = pushKey.replace(/-/g, "+").replace(/_/g, "/");
+      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+      const raw = atob(b64 + pad);
+      const key = new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      const res = await fetch("/api/vendor/push", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()),
+      });
+      if (!res.ok) { setPushMsg("Couldn't save — try again."); return; }
+      setPushDevices((n) => (n || 0) + 1);
+      setPushMsg("Sale alerts ON for this device. ✓ You'll get a notification instead of an email.");
+    } catch {
+      setPushMsg("Couldn't turn on notifications here. iPhone: must be iOS 16.4+ AND opened from a home-screen icon (share → Add to Home Screen).");
+    }
+  };
 
   const addItem = async () => {
     setErr("");
@@ -205,6 +241,21 @@ export default function VendorDashboard() {
       </div>
 
       <div className="card">
+        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>SALE ALERTS 🔔</h2>
+        <p style={{ fontSize: 13, color: "var(--ash)" }}>
+          Get a push notification the moment your items sell. Without this you get one summary email at the end of each selling day — never an email per sale.
+          {pushDevices !== null && pushDevices > 0 ? ` Currently ON for ${pushDevices} device${pushDevices === 1 ? "" : "s"}.` : ""}
+        </p>
+        <div style={{ margin: "10px 0 4px" }}>
+          <button className="btn small" onClick={enablePush}>TURN ON FOR THIS DEVICE</button>
+        </div>
+        <p style={{ fontSize: 11.5, color: "var(--ash)" }}>
+          iPhone: works on iOS 16.4+ only after you add this site to your home screen (share button → Add to Home Screen) and open it from that icon. Android: works right in Chrome.
+        </p>
+        {pushMsg && <p className={pushMsg.includes("✓") ? "ok" : "err"}>{pushMsg}</p>}
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>CHANGE PASSWORD</h2>
         <label>Current password</label>
         <input type="password" value={pwCur} onChange={(e) => setPwCur(e.target.value)} />

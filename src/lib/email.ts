@@ -89,3 +89,26 @@ export async function sendPasswordResetEmail(
     <p style="font-size:12px;color:#999;margin-top:12px;">Please change it after you sign in.</p>`;
   await send(vendor.email, "Your password was reset", shell(inner));
 }
+
+export async function sendDailySummaryEmail(
+  vendor: { email: string; businessName: string },
+  day: string,
+  lines: { name: string; quantity: number; grossCents: number }[],
+  grossCents: number,
+  netCents: number,
+  refundNoteCents: number
+) {
+  const rows = lines
+    .map((l) => `${l.quantity}&times; ${l.name} &mdash; $${(l.grossCents / 100).toFixed(2)}`)
+    .join("<br>");
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">YOUR SALES TODAY &mdash; ${day}</h2>
+    <div style="display:inline-block;text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin-bottom:12px;">
+      <div style="font-weight:600;font-size:14px;color:#000;">${rows}</div>
+      <div style="font-size:14px;color:#000;margin-top:8px;border-top:1px solid #000;padding-top:6px;">Gross: $${(grossCents / 100).toFixed(2)}</div>
+      ${refundNoteCents > 0 ? `<div style="font-size:13px;color:#000;">Refunds today: &minus;$${(refundNoteCents / 100).toFixed(2)}</div>` : ""}
+      <div style="font-size:15px;font-weight:700;color:#000;">Your net: $${(netCents / 100).toFixed(2)}</div>
+    </div>
+    <p style="font-size:12px;color:#777;margin:0;">Full detail and your running balance: <a href="${baseUrl()}">${baseUrl().replace("https://", "")}</a><br>Want instant alerts instead of this email? Log in and turn on Sale Alerts.</p>`;
+  await send(vendor.email, `Your sales today at Community Harvest`, shell(inner));
+}

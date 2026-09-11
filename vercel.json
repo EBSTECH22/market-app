@@ -1,5 +1,12 @@
 {
   "crons": [
-    { "path": "/api/cron/rent", "schedule": "5 6 1 * *" }
+    {
+      "path": "/api/cron/rent",
+      "schedule": "5 6 1 * *"
+    },
+    {
+      "path": "/api/cron/daily-summary",
+      "schedule": "15 1 * * *"
+    }
   ]
 }

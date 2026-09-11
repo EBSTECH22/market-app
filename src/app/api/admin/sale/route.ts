@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isStaff } from "@/lib/auth";
 import { getTaxRatePercent } from "@/lib/settings";
-import { sendSaleEmail } from "@/lib/email";
+import { pushToVendor } from "@/lib/push";
 
 export async function POST(req: NextRequest) {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -90,7 +90,14 @@ export async function POST(req: NextRequest) {
     const vendor = items.find((i) => i.vendorId === vendorId)?.vendor;
     if (vendor?.email) {
       try {
-        await sendSaleEmail(vendor, vLines);
+        const net = vLines.reduce((n, l) => n + l.vendorNetCents, 0);
+        const itemsTxt = vLines.map((l) => `${l.quantity}x ${l.name}`).join(", ");
+        // push-enabled vendors get pinged per sale; everyone else gets one daily summary email (cron)
+        await pushToVendor(
+          vendor.id,
+          "You made a sale! 🎉",
+          `${itemsTxt} — your net $${(net / 100).toFixed(2)}`
+        );
       } catch (err) {
         console.error("sale email failed", err);
       }

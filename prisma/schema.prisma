@@ -154,3 +154,12 @@ model Refund {
   note        String   @default("")
   createdAt   DateTime @default(now())
 }
+
+model PushSub {
+  id        String   @id @default(cuid())
+  vendorId  String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+}
