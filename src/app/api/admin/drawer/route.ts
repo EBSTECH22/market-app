@@ -12,10 +12,19 @@ export async function GET() {
   const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
   if (!session) return NextResponse.json({ session: null });
   const cash = await db.sale.aggregate({
-    where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt } },
+    where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt }, status: { not: "VOIDED" } },
     _sum: { totalCents: true },
   });
-  return NextResponse.json({ session: { ...session, cashSalesCents: cash._sum.totalCents || 0 } });
+  const cashVoids = await db.refund.aggregate({
+    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { startsWith: "VOID" } },
+    _sum: { amountCents: true, taxCents: true },
+  });
+  const cashRefunds = await db.refund.aggregate({
+    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { not: { startsWith: "VOID" } } },
+    _sum: { amountCents: true, taxCents: true },
+  });
+  const outflow = (cashRefunds._sum.amountCents || 0) + (cashRefunds._sum.taxCents || 0);
+  return NextResponse.json({ session: { ...session, cashSalesCents: (cash._sum.totalCents || 0) - outflow } });
 }
 
 export async function POST(req: NextRequest) {
@@ -45,10 +54,18 @@ export async function PATCH(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "No open drawer." }, { status: 400 });
 
   const cash = await db.sale.aggregate({
-    where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt } },
+    where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt }, status: { not: "VOIDED" } },
     _sum: { totalCents: true },
   });
-  const cashSalesCents = cash._sum.totalCents || 0;
+  const cashVoids = await db.refund.aggregate({
+    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { startsWith: "VOID" } },
+    _sum: { amountCents: true, taxCents: true },
+  });
+  const cashRefunds = await db.refund.aggregate({
+    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { not: { startsWith: "VOID" } } },
+    _sum: { amountCents: true, taxCents: true },
+  });
+  const cashSalesCents = (cash._sum.totalCents || 0) - ((cashRefunds._sum.amountCents || 0) + (cashRefunds._sum.taxCents || 0));
   const counted = Math.max(0, Math.round(Number(countedCents) || 0));
   const expected = session.openTotalCents + cashSalesCents;
 

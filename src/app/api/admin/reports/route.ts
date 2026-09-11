@@ -34,9 +34,10 @@ export async function GET(req: NextRequest) {
   } else start = centralDayStart(now);
 
   const sales = await db.sale.findMany({
-    where: { createdAt: { gte: start, lte: end } },
+    where: { createdAt: { gte: start, lte: end }, status: { not: "VOIDED" } },
     include: { lines: true },
   });
+  const refunds = await db.refund.findMany({ where: { createdAt: { gte: start, lte: end }, note: { not: { startsWith: "VOID" } } } });
   const vendors = await db.vendor.findMany({ select: { id: true, code: true, businessName: true, commissionPercent: true } });
   const vmap = new Map(vendors.map((v) => [v.id, v]));
 
@@ -64,8 +65,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // refunds reduce the period's money (voided sales are excluded entirely above)
+  let refundTotal = 0;
+  for (const r of refunds) {
+    gross -= r.amountCents; tax -= r.taxCents;
+    const back = r.amountCents + r.taxCents;
+    refundTotal += back;
+    if (r.method === "CASH") cash -= back; else card -= back;
+  }
+
   return NextResponse.json({
-    start, end, gross, tax, cash, card, tickets, vGross, vNet, units,
+    start, end, gross, tax, cash, card, tickets, refundTotal, vGross, vNet, units,
     byVendor: Object.entries(byVendor).map(([id, c]) => ({ vendor: vmap.get(id), cents: c })).sort((a, b) => b.cents - a.cents),
     byItem: Object.entries(byItem).map(([name, x]) => ({ name, ...x })).sort((a, b) => b.c - a.c).slice(0, 20),
     byHour,

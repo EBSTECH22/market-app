@@ -9,13 +9,13 @@ type CartLine = { itemId: string; sku: string; name: string; vendorName: string;
 type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendor: { businessName: string; code: string } };
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[] };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
-type Ticket = { id: string; number: number; dateStr: string; timeStr: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
+type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
 type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[] };
 type PayrollRow = { id: string; name: string; payRateCents: number; hours: number; grossCents: number; dedCents: number; netCents: number; deductions: { name: string; amountCents: number }[]; openEntries: number };
 type Report = {
-  start: string; end: string; gross: number; tax: number; cash: number; card: number; tickets: number;
+  start: string; end: string; gross: number; tax: number; cash: number; card: number; tickets: number; refundTotal?: number;
   vGross: number; vNet: number; units: number;
   byVendor: { vendor: { code: string; businessName: string }; cents: number }[];
   byItem: { name: string; q: number; c: number }[];
@@ -45,6 +45,13 @@ export default function AdminPage() {
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [teamMsg, setTeamMsg] = useState("");
+  const [punchName, setPunchName] = useState("");
+  const [punchPin, setPunchPin] = useState("");
+  const [punchMsg, setPunchMsg] = useState("");
+  const [refundTarget, setRefundTarget] = useState<{ ticket: Ticket; lines: { id: string; name: string; priceCents: number; quantity: number }[]; refunded: Record<string, number> } | null>(null);
+  const [refundQty, setRefundQty] = useState<Record<string, number>>({});
+  const [refundRestock, setRefundRestock] = useState(true);
+  const [refundMsg, setRefundMsg] = useState("");
   const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "team" | "settings">("register");
   const [busy, setBusy] = useState(false);
 
@@ -279,6 +286,54 @@ export default function AdminPage() {
     if (!confirm("Delete this document?")) return;
     await safeFetch(`/api/admin/team/docs/${id}`, { method: "DELETE" });
     await loadTeam();
+  };
+
+  const punch = async () => {
+    setPunchMsg("");
+    const { ok, data } = await safeFetch("/api/staff/punch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: punchName || employees[0]?.name, pin: punchPin }),
+    });
+    setPunchPin("");
+    if (!ok) { setPunchMsg(String(data.error || "Failed.")); return; }
+    setPunchMsg(String(data.msg));
+  };
+
+  const openRefund = async (t: Ticket) => {
+    setRefundMsg("");
+    const { ok, data } = await safeFetch(`/api/admin/tickets/${t.id}`);
+    if (!ok) { setScanErr(String(data.error || "Couldn't load ticket.")); return; }
+    const sale = data.sale as { lines: { id: string; name: string; priceCents: number; quantity: number }[] };
+    setRefundTarget({ ticket: t, lines: sale.lines, refunded: (data.refunded as Record<string, number>) || {} });
+    setRefundQty({});
+    setRefundRestock(true);
+  };
+
+  const voidSale = async (t: Ticket) => {
+    if (!confirm(`VOID ticket #${t.number} entirely? Items go back on the floor, vendor credits reverse, and it drops out of every report.${t.paymentMethod === "CASH" ? ` Hand back ${money(t.totalCents)} cash.` : " Reverse the card charge on your card machine."}`)) return;
+    const { ok, data } = await safeFetch("/api/admin/refund", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ saleId: t.id, action: "void" }),
+    });
+    if (!ok) { alert(String(data.error || "Void failed.")); return; }
+    await loadTickets(ticketQ); await loadDrawer(); await loadAll();
+  };
+
+  const submitRefund = async () => {
+    if (!refundTarget) return;
+    setRefundMsg("");
+    const lines = Object.entries(refundQty).filter(([, q]) => q > 0).map(([lineId, quantity]) => ({ lineId, quantity }));
+    if (!lines.length) { setRefundMsg("Set a quantity on at least one item."); return; }
+    const { ok, data } = await safeFetch("/api/admin/refund", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock }),
+    });
+    if (!ok) { setRefundMsg(String(data.error || "Refund failed.")); return; }
+    const back = Number(data.refundCents) || 0;
+    const method = refundTarget.ticket.paymentMethod;
+    setRefundTarget(null);
+    alert(`Refund recorded: ${money(back)}. ${method === "CASH" ? "Hand that back from the drawer." : "Reverse it on your card machine — this system only records it."}`);
+    await loadTickets(ticketQ); await loadDrawer(); await loadAll();
   };
 
   const runPayroll = async () => {
@@ -729,9 +784,22 @@ export default function AdminPage() {
               <div className="display" style={{ fontSize: 20 }}>{money(drawer.openTotalCents + drawer.cashSalesCents)}</div>
             </div>
           </div>
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
             <button className="btn small ghost" onClick={() => { setClosing(true); setCounts({}); }}>CLOSE DRAWER (COUNT OUT)</button>
+            <span style={{ flex: "1 1 120px", minWidth: 110 }}>
+              <label style={{ margin: "0 0 4px" }}>⏱ Timeclock — who</label>
+              <select value={punchName || employees[0]?.name || ""} onChange={(e) => setPunchName(e.target.value)}>
+                {employees.map((e) => <option key={e.id}>{e.name}</option>)}
+              </select>
+            </span>
+            <span style={{ flex: "0 1 90px" }}>
+              <label style={{ margin: "0 0 4px" }}>PIN</label>
+              <input type="password" inputMode="numeric" value={punchPin} onChange={(e) => setPunchPin(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && punch()} />
+            </span>
+            <button className="btn small" onClick={punch}>PUNCH</button>
           </div>
+          {punchMsg && <p className={punchMsg.includes("clocked") ? "ok" : "err"} style={{ marginBottom: 10 }}>{punchMsg}</p>}
 
           <div className="card" style={{ marginBottom: 14 }}>
             <label htmlFor="scan">Scan or type a code, then Enter</label>
@@ -808,6 +876,43 @@ export default function AdminPage() {
             )}
           </div>
 
+          {refundTarget && (
+            <div className="card" style={{ marginTop: 16, borderWidth: 2 }}>
+              <h2 className="display" style={{ fontSize: 16 }}>REFUND — TICKET #{refundTarget.ticket.number} ({refundTarget.ticket.paymentMethod})</h2>
+              <table className="grid" style={{ marginTop: 8 }}>
+                <thead><tr><th>Item</th><th style={{ textAlign: "right" }}>Sold</th><th style={{ textAlign: "right" }}>Already refunded</th><th style={{ textAlign: "right" }}>Refund qty</th></tr></thead>
+                <tbody>
+                  {refundTarget.lines.map((l) => {
+                    const left = l.quantity - (refundTarget.refunded[l.id] || 0);
+                    return (
+                      <tr key={l.id}>
+                        <td>{l.name} · {money(l.priceCents)}</td>
+                        <td style={{ textAlign: "right" }}>{l.quantity}</td>
+                        <td style={{ textAlign: "right" }}>{refundTarget.refunded[l.id] || 0}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {left > 0 ? (
+                            <input type="number" min={0} max={left} value={refundQty[l.id] ?? 0}
+                              onChange={(e) => setRefundQty((q) => ({ ...q, [l.id]: Math.max(0, Math.min(left, Math.round(Number(e.target.value) || 0))) }))}
+                              style={{ width: 70, textAlign: "right", padding: "5px 7px" }} />
+                          ) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, cursor: "pointer" }}>
+                <input type="checkbox" checked={refundRestock} onChange={(e) => setRefundRestock(e.target.checked)} style={{ width: "auto" }} />
+                Put the item(s) back on the floor (uncheck if damaged/unsellable)
+              </label>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button className="btn" style={{ flex: 1 }} onClick={submitRefund}>RECORD REFUND</button>
+                <button className="btn small ghost" onClick={() => setRefundTarget(null)}>CANCEL</button>
+              </div>
+              {refundMsg && <p className="err">{refundMsg}</p>}
+            </div>
+          )}
+
           <div className="card" style={{ marginTop: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
               <h2 className="display" style={{ fontSize: 16 }}>TICKETS — LAST 30 DAYS</h2>
@@ -820,13 +925,21 @@ export default function AdminPage() {
                 <thead><tr><th>#</th><th>Date</th><th>Pay</th><th>Vendors</th><th style={{ textAlign: "right" }}>Total</th><th></th></tr></thead>
                 <tbody>
                   {tickets.map((t) => (
-                    <tr key={t.id}>
-                      <td style={{ fontWeight: 700 }}>{t.number}</td>
+                    <tr key={t.id} style={t.status === "VOIDED" ? { opacity: 0.45, textDecoration: "line-through" } : undefined}>
+                      <td style={{ fontWeight: 700 }}>{t.number}{t.status !== "COMPLETE" ? ` · ${t.status.replace("_", " ")}` : ""}</td>
                       <td>{t.dateStr} {t.timeStr}</td>
                       <td>{t.paymentMethod}{t.cardName ? ` — ${t.cardName}` : ""}</td>
                       <td>{t.vendorCodes.join(" ")}</td>
                       <td style={{ textAlign: "right" }}>{money(t.totalCents)}</td>
-                      <td><button className="btn small ghost" onClick={() => printSale(t.id)}>REPRINT</button></td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button className="btn small ghost" onClick={() => printSale(t.id)}>REPRINT</button>{" "}
+                        {t.status !== "VOIDED" && t.status !== "REFUNDED" && (
+                          <>
+                            <button className="btn small ghost" onClick={() => openRefund(t)}>REFUND</button>{" "}
+                            <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "var(--red)" }} onClick={() => voidSale(t)}>VOID</button>
+                          </>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {tickets.length === 0 && <tr><td colSpan={6}>No tickets match.</td></tr>}
@@ -1012,6 +1125,7 @@ export default function AdminPage() {
                     <tbody>
                       <tr><td>Gross sales (pre-tax)</td><td style={{ textAlign: "right" }}>{money(report.gross)}</td></tr>
                       <tr><td>Tickets</td><td style={{ textAlign: "right" }}>{report.tickets}</td></tr>
+                      {(report.refundTotal || 0) > 0 && <tr><td>Refunds given back</td><td style={{ textAlign: "right" }}>−{money(report.refundTotal || 0)}</td></tr>}
                       <tr><td>Cash taken (drawer + bank)</td><td style={{ textAlign: "right", fontWeight: 700 }}>{money(report.cash)}</td></tr>
                       <tr><td>Card taken</td><td style={{ textAlign: "right" }}>{money(report.card)}</td></tr>
                     </tbody>

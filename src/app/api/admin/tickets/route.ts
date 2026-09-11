@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
   const sales = await db.sale.findMany({
     where: { createdAt: { gte: cutoff } },
     include: { lines: { select: { vendorId: true } } },
+    // (status included by default)
     orderBy: { createdAt: "desc" },
     take: 400,
   });
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
         dateStr: s.createdAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ }),
         timeStr: s.createdAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TZ }),
         isoDate: new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(s.createdAt),
-        paymentMethod: s.paymentMethod, cardName: s.cardName, employee: s.employee,
+        status: s.status, paymentMethod: s.paymentMethod, cardName: s.cardName, employee: s.employee,
         totalCents: s.totalCents, vendorCodes: codes, vendorNames: names,
       };
     })

@@ -40,6 +40,7 @@ model Item {
 model Sale {
   id            String     @id @default(cuid())
   number        Int        @default(0)
+  status        String     @default("COMPLETE")
   cardName      String     @default("")
   employee      String     @default("")
   subtotalCents Int
@@ -139,4 +140,17 @@ model Contract {
 model Setting {
   key   String @id
   value String
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  saleId      String
+  employee    String   @default("")
+  method      String
+  amountCents Int
+  taxCents    Int
+  restocked   Boolean  @default(true)
+  linesJson   String   @default("[]")
+  note        String   @default("")
+  createdAt   DateTime @default(now())
 }
