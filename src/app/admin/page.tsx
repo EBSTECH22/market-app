@@ -420,8 +420,7 @@ export default function AdminPage() {
     printRef.current.innerHTML = `
       <div style="width:280px;margin:0 auto;font-size:12px;line-height:1.5;text-align:center;font-family:'IBM Plex Mono',monospace;color:#000">
         <img src="/logo.png" alt="" style="width:70px;height:70px" />
-        <div style="font-weight:700;font-size:14px">COMMUNITY HARVEST</div>
-        <div style="font-size:10px;letter-spacing:.08em">FOOD AND CRAFT MARKET</div>
+        <img src="/logo-receipt.png" alt="Community Harvest" style="width:100%;max-width:260px;display:block;margin:0 auto 2px" />
         <div>Noble, Oklahoma</div>
         <div style="margin:6px 0;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:4px 0">
           RECEIPT #${sale.number}<br>${new Date(sale.createdAt).toLocaleDateString("en-US")} ${new Date(sale.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}${sale.employee ? "<br>CLERK: " + sale.employee : ""}
@@ -437,6 +436,14 @@ export default function AdminPage() {
         </div>
         <div style="margin-top:8px">THANK YOU!<br>homegrown + homemade</div>
       </div>`;
+    const img = printRef.current.querySelector("img");
+    if (img && !img.complete) {
+      await new Promise<void>((resolve) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+        setTimeout(resolve, 1500);
+      });
+    }
     document.body.classList.add("receiptmode");
     window.print();
     setTimeout(() => document.body.classList.remove("receiptmode"), 400);
