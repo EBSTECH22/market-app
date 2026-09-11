@@ -40,7 +40,7 @@ export default async function ContractPrintPage({ params }: { params: { id: stri
 
       <h2>1. BOOTH &amp; RENT</h2>
       <p>
-        Market rents Vendor booth space <b>{contract.boothLabel}</b> (approximately 5&prime; × 5&prime;) for
+        Market rents Vendor booth space <b>{contract.boothLabel}</b> for
         <b> ${rent} per month</b>, due on the first day of each month. Late rent may result in suspension of selling privileges until paid.
       </p>
 
@@ -61,20 +61,28 @@ export default async function ContractPrintPage({ params }: { params: { id: stri
         Resale of commercially manufactured goods is not permitted without written approval from the Market.
       </p>
 
-      <h2>5. SALES, TAX &amp; PAYOUTS</h2>
+      <h2>5. RESTOCKING</h2>
+      <p>
+        Restocking is <b>coordinated by Market staff</b>. Standard restocking windows are <b>7:00–8:00 AM</b> (before opening) and <b>6:00–8:00 PM</b> (after closing);
+        restocking at any other time requires <b>prior staff approval</b>. To protect the shopping experience, staff may limit how many vendors restock at once
+        and may ask a Vendor to wait or return at a later time. Delivery of accepted customer pre-orders to Market staff is permitted at any time and does not count as restocking.
+        Vendor agrees to keep item quantities current in the vendor portal so the Market&rsquo;s live inventory stays accurate.
+      </p>
+
+      <h2>6. SALES, TAX &amp; PAYOUTS</h2>
       <p>
         Sales are rung through the Market&rsquo;s central register using Vendor&rsquo;s barcoded items. The Market collects and remits applicable sales tax.
         Vendor sale proceeds{contract.vendor.commissionPercent > 0 ? <>, less a <b>{contract.vendor.commissionPercent}%</b> Market commission,</> : null} are credited
         to Vendor&rsquo;s account and paid out monthly. Booth rent and any charges owed to the Market may be deducted from Vendor&rsquo;s balance.
       </p>
 
-      <h2>6. LIABILITY</h2>
+      <h2>7. LIABILITY</h2>
       <p>
         Vendor displays and sells at Vendor&rsquo;s own risk and is responsible for the safety and legality of Vendor&rsquo;s products, including any required
         licenses, permits, or cottage food compliance. Vendor agrees to hold the Market harmless from claims arising out of Vendor&rsquo;s products or booth.
       </p>
 
-      <h2>7. ENTIRE AGREEMENT</h2>
+      <h2>8. ENTIRE AGREEMENT</h2>
       <p>
         This is the entire agreement between the parties and may only be changed in writing signed by both parties. Oklahoma law governs.
       </p>
