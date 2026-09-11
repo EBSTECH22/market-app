@@ -225,7 +225,8 @@ export default function AdminPage() {
     if (!printRef.current) return;
     printRef.current.innerHTML = `
       <div style="width:280px;margin:0 auto;font-size:12px;line-height:1.5;text-align:center;font-family:'IBM Plex Mono',monospace;color:#000">
-        <div style="font-weight:700;font-size:14px">${(process.env.NEXT_PUBLIC_MARKET_NAME || "THE MARKET AT NOBLE").toUpperCase()}</div>
+        <div style="font-weight:700;font-size:14px">COMMUNITY HARVEST</div>
+        <div style="font-size:10px;letter-spacing:.08em">FOOD AND CRAFT MARKET</div>
         <div>Noble, Oklahoma</div>
         <div style="margin:6px 0;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:4px 0">
           RECEIPT #${sale.number}<br>${new Date(sale.createdAt).toLocaleDateString("en-US")} ${new Date(sale.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}${sale.employee ? "<br>CLERK: " + sale.employee : ""}
@@ -423,8 +424,9 @@ export default function AdminPage() {
     return (
       <main style={{ maxWidth: 380, margin: "0 auto", padding: "80px 18px" }}>
         <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div className="display" style={{ fontSize: 26 }}>THE MARKET AT NOBLE</div>
-          <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)" }}>Register &amp; Management</div>
+          <div className="display" style={{ fontSize: 26 }}>COMMUNITY HARVEST</div>
+          <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
+          <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Register &amp; Management</div>
         </div>
         <div className="card">
           <label htmlFor="pw">Password</label>
@@ -447,7 +449,7 @@ export default function AdminPage() {
         }
       `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <span className="display" style={{ fontSize: 20 }}>THE MARKET AT NOBLE</span>
+        <span className="display" style={{ fontSize: 20 }}>COMMUNITY HARVEST</span>
         {overview && (
           <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ash)" }}>
             Today: {money(overview.today.totalCents)} · {overview.today.count} sales

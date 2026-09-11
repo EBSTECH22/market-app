@@ -1,5 +1,5 @@
 const RESEND_URL = "https://api.resend.com/emails";
-const FROM = process.env.EMAIL_FROM || "The Market <orders@dailybreadbaked.com>";
+const FROM = process.env.EMAIL_FROM || "Community Harvest <orders@dailybreadbaked.com>";
 
 function baseUrl() {
   return process.env.NEXT_PUBLIC_BASE_URL || "https://market.dailybreadbaked.com";
@@ -22,11 +22,12 @@ async function send(to: string, subject: string, html: string) {
 }
 
 function shell(inner: string) {
-  const name = process.env.MARKET_NAME || "The Market at Noble";
+  const name = process.env.MARKET_NAME || "Community Harvest";
   return `
   <div style="background:#eef3e4;padding:30px 12px;font-family:Helvetica,Arial,sans-serif;">
     <div style="max-width:480px;margin:0 auto;background:#fbfaf4;border:3px solid #22301c;border-radius:18px;padding:28px 24px;text-align:center;">
-      <div style="font-weight:900;font-size:22px;color:#22301c;letter-spacing:-0.5px;margin-bottom:16px;">${name}</div>
+      <div style="font-weight:900;font-size:22px;color:#22301c;letter-spacing:-0.5px;">${name}</div>
+      <div style="font-weight:700;font-size:11px;color:#22301c;letter-spacing:.1em;margin-bottom:16px;">FOOD AND CRAFT MARKET</div>
       ${inner}
     </div>
     <div style="max-width:480px;margin:12px auto 0;text-align:center;font-size:11px;color:#6d7a5f;">

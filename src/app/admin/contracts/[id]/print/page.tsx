@@ -15,7 +15,7 @@ export default async function ContractPrintPage({ params }: { params: { id: stri
   });
   if (!contract) return <main style={{ padding: 40 }}>Contract not found.</main>;
 
-  const marketName = process.env.MARKET_NAME || "The Market at Noble";
+  const marketName = process.env.MARKET_NAME || "Community Harvest";
   const rent = (contract.monthlyRentCents / 100).toFixed(2);
 
   return (
@@ -28,7 +28,7 @@ export default async function ContractPrintPage({ params }: { params: { id: stri
       <span className="no-print" style={{ fontSize: 12, color: "#777", marginLeft: 10 }}>Print with Ctrl+P (or Share → Print on a phone)</span>
 
       <h1 style={{ textAlign: "center", fontSize: 20, fontWeight: 900, marginBottom: 2 }}>BOOTH RENTAL AGREEMENT</h1>
-      <p style={{ textAlign: "center", color: "#555", marginBottom: 18 }}>{marketName} · Noble, Oklahoma</p>
+      <p style={{ textAlign: "center", color: "#555", marginBottom: 18 }}>{marketName} — Food and Craft Market · Noble, Oklahoma</p>
 
       <p>
         This Booth Rental Agreement (the &ldquo;Agreement&rdquo;) is entered into as of <b>{fmtDay(contract.startDate)}</b> between

@@ -32,8 +32,9 @@ export default function VendorLoginPage() {
   return (
     <main style={{ maxWidth: 400, margin: "0 auto", padding: "70px 18px" }}>
       <div style={{ textAlign: "center", marginBottom: 22 }}>
-        <div className="display" style={{ fontSize: 30 }}>THE MARKET AT NOBLE</div>
-        <div style={{ fontWeight: 600, fontSize: 14, color: "var(--ash)" }}>Vendor Portal · homegrown &amp; homemade</div>
+        <div className="display" style={{ fontSize: 30 }}>COMMUNITY HARVEST</div>
+        <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
+        <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Vendor Portal</div>
       </div>
       <div className="card">
         <label htmlFor="email">Email</label>

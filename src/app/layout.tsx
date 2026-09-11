@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "The Market at Noble — Vendor Portal",
-  description: "Year-round farmers market in Noble, Oklahoma. Homegrown and homemade.",
+  title: "Community Harvest — Food and Craft Market",
+  description: "Community Harvest — Food and Craft Market. Year-round in Noble, Oklahoma. Homegrown and homemade.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
