@@ -142,7 +142,7 @@ export default function ApplyPage() {
           <ul style={{ margin: "6px 0 0 18px", listStyle: "disc" }}>
             <li><b>Label every product</b> (10-point font or larger): your name and contact (or your optional $15/yr ODAFF registration number instead of your home address), the product&rsquo;s ingredients, a note for any of the 9 major allergens (milk, eggs, peanuts, tree nuts, fish, shellfish, wheat, soy, sesame), and this exact sentence: <i>&ldquo;This product was produced in a private residence that is exempt from government licensing and inspection.&rdquo;</i></li>
             <li><b>Under $75,000/year</b> in homemade food sales.</li>
-            <li><b>Refrigerated items are the big one for our market:</b> foods needing refrigeration require accredited food-safety training and by law must be sold by <b>you directly</b> to the customer — so they can&rsquo;t run through the market&rsquo;s register. <b>Shelf-stable goods can.</b> Have refrigerated products? Apply anyway — we&rsquo;ll talk through options on the call.</li>
+            <li><b>Refrigerated items are the big one for our market:</b> Oklahoma law says homemade foods needing refrigeration require accredited food-safety training and must be sold by the producer <b>directly</b> to the customer. That means <b>you man your booth and hand those sales across the table yourself</b> — refrigerated items can&rsquo;t ring through the market&rsquo;s register. Shelf-stable goods sell through our register every open day, booth attended or not.</li>
           </ul>
         </div>
         <F label="Which describes your food products?">
