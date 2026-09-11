@@ -32,6 +32,8 @@ export default function VendorLoginPage() {
   return (
     <main style={{ maxWidth: 400, margin: "0 auto", padding: "70px 18px" }}>
       <div style={{ textAlign: "center", marginBottom: 22 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="Community Harvest" style={{ width: 150, height: 150, marginBottom: 12 }} />
         <div className="display" style={{ fontSize: 30 }}>COMMUNITY HARVEST</div>
         <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
         <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Vendor Portal</div>

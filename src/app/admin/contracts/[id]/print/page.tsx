@@ -27,6 +27,8 @@ export default async function ContractPrintPage({ params }: { params: { id: stri
       </button>
       <span className="no-print" style={{ fontSize: 12, color: "#777", marginLeft: 10 }}>Print with Ctrl+P (or Share → Print on a phone)</span>
 
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.png" alt="" style={{ width: 90, height: 90, display: "block", margin: "0 auto 8px" }} />
       <h1 style={{ textAlign: "center", fontSize: 20, fontWeight: 900, marginBottom: 2 }}>BOOTH RENTAL AGREEMENT</h1>
       <p style={{ textAlign: "center", color: "#555", marginBottom: 18 }}>{marketName} — Food and Craft Market · Noble, Oklahoma</p>
 

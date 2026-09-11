@@ -26,6 +26,7 @@ function shell(inner: string) {
   return `
   <div style="background:#f2f2f2;padding:30px 12px;font-family:'Courier New',monospace;color:#000;">
     <div style="max-width:480px;margin:0 auto;background:#fff;border:1px solid #000;padding:28px 24px;text-align:center;">
+      <img src="${baseUrl()}/logo.png" alt="" width="96" height="96" style="width:96px;height:96px;margin-bottom:8px;" />
       <div style="font-weight:700;font-size:21px;letter-spacing:.01em;">${name.toUpperCase()}</div>
       <div style="font-weight:700;font-size:10px;letter-spacing:.14em;border-bottom:2px solid #000;padding-bottom:12px;margin-bottom:16px;">FOOD AND CRAFT MARKET</div>
       ${inner}

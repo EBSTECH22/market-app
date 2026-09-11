@@ -2,6 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
+  icons: { icon: "/favicon.png", apple: "/logo-192.png" },
   title: "Community Harvest — Food and Craft Market",
   description: "Community Harvest — Food and Craft Market. Year-round in Noble, Oklahoma. Homegrown and homemade.",
 };

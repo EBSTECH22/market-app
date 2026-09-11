@@ -419,6 +419,7 @@ export default function AdminPage() {
     if (!printRef.current) return;
     printRef.current.innerHTML = `
       <div style="width:280px;margin:0 auto;font-size:12px;line-height:1.5;text-align:center;font-family:'IBM Plex Mono',monospace;color:#000">
+        <img src="/logo.png" alt="" style="width:70px;height:70px" />
         <div style="font-weight:700;font-size:14px">COMMUNITY HARVEST</div>
         <div style="font-size:10px;letter-spacing:.08em">FOOD AND CRAFT MARKET</div>
         <div>Noble, Oklahoma</div>
@@ -619,6 +620,8 @@ export default function AdminPage() {
     return (
       <main style={{ maxWidth: 380, margin: "0 auto", padding: "80px 18px" }}>
         <div style={{ textAlign: "center", marginBottom: 22 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="Community Harvest" style={{ width: 130, height: 130, marginBottom: 10 }} />
           <div className="display" style={{ fontSize: 26 }}>COMMUNITY HARVEST</div>
           <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
           <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Register &amp; Management</div>
@@ -660,7 +663,11 @@ export default function AdminPage() {
         }
       `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <span className="display" style={{ fontSize: 20 }}>COMMUNITY HARVEST</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="" style={{ width: 40, height: 40 }} />
+          <span className="display" style={{ fontSize: 20 }}>COMMUNITY HARVEST</span>
+        </span>
         {overview && (
           <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ash)" }}>
             Today: {money(overview.today.totalCents)} · {overview.today.count} sales
