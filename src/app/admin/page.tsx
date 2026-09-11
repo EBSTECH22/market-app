@@ -112,6 +112,9 @@ export default function AdminPage() {
   const [cMode, setCMode] = useState<"standard" | "custom">("standard");
   const [rentPerSqft, setRentPerSqft] = useState(6);
   const [rateMsg, setRateMsg] = useState("");
+  const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
+  const [adminPushKey, setAdminPushKey] = useState("");
+  const [adminPushMsg, setAdminPushMsg] = useState("");
   const [cMsg, setCMsg] = useState("");
 
   // settings
@@ -650,6 +653,40 @@ export default function AdminPage() {
   };
 
   // ---------- settings ----------
+  useEffect(() => {
+    if (!authed || role !== "admin") return;
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    fetch("/api/admin/push").then(async (r) => {
+      if (r.ok) { const d = await r.json(); setAdminPushDevices(d.devices); setAdminPushKey(d.publicKey); }
+    }).catch(() => {});
+  }, [authed, role]);
+
+  const enableAdminPush = async () => {
+    setAdminPushMsg("");
+    try {
+      if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+        setAdminPushMsg("This browser can't do notifications. On iPhone: share button → Add to Home Screen (the admin app), open from that icon, then try again.");
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setAdminPushMsg("Notifications were blocked — allow them in browser settings and try again."); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const b64 = adminPushKey.replace(/-/g, "+").replace(/_/g, "/");
+      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+      const raw = atob(b64 + pad);
+      const key = new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      const res = await fetch("/api/admin/push", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()),
+      });
+      if (!res.ok) { setAdminPushMsg("Couldn't save — try again."); return; }
+      setAdminPushDevices((n) => (n || 0) + 1);
+      setAdminPushMsg("Admin alerts ON for this device. ✓");
+    } catch {
+      setAdminPushMsg("Couldn't turn on notifications here. iPhone: iOS 16.4+ AND opened from a home-screen icon.");
+    }
+  };
+
   const loadBanner = useCallback(async () => {
     const r = await fetch("/api/public/banner");
     if (r.ok) {
@@ -1702,6 +1739,16 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
               Verify Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
             </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>ADMIN NOTIFICATIONS 🔔</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>
+              Get a push on this device when: a vendor application comes in 📋 · a complaint is filed ⚠️ · a tent gets booked ⛺ · a pre-order is paid 💳.
+              {adminPushDevices !== null && ` Devices enabled: ${adminPushDevices}.`}
+            </p>
+            <div style={{ marginTop: 8 }}><button className="btn small" onClick={enableAdminPush}>ENABLE ON THIS DEVICE</button></div>
+            {adminPushMsg && <p className={adminPushMsg.includes("✓") ? "ok" : "err"}>{adminPushMsg}</p>}
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>

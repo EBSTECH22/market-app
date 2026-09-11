@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { tentSpotsTaken, TENT_DEPOSIT_CENTS } from "@/lib/tents";
 import { sendTentConfirmEmail } from "@/lib/email";
+import { pushToAdmin } from "@/lib/push";
 import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
     });
     await db.tentBooking.update({ where: { id: credit.id }, data: { status: "CREDIT_USED" } });
     try { await sendTentConfirmEmail(nb.email, nb.name, d.date, nb.token, true); } catch {}
+    try { await pushToAdmin("Tent rebooked ⛺", `${nb.businessName || nb.name} — ${d.date} (weather credit)`); } catch {}
     return NextResponse.json({ booked: true, date: d.date });
   }
 

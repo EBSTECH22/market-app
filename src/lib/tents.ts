@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { sendTentConfirmEmail } from "@/lib/email";
+import { pushToAdmin } from "@/lib/push";
 
 export const TENT_DEPOSIT_CENTS = 1250;
 export const TENT_DAY_CENTS = 2500;
@@ -19,6 +20,7 @@ export async function finalizeTentIfPaid(bookingId: string): Promise<boolean> {
   if (!paid) return false;
   await db.tentBooking.update({ where: { id: b.id }, data: { status: "PAID_DEPOSIT" } });
   try { await sendTentConfirmEmail(b.email, b.name, b.date.date, b.token, false); } catch (err) { console.error("tent email failed", err); }
+  try { await pushToAdmin("Tent booked ⛺", `${b.businessName || b.name} — ${b.date.date} ($12.50 deposit paid)`); } catch {}
   return true;
 }
 

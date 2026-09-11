@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
-import { pushToVendor } from "@/lib/push";
+import { pushToAdmin, pushToVendor } from "@/lib/push";
 import { sendVendorInboxEmail, sendPreorderPaidEmail } from "@/lib/email";
 
 // Verifies a Stripe session and, if paid, books the sale exactly like a register sale:
@@ -75,6 +75,7 @@ export async function finalizeIfPaid(preorderId: string): Promise<boolean> {
     const pushed = await pushToVendor(vendor.id, "Pre-order PAID 🎉", `${thread?.customerName || "Customer"} paid $${(po.totalCents / 100).toFixed(2)} — ${po.description.slice(0, 60)}`);
     if (pushed === 0) await sendVendorInboxEmail(vendor, "PREORDER", `${thread?.customerName || "Customer"} (PAID)`);
   } catch (err) { console.error("vendor paid notify failed", err); }
+  try { await pushToAdmin("Pre-order paid 💳", `${vendor.businessName}: $${(po.totalCents / 100).toFixed(2)} online`); } catch {}
   return true;
 }
 

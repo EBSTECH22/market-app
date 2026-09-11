@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendApplicationReceivedEmail } from "@/lib/email";
+import { pushToAdmin } from "@/lib/push";
 
 export const dynamic = "force-dynamic";
 
@@ -29,5 +30,6 @@ export async function POST(req: NextRequest) {
     },
   });
   try { await sendApplicationReceivedEmail(email, contactName, businessName); } catch (err) { console.error("app email failed", err); }
+  try { await pushToAdmin("New vendor application 📋", `${businessName} — ${contactName}`); } catch {}
   return NextResponse.json({ ok: true });
 }

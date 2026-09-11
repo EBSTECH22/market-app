@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendThreadLinkEmail, sendVendorInboxEmail } from "@/lib/email";
-import { pushToVendor } from "@/lib/push";
+import { pushToAdmin, pushToVendor } from "@/lib/push";
 import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +36,9 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
     const pushed = await pushToVendor(vendor.id, `New ${LABEL[type].toLowerCase()} 📩`, `${n}: ${b.slice(0, 90)}`);
     if (pushed === 0) await sendVendorInboxEmail(vendor, type, n);
   } catch (err) { console.error("vendor notify failed", err); }
+  if (type === "COMPLAINT") {
+    try { await pushToAdmin("Complaint filed ⚠️", `${vendor.businessName} ← ${n}: ${b.slice(0, 80)}`); } catch {}
+  }
 
   return NextResponse.json({ ok: true, token: thread.token });
 }

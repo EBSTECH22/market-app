@@ -34,3 +34,8 @@ export async function pushToVendor(vendorId: string, title: string, body: string
   }
   return sent;
 }
+
+// Admin/staff devices subscribe under the "ADMIN" channel
+export async function pushToAdmin(title: string, body: string): Promise<number> {
+  return pushToVendor("ADMIN", title, body);
+}
