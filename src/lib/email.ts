@@ -175,3 +175,27 @@ export async function sendPreorderPaidEmail(
     <p style="font-size:12px;color:#999;">Questions? <a href="${baseUrl()}/t/${threadToken}">Message ${vendorName} here</a>. Pick up at Community Harvest, Noble OK.</p>`;
   await send(to, `Paid ✓ — your pre-order with ${vendorName}`, shell(inner));
 }
+
+export async function sendApplicationReceivedEmail(to: string, contactName: string, businessName: string) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">APPLICATION RECEIVED ✅</h2>
+    <p style="font-size:14px;color:#555;">Hi ${contactName} &mdash; we got your vendor application for <b>${businessName}</b>. We review every application personally and you&rsquo;ll hear back from us soon.</p>`;
+  await send(to, "We got your vendor application — Community Harvest", shell(inner));
+}
+
+export async function sendApplicationDecisionEmail(to: string, contactName: string, businessName: string, accepted: boolean, reason: string) {
+  const inner = accepted
+    ? `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">WELCOME TO COMMUNITY HARVEST 🎉</h2>
+    <p style="font-size:14px;color:#555;">Hi ${contactName} &mdash; great news: <b>${businessName}</b> has been accepted as a vendor!</p>
+    <div style="display:inline-block;text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin:10px 0;">
+      <b style="font-size:14px;">What happens next</b>
+      <div style="font-size:13.5;margin-top:4px;">Someone from the market will be <b>calling you shortly</b> to get you set up with next steps &mdash; your booth, your vendor account, barcode labels, and your first market day.</div>
+    </div>
+    <p style="font-size:12px;color:#999;">Community Harvest — Food and Craft Market · Noble, Oklahoma</p>`
+    : `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">ABOUT YOUR APPLICATION</h2>
+    <p style="font-size:14px;color:#555;">Hi ${contactName} &mdash; thank you for applying to Community Harvest with <b>${businessName}</b>. After careful review we aren&rsquo;t able to offer a booth right now.${reason ? `<br><br>${reason}` : ""}</p>
+    <p style="font-size:13px;color:#555;">Our vendor mix changes through the year &mdash; you&rsquo;re welcome to apply again down the road.</p>`;
+  await send(to, accepted ? "You're in! Next steps — Community Harvest" : "Your Community Harvest application", shell(inner));
+}
