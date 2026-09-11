@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAdmin } from "@/lib/auth";
+import { isAdmin, isStaff } from "@/lib/auth";
 import { getTaxRatePercent, setTaxRatePercent } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   return NextResponse.json({ taxRatePercent: await getTaxRatePercent() });
 }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+import { isStaff } from "@/lib/auth";
 import { createHash } from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 const pinHash = (pin: string) => createHash("sha256").update(`pin:${pin}`).digest("hex");
 
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
   if (!session) return NextResponse.json({ session: null });
   const cash = await db.sale.aggregate({
@@ -19,7 +19,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { employee, pin, counts, totalCents } = await req.json();
   const emp = await db.employee.findUnique({ where: { name: employee || "" } });
   if (!emp || !emp.active || emp.pinHash !== pinHash(pin || "")) {
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { counts, countedCents } = await req.json();
   const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
   if (!session) return NextResponse.json({ error: "No open drawer." }, { status: 400 });

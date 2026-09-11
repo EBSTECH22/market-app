@@ -11,6 +11,9 @@ type Receipt = { id: string; number: number; employee: string; cardName: string;
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
 type Employee = { id: string; name: string };
+type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
+type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[] };
+type PayrollRow = { id: string; name: string; payRateCents: number; hours: number; grossCents: number; dedCents: number; netCents: number; deductions: { name: string; amountCents: number }[]; openEntries: number };
 type Report = {
   start: string; end: string; gross: number; tax: number; cash: number; card: number; tickets: number;
   vGross: number; vNet: number; units: number;
@@ -28,9 +31,21 @@ const DENOMS: [string, string, number][] = [
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
+  const [role, setRole] = useState<"admin" | "staff" | null>(null);
+  const [staffName, setStaffName] = useState("");
+  const [loginMode, setLoginMode] = useState<"staff" | "admin">("staff");
   const [password, setPassword] = useState("");
+  const [loginName, setLoginName] = useState("");
+  const [loginPin, setLoginPin] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [tab, setTab] = useState<"register" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "settings">("register");
+  const [timeData, setTimeData] = useState<{ open: { id: string; clockIn: string } | null; entries: { id: string; dayStr: string; inStr: string; outStr: string | null; hours: number | null }[] } | null>(null);
+  const [timeMsg, setTimeMsg] = useState("");
+  const [team, setTeam] = useState<TeamMember[]>([]);
+  const [payFrom, setPayFrom] = useState("");
+  const [payTo, setPayTo] = useState("");
+  const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
+  const [teamMsg, setTeamMsg] = useState("");
+  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "team" | "settings">("register");
   const [busy, setBusy] = useState(false);
 
   // register / drawer
@@ -91,6 +106,17 @@ export default function AdminPage() {
   const [newEmpPin, setNewEmpPin] = useState("");
   const [empMsg, setEmpMsg] = useState("");
 
+  const safeFetch = async (url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> => {
+    try {
+      const res = await fetch(url, init);
+      let data: Record<string, unknown> = {};
+      try { data = await res.json(); } catch { data = { error: `Server error (${res.status}). If you just deployed, check that all the SQL ran in Supabase.` }; }
+      return { ok: res.ok, status: res.status, data };
+    } catch {
+      return { ok: false, status: 0, data: { error: "Network problem — try again." } };
+    }
+  };
+
   const loadDrawer = useCallback(async () => {
     try {
       const res = await fetch("/api/admin/drawer");
@@ -120,6 +146,7 @@ export default function AdminPage() {
     if (o.status === 401) { setAuthed(false); return; }
     setAuthed(true);
     if (o.ok) setOverview(await o.json());
+    // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
     if (s.ok) setTaxRate((await s.json()).taxRatePercent);
@@ -138,7 +165,26 @@ export default function AdminPage() {
     if (res.ok) setReport(await res.json());
   }, [repPeriod, repVendor, repFrom, repTo]);
 
-  useEffect(() => { loadDrawer(); loadAll(); }, [loadDrawer, loadAll]);
+  const probeRole = useCallback(async () => {
+    const res = await fetch("/api/admin/whoami");
+    if (!res.ok) { setAuthed(false); setRole(null); return; }
+    const data = await res.json();
+    setRole(data.role); setStaffName(data.name || ""); setAuthed(true);
+  }, []);
+
+  const loadTime = useCallback(async () => {
+    const res = await fetch("/api/staff/time");
+    if (res.ok) setTimeData(await res.json());
+  }, []);
+
+  const loadTeam = useCallback(async () => {
+    const t = await fetch("/api/admin/team");
+    if (t.ok) setTeam((await t.json()).employees || []);
+  }, []);
+
+  useEffect(() => { probeRole(); loadDrawer(); loadAll(); }, [probeRole, loadDrawer, loadAll]);
+  useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
+  useEffect(() => { if (authed && role === "admin" && tab === "team") loadTeam(); }, [authed, role, tab, loadTeam]);
   useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ); }, [authed, tab, ticketQ, loadTickets]);
   useEffect(() => { if (authed && tab === "reports") loadReport(); }, [authed, tab, loadReport]);
   useEffect(() => {
@@ -153,12 +199,94 @@ export default function AdminPage() {
 
   const login = async () => {
     setLoginError("");
-    const res = await fetch("/api/admin/login", {
+    if (loginMode === "admin") {
+      const res = await fetch("/api/admin/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (!res.ok) { setLoginError("Wrong password."); return; }
+    } else {
+      const res = await fetch("/api/staff/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: loginName, pin: loginPin }),
+      });
+      if (!res.ok) { setLoginError("Wrong name or PIN."); return; }
+    }
+    await probeRole(); await loadDrawer(); await loadAll();
+  };
+
+  const staffLogout = async () => {
+    await fetch("/api/staff/login", { method: "DELETE" });
+    window.location.reload();
+  };
+
+  const clock = async (action: "in" | "out") => {
+    setTimeMsg("");
+    const { ok, data } = await safeFetch("/api/staff/time", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ action }),
     });
-    if (!res.ok) { setLoginError("Wrong password."); return; }
-    await loadDrawer(); await loadAll();
+    if (!ok) { setTimeMsg(String(data.error || "Failed.")); return; }
+    await loadTime();
+  };
+
+  const patchTeam = async (body: object) => {
+    setTeamMsg("");
+    const { ok, data } = await safeFetch("/api/admin/team", {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!ok) { setTeamMsg(String(data.error || "Failed.")); return; }
+    await loadTeam();
+  };
+
+  const addDeduction = async (employeeId: string) => {
+    const name = prompt("Deduction name (e.g. Health insurance, Advance repayment):");
+    if (name === null || !name.trim()) return;
+    const amt = prompt("Amount per pay period (dollars):");
+    if (amt === null) return;
+    const { ok, data } = await safeFetch("/api/admin/team", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ employeeId, name, amountDollars: amt }),
+    });
+    if (!ok) { setTeamMsg(String(data.error || "Failed.")); return; }
+    await loadTeam();
+  };
+
+  const dropDeduction = async (id: string) => {
+    if (!confirm("Remove this deduction going forward?")) return;
+    await safeFetch(`/api/admin/team?id=${id}`, { method: "DELETE" });
+    await loadTeam();
+  };
+
+  const uploadDoc = async (employeeId: string, kind: string, file: File) => {
+    setTeamMsg("");
+    if (file.size > 5 * 1024 * 1024) { setTeamMsg("File too big — 5 MB max."); return; }
+    const dataB64: string = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = () => reject(new Error("read failed"));
+      r.readAsDataURL(file);
+    });
+    const { ok, data } = await safeFetch("/api/admin/team/docs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ employeeId, kind, filename: file.name, mime: file.type, dataB64 }),
+    });
+    if (!ok) { setTeamMsg(String(data.error || "Upload failed.")); return; }
+    await loadTeam();
+  };
+
+  const dropDoc = async (id: string) => {
+    if (!confirm("Delete this document?")) return;
+    await safeFetch(`/api/admin/team/docs/${id}`, { method: "DELETE" });
+    await loadTeam();
+  };
+
+  const runPayroll = async () => {
+    setTeamMsg("");
+    if (!payFrom || !payTo) { setTeamMsg("Pick both dates first."); return; }
+    const { ok, data } = await safeFetch(`/api/admin/payroll?from=${payFrom}&to=${payTo}`);
+    if (!ok) { setTeamMsg(String(data.error || "Failed.")); return; }
+    setPayroll(data.rows as PayrollRow[]);
   };
 
   // ---------- drawer ----------
@@ -167,31 +295,31 @@ export default function AdminPage() {
   const openDrawer = async () => {
     setDrawerErr("");
     setBusy(true);
-    const res = await fetch("/api/admin/drawer", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ employee: empName || employees[0]?.name, pin: empPin, counts, totalCents: countTotal() }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { setDrawerErr(data.error || "Couldn't open."); return; }
-    setCounts({}); setEmpPin("");
-    await loadDrawer();
+    try {
+      const { ok, data } = await safeFetch("/api/admin/drawer", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employee: empName || employees[0]?.name, pin: empPin, counts, totalCents: countTotal() }),
+      });
+      if (!ok) { setDrawerErr(String(data.error || "Couldn't open.")); return; }
+      setCounts({}); setEmpPin("");
+      await loadDrawer();
+    } finally { setBusy(false); }
   };
 
   const closeDrawer = async () => {
     setBusy(true);
-    const res = await fetch("/api/admin/drawer", {
+    let res: { ok: boolean; data: Record<string, unknown> };
+    try { res = await safeFetch("/api/admin/drawer", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ counts, countedCents: countTotal() }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { setDrawerErr(data.error || "Couldn't close."); return; }
+    }); } finally { setBusy(false); }
+    const data = res.data as { session?: { employee: string; openTotalCents: number; cashSalesCents: number; countedCents: number; diffCents: number }; expected?: number; error?: string };
+    if (!res.ok || !data.session) { setDrawerErr(String(data.error || "Couldn't close.")); return; }
     setCloseReport({
       employee: data.session.employee,
       openTotalCents: data.session.openTotalCents,
       cashSalesCents: data.session.cashSalesCents,
-      expected: data.expected,
+      expected: data.expected || 0,
       counted: data.session.countedCents,
       diff: data.session.diffCents,
     });
@@ -261,17 +389,16 @@ export default function AdminPage() {
   const completeSale = async (paymentMethod: "CASH" | "CARD") => {
     if (!cart.length) return;
     setBusy(true);
-    const res = await fetch("/api/admin/sale", {
+    let ok = false; let data: Record<string, unknown> = {};
+    try { ({ ok, data } = await safeFetch("/api/admin/sale", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ paymentMethod, cardName, lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })) }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { setScanErr(data.error || "Sale failed."); return; }
-    setReceipt({ ...data.sale, paymentMethod, lines: cart });
+    })); } finally { setBusy(false); }
+    if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
+    setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });
     setCart([]); setCardName("");
     loadDrawer(); loadAll(); loadTickets(ticketQ);
-    if (autoPrint) setTimeout(() => printSale(data.sale.id), 250);
+    if (autoPrint) setTimeout(() => printSale((data.sale as { id: string }).id), 250);
   };
 
   const toggleAutoPrint = () => {
@@ -284,28 +411,29 @@ export default function AdminPage() {
   // ---------- vendors ----------
   const addVendor = async () => {
     setVMsg(""); setBusy(true);
-    const res = await fetch("/api/admin/vendors", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ businessName: vName, contactName: vContact, email: vEmail, phone: vPhone, commissionPercent: vComm }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { setVMsg(data.error || "Couldn't add vendor."); return; }
-    setVMsg(`Added ${data.vendor.businessName} (${data.vendor.code}). Temp password: ${data.tempPassword} — also emailed to them.`);
-    setVName(""); setVContact(""); setVEmail(""); setVPhone(""); setVComm("0");
-    await loadAll();
+    try {
+      const { ok, data } = await safeFetch("/api/admin/vendors", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessName: vName, contactName: vContact, email: vEmail, phone: vPhone, commissionPercent: vComm }),
+      });
+      if (!ok) { setVMsg(String(data.error || "Couldn't add vendor.")); return; }
+      const v = data.vendor as { businessName: string; code: string };
+      setVMsg(`Added ${v.businessName} (${v.code}). Temp password: ${String(data.tempPassword)} — also emailed to them.`);
+      setVName(""); setVContact(""); setVEmail(""); setVPhone(""); setVComm("0");
+      await loadAll();
+    } finally { setBusy(false); }
   };
 
   const patchVendor = async (id: string, body: object) => {
     setBusy(true);
-    const res = await fetch(`/api/admin/vendors/${id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { alert(data.error || "Update failed."); return; }
-    if (data.tempPassword) alert(`New temp password for ${data.vendor.businessName}: ${data.tempPassword}`);
-    await loadAll();
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/vendors/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (!ok) { alert(String(data.error || "Update failed.")); return; }
+      if (data.tempPassword) alert(`New temp password for ${(data.vendor as { businessName: string }).businessName}: ${String(data.tempPassword)}`);
+      await loadAll();
+    } finally { setBusy(false); }
   };
 
   const ledgerEntry = async (v: Vendor, type: "RENT" | "PAYOUT" | "ADJUST") => {
@@ -314,44 +442,44 @@ export default function AdminPage() {
     if (raw === null) return;
     const note = prompt("Note (shows on their statement):", type === "RENT" ? "Booth rent" : type === "PAYOUT" ? "Payout" : "") || "";
     setBusy(true);
-    const res = await fetch(`/api/admin/vendors/${v.id}/ledger`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, amountDollars: raw, note }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { alert(data.error || "Failed."); return; }
-    await loadAll();
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/vendors/${v.id}/ledger`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, amountDollars: raw, note }),
+      });
+      if (!ok) { alert(String(data.error || "Failed.")); return; }
+      await loadAll();
+    } finally { setBusy(false); }
   };
 
   // ---------- contracts ----------
   const addContract = async () => {
     setCMsg(""); setBusy(true);
-    const res = await fetch("/api/admin/contracts", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vendorId: cVendor, boothLabel: cBooth, monthlyRentDollars: cRent, startDate: cStart }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { setCMsg(data.error || "Couldn't create it."); return; }
-    setCMsg(`Contract created. First month prorated: ${money(data.firstMonthCents)} — posted to their balance. Full rent auto-charges every 1st after that.`);
-    setCBooth(""); setCStart("");
-    await loadAll();
+    try {
+      const { ok, data } = await safeFetch("/api/admin/contracts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorId: cVendor, boothLabel: cBooth, monthlyRentDollars: cRent, startDate: cStart }),
+      });
+      if (!ok) { setCMsg(String(data.error || "Couldn't create it.")); return; }
+      setCMsg(`Contract created. First month prorated: ${money(Number(data.firstMonthCents) || 0)} — posted to their balance. Full rent auto-charges every 1st after that.`);
+      setCBooth(""); setCStart("");
+      await loadAll();
+    } finally { setBusy(false); }
   };
 
   const giveNotice = async (c: Contract) => {
     const d = prompt("Date the 30-day notice was given (YYYY-MM-DD):", new Date().toISOString().slice(0, 10));
     if (d === null) return;
     setBusy(true);
-    const res = await fetch(`/api/admin/contracts/${c.id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "give_notice", noticeDate: d }),
-    });
-    const data = await res.json();
-    setBusy(false);
-    if (!res.ok) { alert(data.error || "Failed."); return; }
-    alert(`Notice recorded. Lease ends ${new Date(data.contract.endDate).toLocaleDateString()}. Final month rent prorates to ${money(data.finalRentCents)}.`);
-    await loadAll();
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${c.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "give_notice", noticeDate: d }),
+      });
+      if (!ok) { alert(String(data.error || "Failed.")); return; }
+      alert(`Notice recorded. Lease ends ${new Date((data.contract as { endDate: string }).endDate).toLocaleDateString()}. Final month rent prorates to ${money(Number(data.finalRentCents) || 0)}.`);
+      await loadAll();
+    } finally { setBusy(false); }
   };
 
   const finalStatement = (c: Contract) => {
@@ -369,12 +497,13 @@ export default function AdminPage() {
   const contractAction = async (id: string, action: string, confirmText: string) => {
     if (!confirm(confirmText)) return;
     setBusy(true);
-    await fetch(`/api/admin/contracts/${id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action }),
-    });
-    setBusy(false);
-    await loadAll();
+    try {
+      await safeFetch(`/api/admin/contracts/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      await loadAll();
+    } finally { setBusy(false); }
   };
 
   // ---------- settings ----------
@@ -440,9 +569,25 @@ export default function AdminPage() {
           <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Register &amp; Management</div>
         </div>
         <div className="card">
-          <label htmlFor="pw">Password</label>
-          <input id="pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && login()} />
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <button className={`btn small ${loginMode === "staff" ? "" : "ghost"}`} onClick={() => setLoginMode("staff")}>EMPLOYEE</button>
+            <button className={`btn small ${loginMode === "admin" ? "" : "ghost"}`} onClick={() => setLoginMode("admin")}>ADMIN</button>
+          </div>
+          {loginMode === "admin" ? (
+            <>
+              <label htmlFor="pw">Admin password</label>
+              <input id="pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && login()} />
+            </>
+          ) : (
+            <>
+              <label>Your name (exactly as the admin added you)</label>
+              <input value={loginName} onChange={(e) => setLoginName(e.target.value)} />
+              <label>PIN</label>
+              <input type="password" inputMode="numeric" value={loginPin} onChange={(e) => setLoginPin(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && login()} />
+            </>
+          )}
           <div style={{ marginTop: 14 }}><button className="btn" onClick={login}>UNLOCK</button></div>
           {loginError && <p className="err">{loginError}</p>}
         </div>
@@ -468,11 +613,19 @@ export default function AdminPage() {
         )}
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
-        {(["register", "reports", "bank", "floor", "vendors", "contracts", "settings"] as const).map((t) => (
+        {(role === "admin"
+          ? (["register", "time", "reports", "bank", "floor", "vendors", "contracts", "team", "settings"] as const)
+          : (["register", "time", "floor"] as const)
+        ).map((t) => (
           <button key={t} className={`btn small ${tab === t ? "" : "ghost"}`} onClick={() => { setTab(t); setReceipt(null); }}>
-            {t === "register" ? "🛒 REGISTER" : t.toUpperCase()}
+            {t === "register" ? "🛒 REGISTER" : t === "time" ? "⏱ TIME" : t.toUpperCase()}
           </button>
         ))}
+        {role === "staff" && (
+          <button className="btn small ghost" style={{ marginLeft: "auto" }} onClick={staffLogout}>
+            {staffName ? staffName.toUpperCase() + " · " : ""}SIGN OUT
+          </button>
+        )}
       </div>
 
       {tab === "register" && !drawer && drawerErr && (
@@ -681,6 +834,153 @@ export default function AdminPage() {
               </table>
             </div>
           </div>
+        </>
+      )}
+
+      {tab === "time" && (
+        <div className="card">
+          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>TIMECLOCK{staffName ? ` — ${staffName.toUpperCase()}` : ""}</h2>
+          {role === "admin" && !staffName ? (
+            <p style={{ fontSize: 13, color: "var(--ash)" }}>Clocking in/out happens under each employee&rsquo;s own sign-in. Hours, punch fixes, and payroll live in the TEAM tab.</p>
+          ) : (
+            <>
+              {timeData?.open ? (
+                <>
+                  <p style={{ fontSize: 14 }}>Clocked in since <b>{new Date(timeData.open.clockIn).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</b></p>
+                  <div style={{ marginTop: 10 }}><button className="btn" onClick={() => clock("out")}>⏱ CLOCK OUT</button></div>
+                </>
+              ) : (
+                <div style={{ marginTop: 4 }}><button className="btn" onClick={() => clock("in")}>⏱ CLOCK IN</button></div>
+              )}
+              {timeMsg && <p className="err">{timeMsg}</p>}
+              <h3 className="display" style={{ fontSize: 15, margin: "16px 0 6px" }}>LAST 14 DAYS</h3>
+              <table className="grid">
+                <thead><tr><th>Day</th><th>In</th><th>Out</th><th style={{ textAlign: "right" }}>Hours</th></tr></thead>
+                <tbody>
+                  {(timeData?.entries || []).map((e) => (
+                    <tr key={e.id}>
+                      <td>{e.dayStr}</td><td>{e.inStr}</td><td>{e.outStr || <b>OPEN</b>}</td>
+                      <td style={{ textAlign: "right" }}>{e.hours !== null ? e.hours.toFixed(2) : "—"}</td>
+                    </tr>
+                  ))}
+                  {(!timeData || timeData.entries.length === 0) && <tr><td colSpan={4}>No punches yet.</td></tr>}
+                </tbody>
+              </table>
+              <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 8 }}>Forgot a punch? Tell the admin — they can fix it in TEAM.</p>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "team" && role === "admin" && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>PAYROLL — PICK A PAY PERIOD</h2>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 140 }}><label>From</label><input type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} /></span>
+              <span style={{ flex: 1, minWidth: 140 }}><label>To</label><input type="date" value={payTo} onChange={(e) => setPayTo(e.target.value)} /></span>
+            </div>
+            <div style={{ marginTop: 10 }}><button className="btn small" onClick={runPayroll}>RUN PAYROLL REPORT</button></div>
+            {payroll && (
+              <div style={{ overflowX: "auto", marginTop: 12 }}>
+                <table className="grid">
+                  <thead><tr><th>Employee</th><th style={{ textAlign: "right" }}>Hours</th><th style={{ textAlign: "right" }}>Rate</th><th style={{ textAlign: "right" }}>Gross</th><th style={{ textAlign: "right" }}>Deductions</th><th style={{ textAlign: "right" }}>Net</th></tr></thead>
+                  <tbody>
+                    {payroll.map((r) => (
+                      <tr key={r.id}>
+                        <td>{r.name}{r.openEntries > 0 ? " ⚠ open punch" : ""}</td>
+                        <td style={{ textAlign: "right" }}>{r.hours.toFixed(2)}</td>
+                        <td style={{ textAlign: "right" }}>{money(r.payRateCents)}/hr</td>
+                        <td style={{ textAlign: "right" }}>{money(r.grossCents)}</td>
+                        <td style={{ textAlign: "right" }}>{money(r.dedCents)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 700 }}>{money(r.netCents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 8 }}>
+                  Gross = hours × rate. Net = gross − the recurring deductions below. Withholding is yours to compute at Eldridge — this is the timesheet side.
+                </p>
+              </div>
+            )}
+            {teamMsg && <p className="err">{teamMsg}</p>}
+          </div>
+
+          {team.map((m) => (
+            <div className="card" key={m.id} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                <h2 className="display" style={{ fontSize: 16 }}>{m.name.toUpperCase()}</h2>
+                <button className="btn small ghost" onClick={() => {
+                  const r = prompt(`Hourly pay rate for ${m.name} (dollars):`, (m.payRateCents / 100).toFixed(2));
+                  if (r !== null) patchTeam({ employeeId: m.id, payRateDollars: r });
+                }}>RATE: {money(m.payRateCents)}/HR</button>
+              </div>
+
+              <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>W-4 ON FILE</h3>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ flex: 1, minWidth: 130 }}>
+                  <label>Filing status</label>
+                  <select value={m.w4.filingStatus || ""} onChange={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, filingStatus: e.target.value } })}>
+                    <option value="">—</option>
+                    <option>Single or MFS</option>
+                    <option>Married filing jointly</option>
+                    <option>Head of household</option>
+                  </select>
+                </span>
+                <span style={{ flex: 1, minWidth: 110 }}>
+                  <label>Step 3 dependents $</label>
+                  <input defaultValue={m.w4.dependentsDollars || ""} onBlur={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, dependentsDollars: e.target.value } })} />
+                </span>
+                <span style={{ flex: 1, minWidth: 110 }}>
+                  <label>4(c) extra withholding $</label>
+                  <input defaultValue={m.w4.extraWithholdingDollars || ""} onBlur={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, extraWithholdingDollars: e.target.value } })} />
+                </span>
+              </div>
+
+              <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>RECURRING DEDUCTIONS (PER PAY PERIOD)</h3>
+              <ul style={{ margin: "4px 0" }}>
+                {m.deductions.map((d) => (
+                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed var(--ink)", fontSize: 13 }}>
+                    <span>{d.name}</span>
+                    <span>{money(d.amountCents)} <button className="btn small ghost" onClick={() => dropDeduction(d.id)}>✕</button></span>
+                  </li>
+                ))}
+                {m.deductions.length === 0 && <li style={{ fontSize: 12, color: "var(--ash)" }}>None.</li>}
+              </ul>
+              <button className="btn small ghost" onClick={() => addDeduction(m.id)}>+ ADD DEDUCTION</button>
+
+              <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>DOCUMENTS (W-4 / I-9 / ID)</h3>
+              <ul style={{ margin: "4px 0" }}>
+                {m.docs.map((d) => (
+                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed var(--ink)", fontSize: 13, gap: 8 }}>
+                    <span>[{d.kind}] {d.filename}</span>
+                    <span style={{ whiteSpace: "nowrap" }}>
+                      <a className="btn small ghost" href={`/api/admin/team/docs/${d.id}`} target="_blank" rel="noopener">VIEW</a>{" "}
+                      <button className="btn small ghost" onClick={() => dropDoc(d.id)}>✕</button>
+                    </span>
+                  </li>
+                ))}
+                {m.docs.length === 0 && <li style={{ fontSize: 12, color: "var(--ash)" }}>Nothing uploaded.</li>}
+              </ul>
+              <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+                <span style={{ minWidth: 110 }}>
+                  <label>Type</label>
+                  <select id={`kind-${m.id}`}>
+                    <option>W4</option><option>I9</option><option>ID</option><option>OTHER</option>
+                  </select>
+                </span>
+                <span style={{ flex: 1, minWidth: 180 }}>
+                  <label>File (image or PDF, 5 MB max)</label>
+                  <input type="file" accept="image/*,application/pdf" onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    const kindEl = document.getElementById(`kind-${m.id}`) as HTMLSelectElement | null;
+                    if (f) uploadDoc(m.id, kindEl?.value || "OTHER", f);
+                    e.target.value = "";
+                  }} />
+                </span>
+              </div>
+            </div>
+          ))}
         </>
       )}
 

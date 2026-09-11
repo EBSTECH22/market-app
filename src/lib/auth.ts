@@ -22,6 +22,32 @@ export function adminCookie(): { name: string; value: string } {
   return { name: ADMIN_COOKIE, value: adminToken() };
 }
 
+// ----- employee sessions (limited staff role) -----
+const STAFF_COOKIE = "nm_staff";
+
+function signStaff(employeeId: string): string {
+  const sig = createHmac("sha256", secret()).update(`staff:${employeeId}`).digest("hex");
+  return `${employeeId}.${sig}`;
+}
+
+export function staffCookie(employeeId: string): { name: string; value: string } {
+  return { name: STAFF_COOKIE, value: signStaff(employeeId) };
+}
+
+export function currentEmployeeId(): string | null {
+  const raw = cookies().get(STAFF_COOKIE)?.value;
+  if (!raw) return null;
+  const [id, sig] = raw.split(".");
+  if (!id || !sig) return null;
+  const expect = createHmac("sha256", secret()).update(`staff:${id}`).digest("hex");
+  return sig === expect ? id : null;
+}
+
+// admin OR signed-in employee — for daily-operations endpoints
+export function isStaff(): boolean {
+  return isAdmin() || currentEmployeeId() !== null;
+}
+
 // ----- vendor accounts -----
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString("hex");
@@ -55,4 +81,4 @@ export function currentVendorId(): string | null {
   return sig === expect ? id : null;
 }
 
-export const cookieNames = { ADMIN_COOKIE, VENDOR_COOKIE };
+export const cookieNames = { ADMIN_COOKIE, VENDOR_COOKIE, STAFF_COOKIE };

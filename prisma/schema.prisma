@@ -51,11 +51,39 @@ model Sale {
 }
 
 model Employee {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  pinHash   String
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  name        String   @unique
+  pinHash     String
+  payRateCents Int     @default(0)
+  w4Json      String   @default("{}")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+model TimeEntry {
+  id         String    @id @default(cuid())
+  employeeId String
+  clockIn    DateTime  @default(now())
+  clockOut   DateTime?
+  note       String    @default("")
+}
+
+model Deduction {
+  id         String  @id @default(cuid())
+  employeeId String
+  name       String
+  amountCents Int
+  active     Boolean @default(true)
+}
+
+model EmployeeDoc {
+  id         String   @id @default(cuid())
+  employeeId String
+  kind       String
+  filename   String
+  mime       String
+  dataB64    String
+  createdAt  DateTime @default(now())
 }
 
 model DrawerSession {

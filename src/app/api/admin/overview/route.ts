@@ -27,7 +27,7 @@ export async function GET() {
 
   return NextResponse.json({
     today: { count: todaySales.length, totalCents: sum(todaySales), taxCents: tax(todaySales) },
-    month: { count: monthSales.length, totalCents: sum(monthSales), taxCents: tax(monthSales) },
+    month: admin ? { count: monthSales.length, totalCents: sum(monthSales), taxCents: tax(monthSales) } : { count: 0, totalCents: 0, taxCents: 0 },
     vendors,
     floor: floor.map((i) => ({
       id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, quantity: i.quantity,
