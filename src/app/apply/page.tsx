@@ -85,6 +85,26 @@ export default function ApplyPage() {
         </div>
       )}
 
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h2 className="display" style={{ fontSize: 15, marginBottom: 6 }}>WHAT YOUR BOOTH RENT GETS YOU</h2>
+        <ul style={{ margin: "0 0 0 18px", fontSize: 13, lineHeight: 1.75, listStyle: "disc" }}>
+          <li><b>We sell for you, every open day.</b> Our staffed register rings your barcoded items — no sitting a table, no card reader to buy, no cash box to manage.</li>
+          <li><b>Your own vendor account.</b> Manage your inventory and prices from your phone, print your own barcode labels, and watch sales and your running balance live.</li>
+          <li><b>Know the moment you sell.</b> Push notifications on each sale, or one end-of-day summary email — your choice.</li>
+          <li><b>Sales tax handled.</b> The market collects and remits Oklahoma sales tax on every register sale, so you don&rsquo;t have to.</li>
+          <li><b>Your own public page.</b> Customer reviews, your live product list on our market directory, and a printed QR card for your table that connects shoppers straight to you.</li>
+          <li><b>Pre-orders with online payment.</b> Customers can message you, you accept with a price and pickup date, they pay securely by card — the money lands in your vendor balance automatically.</li>
+          <li><b>A private customer inbox.</b> Pre-orders, requests, and questions come to you directly; you reply from your portal.</li>
+          <li><b>Clean, honest books.</b> Rent bills itself on the 1st (first and final months prorate by the day), every sale and payout shows on your statement, and you&rsquo;re paid out monthly.</li>
+        </ul>
+        <h2 className="display" style={{ fontSize: 15, margin: "14px 0 6px" }}>HOW WE OPERATE</h2>
+        <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>
+          We&rsquo;re a homegrown-and-homemade market: you make it or grow it, we sell it.
+          Restocking happens in morning (7&ndash;8 AM) and evening (6&ndash;8 PM) windows, coordinated with staff so the sales floor stays pleasant for shoppers &mdash; pre-order handoffs are welcome anytime.
+          Booth rent is priced by the square foot, month to month, with 30 days&rsquo; notice to leave. Everything else gets settled person-to-person on your setup call.
+        </p>
+      </div>
+
       <div className="card">
         <h2 className="display" style={{ fontSize: 15, marginBottom: 2 }}>THE BASICS</h2>
         <F label="Business / booth name *"><input value={f.businessName || ""} onChange={set("businessName")} /></F>
