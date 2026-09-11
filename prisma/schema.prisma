@@ -16,6 +16,7 @@ model Vendor {
   phone             String   @default("")
   passwordHash      String
   commissionPercent Float    @default(0)
+  mustChangePassword Boolean @default(false)
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
   items             Item[]

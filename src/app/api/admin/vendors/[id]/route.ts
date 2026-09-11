@@ -29,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const vendor = await db.vendor.update({
     where: { id: params.id },
-    data: { ...data, ...(tempPassword ? { passwordHash: hashPassword(tempPassword) } : {}) },
+    data: { ...data, ...(tempPassword ? { passwordHash: hashPassword(tempPassword), mustChangePassword: true } : {}) },
   });
   if (tempPassword) {
     try { await sendPasswordResetEmail(vendor, tempPassword); } catch (err) { console.error("reset email failed", err); }

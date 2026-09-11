@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
       email: email.toLowerCase().trim(),
       phone: (phone || "").trim(),
       passwordHash: hashPassword(tempPassword),
+      mustChangePassword: true,
       commissionPercent: Math.max(0, Math.min(50, Number(commissionPercent) || 0)),
     },
   });

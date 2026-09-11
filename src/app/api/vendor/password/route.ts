@@ -11,9 +11,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "New password must be at least 8 characters." }, { status: 400 });
   }
   const vendor = await db.vendor.findUnique({ where: { id: vendorId } });
-  if (!vendor || !verifyPassword(currentPassword || "", vendor.passwordHash)) {
+  if (!vendor) return NextResponse.json({ error: "Not found." }, { status: 404 });
+  // Forced first-change: they just authenticated with the temp password, so don't ask for it again.
+  if (!vendor.mustChangePassword && !verifyPassword(currentPassword || "", vendor.passwordHash)) {
     return NextResponse.json({ error: "Current password is wrong." }, { status: 401 });
   }
-  await db.vendor.update({ where: { id: vendorId }, data: { passwordHash: hashPassword(newPassword) } });
+  await db.vendor.update({ where: { id: vendorId }, data: { passwordHash: hashPassword(newPassword), mustChangePassword: false } });
   return NextResponse.json({ ok: true });
 }

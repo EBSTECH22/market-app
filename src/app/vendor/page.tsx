@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 
@@ -18,6 +18,7 @@ export default function VendorDashboard() {
   const [busy, setBusy] = useState(false);
   const [pwCur, setPwCur] = useState("");
   const [pwNew, setPwNew] = useState("");
+  const [pwNew2, setPwNew2] = useState("");
   const [pwMsg, setPwMsg] = useState("");
 
   const load = useCallback(async () => {
@@ -61,6 +62,7 @@ export default function VendorDashboard() {
 
   const changePw = async () => {
     setPwMsg("");
+    if (pwNew !== pwNew2) { setPwMsg("The two passwords do not match - type them again."); return; }
     const res = await fetch("/api/vendor/password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -68,7 +70,7 @@ export default function VendorDashboard() {
     });
     const data = await res.json();
     setPwMsg(res.ok ? "Password changed. ✓" : data.error || "Failed.");
-    if (res.ok) { setPwCur(""); setPwNew(""); }
+    if (res.ok) { setPwCur(""); setPwNew(""); setPwNew2(""); await load(); }
   };
 
   const logout = async () => {
@@ -77,6 +79,29 @@ export default function VendorDashboard() {
   };
 
   if (!me) return <main style={{ padding: 60, textAlign: "center" }}>Loading…</main>;
+
+  if (me.vendor.mustChangePassword) {
+    return (
+      <main style={{ maxWidth: 430, margin: "0 auto", padding: "70px 16px" }}>
+        <div style={{ textAlign: "center", marginBottom: 18 }}>
+          <div className="display" style={{ fontSize: 24 }}>COMMUNITY HARVEST</div>
+          <div style={{ fontWeight: 700, fontSize: 11, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
+        </div>
+        <div className="card">
+          <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>SET YOUR OWN PASSWORD</h2>
+          <p style={{ fontSize: 13, color: "var(--ash)" }}>
+            You signed in with a temporary password from your email. Pick your own before continuing &mdash; you&rsquo;ll use it from now on.
+          </p>
+          <label>Your new password (8+ characters)</label>
+          <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
+          <label>Type it again</label>
+          <input type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} onKeyDown={(e) => e.key === "Enter" && changePw()} />
+          <div style={{ marginTop: 14 }}><button className="btn" onClick={changePw}>SAVE &amp; CONTINUE</button></div>
+          {pwMsg && <p className={pwMsg.includes("✓") ? "ok" : "err"}>{pwMsg}</p>}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main style={{ maxWidth: 640, margin: "0 auto", padding: "26px 16px 70px" }}>
@@ -179,6 +204,8 @@ export default function VendorDashboard() {
         <input type="password" value={pwCur} onChange={(e) => setPwCur(e.target.value)} />
         <label>New password (8+ characters)</label>
         <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
+        <label>Type it again</label>
+        <input type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} />
         <div style={{ marginTop: 12 }}>
           <button className="btn small" onClick={changePw}>UPDATE PASSWORD</button>
         </div>
