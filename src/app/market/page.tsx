@@ -41,7 +41,12 @@ export default function MarketDirectory() {
       </div>
 
       {banner?.enabled && (
-        <div style={{ background: "#000", color: "#fff", textAlign: "center", padding: "18px 14px", marginBottom: 16 }}>
+        <div style={{ position: "relative", background: "#000", color: "#fff", textAlign: "center", padding: "22px 96px 18px 20px", marginBottom: 16 }}>
+          <div style={{ position: "absolute", top: 14, right: -12, width: 120, height: 120, background: "#000", border: "2px dashed #fff", outline: "3px solid #000", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, transform: "rotate(12deg)", boxShadow: "5px 6px 0 rgba(0,0,0,0.3)", zIndex: 2 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.13em", color: "#fff" }}>SPONSORED BY</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/sponsor-lightfoot.png" alt="Lightfoot Roofs" style={{ width: "72%", height: "auto", display: "block" }} />
+          </div>
           <div className="display" style={{ fontSize: 26, letterSpacing: "0.04em" }}>{banner.title}</div>
           <div className="display" style={{ fontSize: 17, marginTop: 6 }}>{banner.dateLine}</div>
           {banner.message && <div style={{ fontSize: 13, marginTop: 8 }}>{banner.message}</div>}
