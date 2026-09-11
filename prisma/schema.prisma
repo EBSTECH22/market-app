@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Vendor {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  businessName      String
+  contactName       String
+  email             String   @unique
+  phone             String   @default("")
+  passwordHash      String
+  commissionPercent Float    @default(0)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  items             Item[]
+  ledger            LedgerEntry[]
+  contracts         Contract[]
+}
+
+model Item {
+  id         String   @id @default(cuid())
+  vendorId   String
+  vendor     Vendor   @relation(fields: [vendorId], references: [id])
+  sku        String   @unique
+  name       String
+  priceCents Int
+  quantity   Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Sale {
+  id            String     @id @default(cuid())
+  subtotalCents Int
+  taxCents      Int
+  totalCents    Int
+  paymentMethod String
+  createdAt     DateTime   @default(now())
+  lines         SaleLine[]
+}
+
+model SaleLine {
+  id              String @id @default(cuid())
+  saleId          String
+  sale            Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  itemId          String
+  vendorId        String
+  name            String
+  priceCents      Int
+  quantity        Int
+  commissionCents Int    @default(0)
+  vendorNetCents  Int
+}
+
+model LedgerEntry {
+  id          String   @id @default(cuid())
+  vendorId    String
+  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+  type        String
+  amountCents Int
+  note        String   @default("")
+  createdAt   DateTime @default(now())
+}
+
+model Contract {
+  id               String    @id @default(cuid())
+  vendorId         String
+  vendor           Vendor    @relation(fields: [vendorId], references: [id])
+  boothLabel       String
+  monthlyRentCents Int
+  startDate        DateTime
+  status           String    @default("ACTIVE")
+  noticeGivenAt    DateTime?
+  endDate          DateTime?
+  createdAt        DateTime  @default(now())
+}
+
+model Setting {
+  key   String @id
+  value String
+}

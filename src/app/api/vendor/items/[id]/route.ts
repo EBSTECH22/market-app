@@ -1,0 +1,30 @@
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { currentVendorId } from "@/lib/auth";
+
+export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const vendorId = currentVendorId();
+  if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
+
+  const item = await db.item.findUnique({ where: { id: params.id } });
+  if (!item || item.vendorId !== vendorId) return NextResponse.json({ error: "Item not found." }, { status: 404 });
+
+  const body = await req.json();
+  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean } = {};
+  if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
+  if (body.priceDollars !== undefined) {
+    const price = Math.round(Number(body.priceDollars) * 100);
+    if (!price || price <= 0) return NextResponse.json({ error: "Enter a valid price." }, { status: 400 });
+    data.priceCents = price;
+  }
+  if (body.quantity !== undefined) {
+    const q = Math.round(Number(body.quantity));
+    if (Number.isNaN(q) || q < 0) return NextResponse.json({ error: "Invalid quantity." }, { status: 400 });
+    data.quantity = q;
+  }
+  if (typeof body.active === "boolean") data.active = body.active;
+  if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
+
+  const updated = await db.item.update({ where: { id: item.id }, data });
+  return NextResponse.json({ item: updated });
+}
