@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 
@@ -23,14 +23,73 @@ export default function VendorDashboard() {
   const [pushDevices, setPushDevices] = useState<number | null>(null);
   const [pushKey, setPushKey] = useState("");
   const [pushMsg, setPushMsg] = useState("");
+  const [inbox, setInbox] = useState<{ id: string; type: string; status: string; customerName: string; email: string; phone: string; last: { sender: string; body: string } | null }[]>([]);
+  const [openThread, setOpenThread] = useState<{ id: string; type: string; status: string; customerName: string; email: string; phone: string; messages: { id: string; sender: string; body: string; createdAt: string }[] } | null>(null);
+  const [replyBody, setReplyBody] = useState("");
+  const [inboxMsg, setInboxMsg] = useState("");
+  const [pubPre, setPubPre] = useState(false);
+  const [pubReq, setPubReq] = useState(false);
+  const [pubBlurb, setPubBlurb] = useState("");
+  const [pubMsg, setPubMsg] = useState("");
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
     if (!res.ok) { window.location.href = "/"; return; }
-    setMe(await res.json());
+    const data = await res.json();
+    setMe(data);
+    if (data?.vendor) {
+      setPubPre(!!data.vendor.acceptsPreorders);
+      setPubReq(!!data.vendor.acceptsRequests);
+      setPubBlurb(data.vendor.publicBlurb || "");
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadInbox = useCallback(async () => {
+    const r = await fetch("/api/vendor/inbox");
+    if (r.ok) setInbox((await r.json()).threads || []);
+  }, []);
+  useEffect(() => { loadInbox(); }, [loadInbox]);
+
+  const openInboxThread = async (id: string) => {
+    setInboxMsg(""); setReplyBody("");
+    const r = await fetch(`/api/vendor/inbox/${id}`);
+    if (r.ok) setOpenThread((await r.json()).thread);
+  };
+
+  const sendReply = async () => {
+    if (!openThread) return;
+    setInboxMsg("");
+    const r = await fetch(`/api/vendor/inbox/${openThread.id}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: replyBody }),
+    });
+    const d = await r.json();
+    if (!r.ok) { setInboxMsg(d.error || "Couldn't send."); return; }
+    setReplyBody("");
+    await openInboxThread(openThread.id);
+    await loadInbox();
+  };
+
+  const setThreadStatus = async (status: "OPEN" | "CLOSED") => {
+    if (!openThread) return;
+    await fetch(`/api/vendor/inbox/${openThread.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    await openInboxThread(openThread.id);
+    await loadInbox();
+  };
+
+  const savePublic = async () => {
+    setPubMsg("");
+    const r = await fetch("/api/vendor/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb }),
+    });
+    setPubMsg(r.ok ? "Saved. ✓" : "Couldn't save.");
+  };
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -241,6 +300,79 @@ export default function VendorDashboard() {
       </div>
 
       <div className="card">
+        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>INBOX 📩 — PRE-ORDERS, REQUESTS &amp; COMPLAINTS</h2>
+        {openThread ? (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
+              <b style={{ fontSize: 14 }}>{openThread.type} — {openThread.customerName}</b>
+              <button className="btn small ghost" onClick={() => setOpenThread(null)}>← ALL MESSAGES</button>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ash)", margin: "2px 0 8px" }}>{openThread.email} · {openThread.phone}</div>
+            {openThread.messages.map((m) => (
+              <div key={m.id} style={{
+                margin: "6px 0", padding: "7px 9px", border: "1px solid #000", fontSize: 13,
+                background: m.sender === "VENDOR" ? "#000" : "#fff", color: m.sender === "VENDOR" ? "#fff" : "#000",
+                marginLeft: m.sender === "VENDOR" ? 20 : 0, marginRight: m.sender === "VENDOR" ? 0 : 20,
+              }}>
+                {m.body}
+              </div>
+            ))}
+            {openThread.status === "OPEN" ? (
+              <>
+                <label>Reply (they get it by email with a private link)</label>
+                <textarea rows={3} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} />
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button className="btn" style={{ flex: 1 }} onClick={sendReply}>SEND REPLY</button>
+                  <button className="btn small ghost" onClick={() => setThreadStatus("CLOSED")}>CLOSE</button>
+                </div>
+              </>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                <button className="btn small ghost" onClick={() => setThreadStatus("OPEN")}>RE-OPEN CONVERSATION</button>
+              </div>
+            )}
+            {inboxMsg && <p className="err">{inboxMsg}</p>}
+          </div>
+        ) : (
+          <ul style={{ margin: "6px 0" }}>
+            {inbox.map((t) => (
+              <li key={t.id} style={{ padding: "8px 0", borderBottom: "1px dashed var(--ink)", cursor: "pointer" }} onClick={() => openInboxThread(t.id)}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+                  <b>{t.type === "PREORDER" ? "🛒" : t.type === "REQUEST" ? "🙋" : "⚠️"} {t.customerName}</b>
+                  <span style={{ fontWeight: 700 }}>{t.status === "CLOSED" ? "CLOSED" : ""}</span>
+                </div>
+                {t.last && <div style={{ fontSize: 12, color: "var(--ash)" }}>{t.last.sender === "VENDOR" ? "You: " : ""}{t.last.body}</div>}
+              </li>
+            ))}
+            {inbox.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>Nothing yet. Customers reach you here from your table QR card.</li>}
+          </ul>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR PUBLIC PAGE &amp; TABLE QR 📱</h2>
+        <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
+          Customers scan your table card to see your goods, review you, and message you. Complaints are always open — that&rsquo;s a market rule — but pre-orders and requests are up to you:
+        </p>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 8 }}>
+          <input type="checkbox" checked={pubPre} onChange={(e) => setPubPre(e.target.checked)} style={{ width: "auto" }} />
+          Accept PRE-ORDERS
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={pubReq} onChange={(e) => setPubReq(e.target.checked)} style={{ width: "auto" }} />
+          Accept REQUESTS
+        </label>
+        <label>Short blurb for your public page (what you make, in a sentence)</label>
+        <input value={pubBlurb} onChange={(e) => setPubBlurb(e.target.value)} maxLength={300} />
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <button className="btn small" onClick={savePublic}>SAVE</button>
+          <a className="btn small ghost" href="/vendor/qr">🖨 PRINT MY TABLE QR CARD</a>
+          {me && <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">VIEW MY PUBLIC PAGE</a>}
+        </div>
+        {pubMsg && <p className={pubMsg.includes("✓") ? "ok" : "err"}>{pubMsg}</p>}
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>SALE ALERTS 🔔</h2>
         <p style={{ fontSize: 13, color: "var(--ash)" }}>
           Get a push notification the moment your items sell. Without this you get one summary email at the end of each selling day — never an email per sale.

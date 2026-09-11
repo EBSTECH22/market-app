@@ -45,6 +45,7 @@ export default function AdminPage() {
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [teamMsg, setTeamMsg] = useState("");
+  const [complaints, setComplaints] = useState<{ id: string; status: string; customerName: string; email: string; phone: string; vendor: { code: string; businessName: string } | null; messages: { sender: string; body: string }[] }[]>([]);
   const [punchName, setPunchName] = useState("");
   const [punchPin, setPunchPin] = useState("");
   const [punchMsg, setPunchMsg] = useState("");
@@ -192,6 +193,11 @@ export default function AdminPage() {
   useEffect(() => { probeRole(); loadDrawer(); loadAll(); }, [probeRole, loadDrawer, loadAll]);
   useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
   useEffect(() => { if (authed && role === "admin" && tab === "team") loadTeam(); }, [authed, role, tab, loadTeam]);
+  useEffect(() => {
+    if (authed && role === "admin" && tab === "vendors") {
+      fetch("/api/admin/complaints").then(async (r) => { if (r.ok) setComplaints((await r.json()).complaints || []); });
+    }
+  }, [authed, role, tab]);
   useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ); }, [authed, tab, ticketQ, loadTickets]);
   useEffect(() => { if (authed && tab === "reports") loadReport(); }, [authed, tab, loadReport]);
   useEffect(() => {
@@ -1302,6 +1308,28 @@ export default function AdminPage() {
                 </li>
               ))}
               {vendors.length === 0 && <li style={{ color: "var(--ash)", fontSize: 14, paddingTop: 8 }}>No vendors yet — add your first below.</li>}
+            </ul>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>COMPLAINTS — MARKET OVERSIGHT ⚠️</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>Every complaint filed against any vendor, newest first. Vendors handle replies; this is your accountability view.</p>
+            <ul style={{ margin: "8px 0" }}>
+              {complaints.map((c) => (
+                <li key={c.id} style={{ padding: "8px 0", borderBottom: "1px dashed var(--ink)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+                    <b>{c.vendor ? `${c.vendor.code} ${c.vendor.businessName}` : "?"} ← {c.customerName}</b>
+                    <span style={{ fontWeight: 700 }}>{c.status}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{c.email} · {c.phone}</div>
+                  {c.messages.map((m, i) => (
+                    <div key={i} style={{ fontSize: 12.5, marginTop: 4, paddingLeft: 8, borderLeft: "2px solid var(--ink)" }}>
+                      <b>{m.sender === "CUSTOMER" ? c.customerName : "Vendor"}:</b> {m.body}
+                    </div>
+                  ))}
+                </li>
+              ))}
+              {complaints.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>No complaints on file. 🎉</li>}
             </ul>
           </div>
 

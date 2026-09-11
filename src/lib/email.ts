@@ -112,3 +112,31 @@ export async function sendDailySummaryEmail(
     <p style="font-size:12px;color:#777;margin:0;">Full detail and your running balance: <a href="${baseUrl()}">${baseUrl().replace("https://", "")}</a><br>Want instant alerts instead of this email? Log in and turn on Sale Alerts.</p>`;
   await send(vendor.email, `Your sales today at Community Harvest`, shell(inner));
 }
+
+const THREAD_LABEL: Record<string, string> = { PREORDER: "pre-order", REQUEST: "request", COMPLAINT: "complaint" };
+
+export async function sendThreadLinkEmail(
+  to: string, customerName: string, vendorName: string, type: string, token: string, isReply: boolean
+) {
+  const label = THREAD_LABEL[type] || "message";
+  const url = `${baseUrl()}/t/${token}`;
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">${isReply ? `${vendorName} REPLIED` : `YOUR ${label.toUpperCase()} WAS SENT`}</h2>
+    <p style="font-size:14px;color:#555;">Hi ${customerName} &mdash; ${isReply ? `there&rsquo;s a new reply on your ${label} to ${vendorName}.` : `your ${label} went to ${vendorName}. Replies land on your private page:`}</p>
+    <br>
+    <a href="${url}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">VIEW THE CONVERSATION</a>
+    <p style="font-size:12px;color:#999;margin-top:12px;">Keep this email &mdash; the link is your key to the conversation.</p>`;
+  await send(to, isReply ? `${vendorName} replied to your ${label}` : `Your ${label} to ${vendorName}`, shell(inner));
+}
+
+export async function sendVendorInboxEmail(
+  vendor: { email: string; businessName: string }, type: string, customerName: string
+) {
+  const label = THREAD_LABEL[type] || "message";
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">NEW ${label.toUpperCase()} 📩</h2>
+    <p style="font-size:14px;color:#555;">${customerName} sent you a ${label}. Reply from your vendor portal inbox.</p>
+    <br>
+    <a href="${baseUrl()}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">OPEN YOUR INBOX</a>`;
+  await send(vendor.email, `New ${label} from ${customerName}`, shell(inner));
+}

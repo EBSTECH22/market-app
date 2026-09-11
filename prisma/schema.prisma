@@ -17,6 +17,9 @@ model Vendor {
   passwordHash      String
   commissionPercent Float    @default(0)
   mustChangePassword Boolean @default(false)
+  acceptsPreorders  Boolean  @default(false)
+  acceptsRequests   Boolean  @default(false)
+  publicBlurb       String   @default("")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
   items             Item[]
@@ -161,5 +164,47 @@ model PushSub {
   endpoint  String   @unique
   p256dh    String
   auth      String
+  createdAt DateTime @default(now())
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  vendorId  String
+  name      String
+  rating    Int
+  body      String
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model ReviewComment {
+  id        String   @id @default(cuid())
+  reviewId  String
+  name      String
+  body      String
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model Thread {
+  id           String      @id @default(cuid())
+  vendorId     String
+  type         String
+  customerName String
+  email        String
+  phone        String
+  status       String      @default("OPEN")
+  token        String      @unique
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @default(now())
+  messages     ThreadMsg[]
+}
+
+model ThreadMsg {
+  id        String   @id @default(cuid())
+  threadId  String
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender    String
+  body      String
   createdAt DateTime @default(now())
 }
