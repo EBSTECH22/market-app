@@ -7,8 +7,17 @@ import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";
 
+async function tentPause(): Promise<{ paused: boolean; message: string }> {
+  const row = await db.setting.findUnique({ where: { key: "tentsPaused" } });
+  if (!row) return { paused: false, message: "" };
+  try { const v = JSON.parse(row.value); return { paused: !!v.paused, message: String(v.message || "") }; }
+  catch { return { paused: false, message: "" }; }
+}
+
 // GET: open future dates with remaining spots
 export async function GET() {
+  const pause = await tentPause();
+  if (pause.paused) return NextResponse.json({ paused: true, message: pause.message, dates: [] });
   const today = new Date().toISOString().slice(0, 10);
   const dates = await db.tentDate.findMany({
     where: { open: true, date: { gte: today } },
@@ -27,6 +36,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const { dateId, name, businessName, email, phone, creditToken, website } = await req.json();
   if (website) return NextResponse.json({ ok: true });
+  const pause = await tentPause();
+  if (pause.paused) return NextResponse.json({ error: "Tent bookings are paused right now — check back soon." }, { status: 400 });
   const d = await db.tentDate.findUnique({ where: { id: dateId }, include: { bookings: true } });
   if (!d || !d.open) return NextResponse.json({ error: "That date isn't available." }, { status: 400 });
   if (d.capacity - tentSpotsTaken(d.bookings) <= 0) return NextResponse.json({ error: "That date just filled up — pick another." }, { status: 400 });

@@ -11,6 +11,8 @@ const monthOf = (iso: string) =>
 
 export default function TentsPage() {
   const [dates, setDates] = useState<D[]>([]);
+  const [paused, setPaused] = useState(false);
+  const [pausedMsg, setPausedMsg] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [pick, setPick] = useState<D | null>(null);
   const [name, setName] = useState("");
@@ -25,7 +27,12 @@ export default function TentsPage() {
 
   const load = useCallback(async () => {
     const r = await fetch("/api/public/tents");
-    if (r.ok) setDates((await r.json()).dates || []);
+    if (r.ok) {
+      const d = await r.json();
+      setDates(d.dates || []);
+      setPaused(!!d.paused);
+      setPausedMsg(d.message || "");
+    }
     setLoaded(true);
   }, []);
 
@@ -110,7 +117,13 @@ export default function TentsPage() {
           </div>
 
           {!loaded && <p style={{ textAlign: "center" }}>Loading dates…</p>}
-          {loaded && groups.length === 0 && (
+          {loaded && paused && (
+            <div style={{ background: "#000", color: "#fff", textAlign: "center", padding: "16px 14px", marginBottom: 14 }}>
+              <div className="display" style={{ fontSize: 18 }}>BOOKINGS PAUSED</div>
+              <div style={{ fontSize: 13, marginTop: 6 }}>{pausedMsg || "Tent bookings open soon — check back!"}</div>
+            </div>
+          )}
+          {loaded && !paused && groups.length === 0 && (
             <p style={{ textAlign: "center", color: "var(--ash)" }}>No tent dates are open for booking right now — check back soon.</p>
           )}
 

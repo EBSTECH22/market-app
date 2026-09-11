@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   await reconcileTents().catch(() => {});
+  const pauseRow = await db.setting.findUnique({ where: { key: "tentsPaused" } });
+  let pause = { paused: false, message: "" };
+  if (pauseRow) { try { const v = JSON.parse(pauseRow.value); pause = { paused: !!v.paused, message: String(v.message || "") }; } catch {} }
   const today = new Date().toISOString().slice(0, 10);
   const dates = await db.tentDate.findMany({
     where: { date: { gte: today } },
@@ -16,7 +19,7 @@ export async function GET() {
     orderBy: { date: "asc" },
     take: 120,
   });
-  return NextResponse.json({ dates });
+  return NextResponse.json({ dates, pause });
 }
 
 // POST — { action: "openDates", dates: ["YYYY-MM-DD"...], capacity } | { action: "toggle", dateId, open } |
@@ -26,6 +29,11 @@ export async function POST(req: NextRequest) {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const b = await req.json();
 
+  if (b.action === "pause") {
+    const val = JSON.stringify({ paused: !!b.paused, message: String(b.message || "").slice(0, 200) });
+    await db.setting.upsert({ where: { key: "tentsPaused" }, create: { key: "tentsPaused", value: val }, update: { value: val } });
+    return NextResponse.json({ ok: true });
+  }
   if (b.action === "openDates") {
     const cap = Math.max(1, Math.min(20, Number(b.capacity) || 4));
     const list: string[] = (b.dates || []).filter((x: string) => /^\d{4}-\d{2}-\d{2}$/.test(x)).slice(0, 62);

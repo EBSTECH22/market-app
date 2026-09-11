@@ -313,10 +313,16 @@ export default function AdminPage() {
   const [tentCap, setTentCap] = useState("4");
   const [tentDows, setTentDows] = useState<number[]>([5, 6]); // Fri, Sat default
   const [tentMsg, setTentMsg] = useState("");
+  const [tentPaused, setTentPaused] = useState(false);
+  const [tentPauseMsg, setTentPauseMsg] = useState("");
 
   const loadTents = useCallback(async () => {
     const r = await fetch("/api/admin/tents");
-    if (r.ok) setTentDates((await r.json()).dates || []);
+    if (r.ok) {
+      const d = await r.json();
+      setTentDates(d.dates || []);
+      if (d.pause) { setTentPaused(!!d.pause.paused); setTentPauseMsg(d.pause.message || ""); }
+    }
   }, []);
   useEffect(() => { if (authed && role === "admin" && tab === "tents") loadTents(); }, [authed, role, tab, loadTents]);
 
@@ -1577,6 +1583,20 @@ export default function AdminPage() {
 
       {tab === "tents" && role === "admin" && (
         <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>BOOKING PAUSE</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>Paused = the /tents page hides all dates and takes no bookings (your opened dates stay saved). Flip it off on opening day.</p>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 6 }}>
+              <input type="checkbox" checked={tentPaused} onChange={(e) => setTentPaused(e.target.checked)} style={{ width: "auto" }} />
+              Pause tent bookings
+            </label>
+            <label>Message shown while paused</label>
+            <input value={tentPauseMsg} onChange={(e) => setTentPauseMsg(e.target.value)} placeholder="Tent bookings open with the market — October 15!" />
+            <div style={{ marginTop: 10 }}>
+              <button className="btn small" onClick={() => tentAct({ action: "pause", paused: tentPaused, message: tentPauseMsg })}>SAVE</button>
+            </div>
+          </div>
+
           <div className="card" style={{ marginBottom: 16 }}>
             <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>OPEN TENT DATES ⛺</h2>
             <p style={{ fontSize: 12, color: "var(--ash)" }}>$25/day · $12.50 deposit online books the spot · $12.50 collected at the front desk at setup. Open the days you want, vendors book at <b>/tents</b>.</p>
