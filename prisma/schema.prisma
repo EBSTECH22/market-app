@@ -38,12 +38,37 @@ model Item {
 
 model Sale {
   id            String     @id @default(cuid())
+  number        Int        @default(0)
+  cardName      String     @default("")
+  employee      String     @default("")
   subtotalCents Int
   taxCents      Int
   totalCents    Int
   paymentMethod String
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
+}
+
+model Employee {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  pinHash   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model DrawerSession {
+  id             String    @id @default(cuid())
+  employee       String
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  openTotalCents Int
+  openCounts     String    @default("{}")
+  closeCounts    String    @default("{}")
+  cashSalesCents Int       @default(0)
+  countedCents   Int       @default(0)
+  diffCents      Int       @default(0)
+  status         String    @default("OPEN")
 }
 
 model SaleLine {

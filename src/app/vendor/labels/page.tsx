@@ -13,6 +13,7 @@ export default function LabelsPage() {
   const [business, setBusiness] = useState("");
   const [ready, setReady] = useState(false);
   const [copies, setCopies] = useState<Record<string, number>>({});
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetch("/api/vendor/me").then(async (r) => {
@@ -23,6 +24,7 @@ export default function LabelsPage() {
       const c: Record<string, number> = {};
       for (const it of data.items) c[it.id] = Math.max(1, it.quantity || 1);
       setCopies(c);
+      setSelected({}); // nothing pre-selected — vendor picks what to print
     });
     const s = document.createElement("script");
     s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js";
@@ -40,9 +42,15 @@ export default function LabelsPage() {
 
   const sheet: { item: Item; n: number }[] = [];
   for (const it of items) {
-    const n = copies[it.id] || 1;
+    if (!selected[it.id]) continue;
+    const n = copies[it.id] || 0;
     for (let i = 0; i < n; i++) sheet.push({ item: it, n: i });
   }
+  const setAll = (on: boolean) => {
+    const next: Record<string, boolean> = {};
+    for (const it of items) next[it.id] = on;
+    setSelected(next);
+  };
 
   return (
     <main style={{ maxWidth: 820, margin: "0 auto", padding: "22px 16px 60px" }}>
@@ -66,13 +74,21 @@ export default function LabelsPage() {
         <a className="btn small ghost" href="/vendor">← DASHBOARD</a>{" "}
         <button className="btn small" onClick={() => window.print()}>🖨 PRINT LABELS</button>
         <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 10 }}>
-          One label per item you&rsquo;re putting out (copies default to your floor quantity — adjust below).
-          Prints 3-across; plain paper + tape works, or 30-up sticker sheets.
+          Tick the items you want labels for and set how many of each (copies start at your floor quantity).
+          Only what&rsquo;s checked prints. 3-across; plain paper + tape works, or 30-up sticker sheets.
         </p>
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <button className="btn small ghost" onClick={() => setAll(true)}>SELECT ALL</button>
+          <button className="btn small ghost" onClick={() => setAll(false)}>SELECT NONE</button>
+        </div>
         <div className="card" style={{ marginTop: 10 }}>
           {items.map((it) => (
             <div key={it.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px dashed var(--ink)", gap: 10 }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{it.name} <span style={{ color: "var(--ash)", fontSize: 12 }}>({it.sku})</span></span>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!selected[it.id]} style={{ width: "auto" }}
+                  onChange={(e) => setSelected((sel) => ({ ...sel, [it.id]: e.target.checked }))} />
+                {it.name} <span style={{ color: "var(--ash)", fontSize: 12 }}>({it.sku})</span>
+              </label>
               <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
                 copies:
                 <input
@@ -85,6 +101,7 @@ export default function LabelsPage() {
           ))}
           {items.length === 0 && <p style={{ color: "var(--ash)", fontSize: 14 }}>No items yet — add some on your dashboard first.</p>}
         </div>
+        {sheet.length === 0 && <p style={{ fontSize: 13, fontWeight: 600, marginTop: 10 }}>Nothing selected yet — tick items above, then print.</p>}
       </div>
 
       <div className="label-sheet">

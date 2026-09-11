@@ -7,10 +7,13 @@ import { sendSaleEmail } from "@/lib/email";
 export async function POST(req: NextRequest) {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { lines, paymentMethod } = (await req.json()) as {
+  const { lines, paymentMethod, cardName } = (await req.json()) as {
     lines: { itemId: string; quantity: number }[];
     paymentMethod: string;
+    cardName?: string;
   };
+  const drawer = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
+  if (!drawer) return NextResponse.json({ error: "Open the drawer (employee sign-in) before ringing sales." }, { status: 400 });
   if (!Array.isArray(lines) || !lines.length) return NextResponse.json({ error: "Nothing on the ticket." }, { status: 400 });
   if (!["CASH", "CARD"].includes(paymentMethod)) return NextResponse.json({ error: "Pick a payment method." }, { status: 400 });
 
@@ -48,8 +51,16 @@ export async function POST(req: NextRequest) {
   const totalCents = subtotal + taxCents;
 
   const sale = await db.$transaction(async (tx) => {
+    const last = await tx.sale.aggregate({ _max: { number: true } });
+    const number = Math.max(1000, (last._max.number || 999) + 1);
     const created = await tx.sale.create({
-      data: { subtotalCents: subtotal, taxCents, totalCents, paymentMethod, lines: { create: saleLines } },
+      data: {
+        number,
+        cardName: paymentMethod === "CARD" ? (cardName || "").trim().slice(0, 60) : "",
+        employee: drawer.employee,
+        subtotalCents: subtotal, taxCents, totalCents, paymentMethod,
+        lines: { create: saleLines },
+      },
     });
     for (const sl of saleLines) {
       await tx.item.update({
@@ -86,5 +97,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ sale: { id: sale.id, subtotalCents: subtotal, taxCents, totalCents, taxRate } });
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, totalCents, taxRate } });
 }

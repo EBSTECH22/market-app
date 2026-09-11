@@ -23,13 +23,26 @@ export async function POST(req: NextRequest) {
   }
   if (Number.isNaN(rent) || rent < 0) return NextResponse.json({ error: "Enter a valid rent (0 is allowed)." }, { status: 400 });
 
+  const start = centralInputToDate(`${startDate}T00:00`);
+  const [y, m, d] = startDate.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const firstMonthCents = Math.round((rent * (daysInMonth - d + 1)) / daysInMonth);
+
   const contract = await db.contract.create({
     data: {
       vendorId,
       boothLabel: boothLabel.trim(),
       monthlyRentCents: rent,
-      startDate: centralInputToDate(`${startDate}T00:00`),
+      startDate: start,
     },
   });
-  return NextResponse.json({ contract });
+  if (firstMonthCents > 0) {
+    await db.ledgerEntry.create({
+      data: {
+        vendorId, type: "RENT", amountCents: -firstMonthCents,
+        note: `First month rent (prorated), booth ${contract.boothLabel}`,
+      },
+    });
+  }
+  return NextResponse.json({ contract, firstMonthCents });
 }
