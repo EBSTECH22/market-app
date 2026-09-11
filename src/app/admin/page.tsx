@@ -45,6 +45,8 @@ export default function AdminPage() {
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [teamMsg, setTeamMsg] = useState("");
+  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; heardFrom: string; notes: string; createdAt: string }[]>([]);
+  const [appOpen, setAppOpen] = useState<string | null>(null);
   const [complaints, setComplaints] = useState<{ id: string; status: string; customerName: string; email: string; phone: string; vendor: { code: string; businessName: string } | null; messages: { sender: string; body: string }[] }[]>([]);
   const [punchName, setPunchName] = useState("");
   const [punchPin, setPunchPin] = useState("");
@@ -53,7 +55,7 @@ export default function AdminPage() {
   const [refundQty, setRefundQty] = useState<Record<string, number>>({});
   const [refundRestock, setRefundRestock] = useState(true);
   const [refundMsg, setRefundMsg] = useState("");
-  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "team" | "settings">("register");
+  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "team" | "links" | "settings">("register");
   const [busy, setBusy] = useState(false);
 
   // register / drawer
@@ -196,6 +198,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (authed && role === "admin" && tab === "vendors") {
       fetch("/api/admin/complaints").then(async (r) => { if (r.ok) setComplaints((await r.json()).complaints || []); });
+      fetch("/api/admin/applications").then(async (r) => { if (r.ok) setApplications((await r.json()).applications || []); });
     }
   }, [authed, role, tab]);
   useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ); }, [authed, tab, ticketQ, loadTickets]);
@@ -292,6 +295,25 @@ export default function AdminPage() {
     if (!confirm("Delete this document?")) return;
     await safeFetch(`/api/admin/team/docs/${id}`, { method: "DELETE" });
     await loadTeam();
+  };
+
+  const decideApplication = async (id: string, action: "accept" | "decline") => {
+    let reason = "";
+    if (action === "decline") {
+      const r = prompt("Optional note for the decline email (leave blank for the standard message):", "");
+      if (r === null) return;
+      reason = r;
+    } else if (!confirm("Accept this application? They'll get the 'welcome — someone will be calling you' email.")) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/applications/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, reason }),
+      });
+      if (!ok) { alert(String(data.error || "Failed.")); return; }
+      const r2 = await fetch("/api/admin/applications");
+      if (r2.ok) setApplications((await r2.json()).applications || []);
+    } finally { setBusy(false); }
   };
 
   const punch = async () => {
@@ -689,7 +711,7 @@ export default function AdminPage() {
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
         {(role === "admin"
-          ? (["register", "time", "reports", "bank", "floor", "vendors", "contracts", "team", "settings"] as const)
+          ? (["register", "time", "reports", "bank", "floor", "vendors", "contracts", "team", "links", "settings"] as const)
           : (["register", "time", "floor"] as const)
         ).map((t) => (
           <button key={t} className={`btn small ${tab === t ? "" : "ghost"}`} onClick={() => { setTab(t); setReceipt(null); }}>
@@ -1312,6 +1334,47 @@ export default function AdminPage() {
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>
+              Send hopefuls to <b>market.dailybreadbaked.com/apply</b>. Accepting emails them &ldquo;someone will be calling with next steps&rdquo; — then you call and add them under ADD A VENDOR below.
+            </p>
+            <ul style={{ margin: "8px 0" }}>
+              {applications.map((a) => (
+                <li key={a.id} style={{ padding: "9px 0", borderBottom: "1px dashed var(--ink)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ cursor: "pointer" }} onClick={() => setAppOpen(appOpen === a.id ? null : a.id)}>
+                      <b style={{ fontSize: 14 }}>{a.businessName}</b>
+                      <span style={{ fontSize: 12, color: "var(--ash)" }}> · {a.contactName} · {a.category || "uncategorized"}</span>
+                      <b style={{ fontSize: 12 }}> · {a.status}</b>
+                    </div>
+                    {a.status === "PENDING" && (
+                      <span style={{ display: "flex", gap: 5 }}>
+                        <button className="btn small" disabled={busy} onClick={() => decideApplication(a.id, "accept")}>✅ ACCEPT</button>
+                        <button className="btn small ghost" disabled={busy} onClick={() => decideApplication(a.id, "decline")}>❌ DECLINE</button>
+                      </span>
+                    )}
+                  </div>
+                  {appOpen === a.id && (
+                    <div style={{ fontSize: 12.5, marginTop: 6, paddingLeft: 8, borderLeft: "2px solid var(--ink)", lineHeight: 1.7 }}>
+                      <b>Contact:</b> {a.email} · {a.phone}<br />
+                      <b>Products:</b> {a.products}<br />
+                      <b>Who makes it:</b> {a.madeByYou}<br />
+                      {a.links && <><b>Links:</b> {a.links}<br /></>}
+                      {a.licenses && <><b>Licensing:</b> {a.licenses}<br /></>}
+                      {a.insurance && <><b>Insurance:</b> {a.insurance}<br /></>}
+                      {a.availability && <><b>Restocking:</b> {a.availability}<br /></>}
+                      {a.heardFrom && <><b>Heard via:</b> {a.heardFrom}<br /></>}
+                      {a.notes && <><b>Notes:</b> {a.notes}<br /></>}
+                      <span style={{ color: "var(--ash)" }}>Applied {new Date(a.createdAt).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                </li>
+              ))}
+              {applications.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>No applications yet — share the link.</li>}
+            </ul>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
             <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>COMPLAINTS — MARKET OVERSIGHT ⚠️</h2>
             <p style={{ fontSize: 12, color: "var(--ash)" }}>Every complaint filed against any vendor, newest first. Vendors handle replies; this is your accountability view.</p>
             <ul style={{ margin: "8px 0" }}>
@@ -1420,6 +1483,46 @@ export default function AdminPage() {
             {cMsg && <p className={cMsg.includes("created") ? "ok" : "err"}>{cMsg}</p>}
           </div>
         </>
+      )}
+
+      {tab === "links" && role === "admin" && (
+        <div className="card">
+          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>SITE DIRECTORY — EVERY PAGE</h2>
+
+          <h3 className="display" style={{ fontSize: 14, margin: "10px 0 4px" }}>PUBLIC — SHARE THESE</h3>
+          <table className="grid"><tbody>
+            <tr><td><a href="/market" target="_blank" rel="noopener">/market</a></td><td>Shopper directory — every vendor + what&rsquo;s on the floor right now. Put this on your website and socials.</td></tr>
+            <tr><td><a href="/apply" target="_blank" rel="noopener">/apply</a></td><td>Vendor application.</td></tr>
+            <tr><td>/v/CODE</td><td>Each vendor&rsquo;s public page (reviews + messaging) — their table QR points here.{vendors.length > 0 ? " Yours:" : ""}</td></tr>
+            {vendors.filter((v) => v.active).map((v) => (
+              <tr key={v.id}><td><a href={`/v/${v.code}`} target="_blank" rel="noopener">/v/{v.code}</a></td><td>{v.businessName}</td></tr>
+            ))}
+          </tbody></table>
+
+          <h3 className="display" style={{ fontSize: 14, margin: "14px 0 4px" }}>VENDORS</h3>
+          <table className="grid"><tbody>
+            <tr><td><a href="/" target="_blank" rel="noopener">/</a></td><td>Vendor login — the address you give every vendor.</td></tr>
+            <tr><td>/vendor</td><td>Their dashboard (items, balance, inbox, alerts) — where login lands.</td></tr>
+            <tr><td>/vendor/labels</td><td>Their barcode label picker.</td></tr>
+            <tr><td>/vendor/qr</td><td>Their printable table QR card.</td></tr>
+          </tbody></table>
+
+          <h3 className="display" style={{ fontSize: 14, margin: "14px 0 4px" }}>YOURS</h3>
+          <table className="grid"><tbody>
+            <tr><td><a href="/admin" target="_blank" rel="noopener">/admin</a></td><td>This whole system. Employees log in here too (EMPLOYEE button).</td></tr>
+            <tr><td>/admin/contracts/…/print</td><td>Printable booth contract — reached from the 🖨 on any contract.</td></tr>
+          </tbody></table>
+
+          <h3 className="display" style={{ fontSize: 14, margin: "14px 0 4px" }}>AUTOMATIC — EMAILED, NEVER TYPED</h3>
+          <table className="grid"><tbody>
+            <tr><td>/t/…</td><td>A customer&rsquo;s private message thread (secret link in their email).</td></tr>
+            <tr><td>/pay/…</td><td>A customer&rsquo;s pre-order payment page (secret link in their email).</td></tr>
+          </tbody></table>
+
+          <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 10 }}>
+            The only three addresses worth memorizing: the bare domain for vendor login, <b>/market</b> for shoppers, <b>/apply</b> for hopefuls. Everything else is a button or an email.
+          </p>
+        </div>
       )}
 
       {tab === "settings" && (
