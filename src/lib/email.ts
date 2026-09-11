@@ -140,3 +140,38 @@ export async function sendVendorInboxEmail(
     <a href="${baseUrl()}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">OPEN YOUR INBOX</a>`;
   await send(vendor.email, `New ${label} from ${customerName}`, shell(inner));
 }
+
+export async function sendPreorderAcceptedEmail(
+  to: string, customerName: string, vendorName: string,
+  description: string, totalCents: number, expectedDate: string, payToken: string, threadToken: string
+) {
+  const payUrl = `${baseUrl()}/pay/${payToken}`;
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">PRE-ORDER ACCEPTED ✅</h2>
+    <p style="font-size:14px;color:#555;">Hi ${customerName} &mdash; ${vendorName} accepted your pre-order.</p>
+    <div style="display:inline-block;text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin:10px 0;">
+      <div style="font-size:14px;">${description}</div>
+      <div style="font-size:14px;margin-top:6px;"><b>Total (tax included): $${(totalCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:13px;">Ready/expected: <b>${expectedDate}</b></div>
+    </div>
+    <br>
+    <a href="${payUrl}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">PAY NOW &mdash; SECURE ONLINE</a>
+    <p style="font-size:12px;color:#999;margin-top:12px;">Card payment is handled by Stripe. Conversation: <a href="${baseUrl()}/t/${threadToken}">reply here</a>.</p>`;
+  await send(to, `Pre-order accepted by ${vendorName} — pay online`, shell(inner));
+}
+
+export async function sendPreorderPaidEmail(
+  to: string, customerName: string, vendorName: string,
+  description: string, totalCents: number, expectedDate: string, threadToken: string
+) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">PAYMENT RECEIVED ✅</h2>
+    <p style="font-size:14px;color:#555;">Thanks ${customerName} &mdash; your pre-order with ${vendorName} is paid and confirmed.</p>
+    <div style="display:inline-block;text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin:10px 0;">
+      <div style="font-size:14px;">${description}</div>
+      <div style="font-size:14px;margin-top:6px;"><b>Paid: $${(totalCents / 100).toFixed(2)}</b> (tax included)</div>
+      <div style="font-size:13px;">Ready/expected: <b>${expectedDate}</b></div>
+    </div>
+    <p style="font-size:12px;color:#999;">Questions? <a href="${baseUrl()}/t/${threadToken}">Message ${vendorName} here</a>. Pick up at Community Harvest, Noble OK.</p>`;
+  await send(to, `Paid ✓ — your pre-order with ${vendorName}`, shell(inner));
+}

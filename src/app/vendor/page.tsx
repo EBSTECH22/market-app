@@ -9,6 +9,8 @@ type Me = {
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 
+const money = (c: number) => `$${(c / 100).toFixed(2)}`;
+
 export default function VendorDashboard() {
   const [me, setMe] = useState<Me | null>(null);
   const [name, setName] = useState("");
@@ -31,6 +33,11 @@ export default function VendorDashboard() {
   const [pubReq, setPubReq] = useState(false);
   const [pubBlurb, setPubBlurb] = useState("");
   const [pubMsg, setPubMsg] = useState("");
+  const [po, setPo] = useState<{ status: string; description: string; subtotalCents: number; taxCents: number; totalCents: number; expectedDate: string; payUrl: string } | null>(null);
+  const [poDesc, setPoDesc] = useState("");
+  const [poAmt, setPoAmt] = useState("");
+  const [poDate, setPoDate] = useState("");
+  const [poMsg, setPoMsg] = useState("");
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -53,9 +60,45 @@ export default function VendorDashboard() {
   useEffect(() => { loadInbox(); }, [loadInbox]);
 
   const openInboxThread = async (id: string) => {
-    setInboxMsg(""); setReplyBody("");
+    setInboxMsg(""); setReplyBody(""); setPo(null); setPoMsg("");
     const r = await fetch(`/api/vendor/inbox/${id}`);
-    if (r.ok) setOpenThread((await r.json()).thread);
+    if (r.ok) {
+      const t = (await r.json()).thread;
+      setOpenThread(t);
+      if (t.type === "PREORDER") {
+        const pr = await fetch(`/api/vendor/inbox/${id}/preorder`);
+        if (pr.ok) setPo((await pr.json()).preorder);
+      }
+    }
+  };
+
+  const acceptPreorder = async () => {
+    if (!openThread) return;
+    setPoMsg("");
+    const r = await fetch(`/api/vendor/inbox/${openThread.id}/preorder`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "accept", description: poDesc, subtotalDollars: poAmt, expectedDate: poDate }),
+    });
+    const d = await r.json();
+    if (!r.ok) { setPoMsg(d.error || "Couldn't accept."); return; }
+    setPoMsg("Accepted — payment link emailed to the customer. ✓");
+    await openInboxThread(openThread.id);
+    await loadInbox();
+  };
+
+  const declinePreorder = async () => {
+    if (!openThread) return;
+    const reason = prompt("Short reason for the customer:");
+    if (reason === null) return;
+    setPoMsg("");
+    const r = await fetch(`/api/vendor/inbox/${openThread.id}/preorder`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "decline", reason }),
+    });
+    const d = await r.json();
+    if (!r.ok) { setPoMsg(d.error || "Couldn't decline."); return; }
+    await openInboxThread(openThread.id);
+    await loadInbox();
   };
 
   const sendReply = async () => {
@@ -317,6 +360,33 @@ export default function VendorDashboard() {
                 {m.body}
               </div>
             ))}
+            {openThread.type === "PREORDER" && (
+              <div style={{ border: "2px solid #000", padding: "10px 12px", margin: "10px 0" }}>
+                {po && po.status === "PAID" ? (
+                  <p className="ok" style={{ margin: 0 }}>PAID ✓ — {money(po.totalCents)} collected online. It&rsquo;s in the register tickets and your balance (net of commission). Expected: {po.expectedDate}.</p>
+                ) : po && po.status === "ACCEPTED" ? (
+                  <p style={{ fontSize: 13, margin: 0 }}><b>ACCEPTED — awaiting payment.</b> {money(po.totalCents)} total, expected {po.expectedDate}. The customer has the payment link (accept again to revise terms).</p>
+                ) : po && po.status === "DECLINED" ? (
+                  <p style={{ fontSize: 13, margin: 0 }}><b>DECLINED.</b> Accept below if you change your mind.</p>
+                ) : null}
+                {(!po || po.status !== "PAID") && (
+                  <div style={{ marginTop: po ? 10 : 0 }}>
+                    <b style={{ fontSize: 13 }}>ACCEPT &amp; SEND PAYMENT LINK</b>
+                    <label>What they&rsquo;re getting (shows on the payment page)</label>
+                    <input value={poDesc} onChange={(e) => setPoDesc(e.target.value)} placeholder="2 dozen dinner rolls + 1 apple pie" />
+                    <label>Your price, before tax ($) — tax is added automatically at the market rate</label>
+                    <input type="number" min="0" step="0.01" value={poAmt} onChange={(e) => setPoAmt(e.target.value)} />
+                    <label>Ready / expected date</label>
+                    <input value={poDate} onChange={(e) => setPoDate(e.target.value)} placeholder="Saturday Oct 3, by 10 AM" />
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button className="btn small" onClick={acceptPreorder}>✅ ACCEPT &amp; SEND LINK</button>
+                      <button className="btn small ghost" onClick={declinePreorder}>❌ DECLINE</button>
+                    </div>
+                  </div>
+                )}
+                {poMsg && <p className={poMsg.includes("✓") ? "ok" : "err"}>{poMsg}</p>}
+              </div>
+            )}
             {openThread.status === "OPEN" ? (
               <>
                 <label>Reply (they get it by email with a private link)</label>

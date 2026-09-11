@@ -208,3 +208,20 @@ model ThreadMsg {
   body      String
   createdAt DateTime @default(now())
 }
+
+model PreOrder {
+  id              String    @id @default(cuid())
+  threadId        String    @unique
+  vendorId        String
+  description     String
+  subtotalCents   Int
+  taxCents        Int
+  totalCents      Int
+  expectedDate    String
+  token           String    @unique
+  status          String    @default("ACCEPTED")
+  stripeSessionId String    @default("")
+  saleId          String    @default("")
+  createdAt       DateTime  @default(now())
+  paidAt          DateTime?
+}

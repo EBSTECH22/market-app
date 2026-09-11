@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
+import { reconcileVendorPreorders } from "@/lib/preorder";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const vendorId = currentVendorId();
   if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
+  await reconcileVendorPreorders(vendorId).catch(() => {});
   const threads = await db.thread.findMany({
     where: { vendorId },
     include: { messages: { orderBy: { createdAt: "desc" }, take: 1 } },
