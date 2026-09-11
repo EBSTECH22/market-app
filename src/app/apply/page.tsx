@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const F = (props: { label: string; hint?: string; children: React.ReactNode }) => (
   <div>
@@ -12,11 +12,16 @@ const F = (props: { label: string; hint?: string; children: React.ReactNode }) =
 
 export default function ApplyPage() {
   const [f, setF] = useState<Record<string, string>>({});
+  const [banner, setBanner] = useState<{ enabled: boolean; title: string; dateLine: string; message: string } | null>(null);
   const [hffaAck, setHffaAck] = useState(false);
   const [msg, setMsg] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
+
+  useEffect(() => {
+    fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
+  }, []);
 
   const isFood = !!f.foodStatus && f.foodStatus !== "Not a food vendor";
 
@@ -59,6 +64,14 @@ export default function ApplyPage() {
           Year-round indoor market. 5×5 booths, monthly rent, we run the register — you make, we sell, you get paid.
         </p>
       </div>
+
+      {banner?.enabled && (
+        <div style={{ background: "#000", color: "#fff", textAlign: "center", padding: "18px 14px", marginBottom: 16 }}>
+          <div className="display" style={{ fontSize: 26, letterSpacing: "0.04em" }}>{banner.title}</div>
+          <div className="display" style={{ fontSize: 17, marginTop: 6 }}>{banner.dateLine}</div>
+          {banner.message && <div style={{ fontSize: 13, marginTop: 8 }}>{banner.message}</div>}
+        </div>
+      )}
 
       <div className="card">
         <h2 className="display" style={{ fontSize: 15, marginBottom: 2 }}>THE BASICS</h2>

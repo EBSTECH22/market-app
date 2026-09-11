@@ -14,8 +14,10 @@ export default function MarketDirectory() {
   const [vendors, setVendors] = useState<V[]>([]);
   const [q, setQ] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [banner, setBanner] = useState<{ enabled: boolean; title: string; dateLine: string; message: string } | null>(null);
 
   useEffect(() => {
+    fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
     fetch("/api/public/market").then(async (r) => {
       if (r.ok) setVendors((await r.json()).vendors || []);
       setLoaded(true);
@@ -34,7 +36,17 @@ export default function MarketDirectory() {
         <div className="display" style={{ fontSize: 26 }}>COMMUNITY HARVEST</div>
         <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET · NOBLE, OK</div>
         <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>Live list — what our vendors have on the floor right now.</p>
+        <a href="/apply" style={{ fontSize: 12, fontWeight: 700, color: "#000" }}>Want a booth? Apply to become a vendor →</a>
       </div>
+
+      {banner?.enabled && (
+        <div style={{ background: "#000", color: "#fff", textAlign: "center", padding: "18px 14px", marginBottom: 16 }}>
+          <div className="display" style={{ fontSize: 26, letterSpacing: "0.04em" }}>{banner.title}</div>
+          <div className="display" style={{ fontSize: 17, marginTop: 6 }}>{banner.dateLine}</div>
+          {banner.message && <div style={{ fontSize: 13, marginTop: 8 }}>{banner.message}</div>}
+          <a href="/apply" style={{ color: "#fff", fontSize: 13, fontWeight: 700, display: "inline-block", marginTop: 8 }}>Become a vendor →</a>
+        </div>
+      )}
 
       <input placeholder="Search vendors or products… (honey, bread, candles)" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 14 }} />
 

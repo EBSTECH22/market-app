@@ -112,6 +112,11 @@ export default function AdminPage() {
 
   // settings
   const [settingsMsg, setSettingsMsg] = useState("");
+  const [banEnabled, setBanEnabled] = useState(false);
+  const [banTitle, setBanTitle] = useState("");
+  const [banDate, setBanDate] = useState("");
+  const [banMessage, setBanMessage] = useState("");
+  const [banMsg, setBanMsg] = useState("");
   const [newEmpName, setNewEmpName] = useState("");
   const [newEmpPin, setNewEmpPin] = useState("");
   const [empMsg, setEmpMsg] = useState("");
@@ -598,6 +603,24 @@ export default function AdminPage() {
   };
 
   // ---------- settings ----------
+  const loadBanner = useCallback(async () => {
+    const r = await fetch("/api/public/banner");
+    if (r.ok) {
+      const b = (await r.json()).banner;
+      setBanEnabled(!!b.enabled); setBanTitle(b.title || ""); setBanDate(b.dateLine || ""); setBanMessage(b.message || "");
+    }
+  }, []);
+  useEffect(() => { if (authed && role === "admin" && tab === "settings") loadBanner(); }, [authed, role, tab, loadBanner]);
+
+  const saveBanner = async () => {
+    setBanMsg("");
+    const { ok, data } = await safeFetch("/api/admin/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ banner: { enabled: banEnabled, title: banTitle, dateLine: banDate, message: banMessage } }),
+    });
+    setBanMsg(ok ? "Saved — live on /apply and /market. ✓" : String(data.error || "Failed."));
+  };
+
   const saveTax = async () => {
     setSettingsMsg("");
     const res = await fetch("/api/admin/settings", {
@@ -1536,6 +1559,23 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
               Verify Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
             </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>PUBLIC BANNER — /APPLY &amp; /MARKET</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>The black announcement box on the public pages. Edit it, or untick to remove it — no code needed.</p>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 8 }}>
+              <input type="checkbox" checked={banEnabled} onChange={(e) => setBanEnabled(e.target.checked)} style={{ width: "auto" }} />
+              Show the banner
+            </label>
+            <label>Big line</label>
+            <input value={banTitle} onChange={(e) => setBanTitle(e.target.value)} placeholder="COMING SOON" />
+            <label>Second line (date works well here)</label>
+            <input value={banDate} onChange={(e) => setBanDate(e.target.value)} placeholder="EXPECTED GRAND OPENING — OCTOBER 15, 2026 · 8:00 AM" />
+            <label>Small line</label>
+            <input value={banMessage} onChange={(e) => setBanMessage(e.target.value)} placeholder="Apply to get on the vendor list before the doors open." />
+            <div style={{ marginTop: 12 }}><button className="btn small" onClick={saveBanner}>SAVE BANNER</button></div>
+            {banMsg && <p className={banMsg.includes("✓") ? "ok" : "err"}>{banMsg}</p>}
           </div>
 
           <div className="card">
