@@ -55,7 +55,7 @@ export default function AdminPage() {
   const [refundQty, setRefundQty] = useState<Record<string, number>>({});
   const [refundRestock, setRefundRestock] = useState(true);
   const [refundMsg, setRefundMsg] = useState("");
-  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "team" | "links" | "settings">("register");
+  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "tents" | "team" | "links" | "settings">("register");
   const [busy, setBusy] = useState(false);
 
   // register / drawer
@@ -304,6 +304,43 @@ export default function AdminPage() {
     if (!confirm("Delete this document?")) return;
     await safeFetch(`/api/admin/team/docs/${id}`, { method: "DELETE" });
     await loadTeam();
+  };
+
+  type TentD = { id: string; date: string; capacity: number; open: boolean; bookings: { id: string; name: string; businessName: string; email: string; phone: string; status: string }[] };
+  const [tentDates, setTentDates] = useState<TentD[]>([]);
+  const [tentFrom, setTentFrom] = useState("");
+  const [tentTo, setTentTo] = useState("");
+  const [tentCap, setTentCap] = useState("4");
+  const [tentDows, setTentDows] = useState<number[]>([5, 6]); // Fri, Sat default
+  const [tentMsg, setTentMsg] = useState("");
+
+  const loadTents = useCallback(async () => {
+    const r = await fetch("/api/admin/tents");
+    if (r.ok) setTentDates((await r.json()).dates || []);
+  }, []);
+  useEffect(() => { if (authed && role === "admin" && tab === "tents") loadTents(); }, [authed, role, tab, loadTents]);
+
+  const tentAct = async (body: Record<string, unknown>, confirmMsg?: string) => {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    setTentMsg("");
+    const { ok, data } = await safeFetch("/api/admin/tents", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!ok) { setTentMsg(String(data.error || "Failed.")); return; }
+    await loadTents();
+  };
+
+  const openTentRange = async () => {
+    if (!tentFrom || !tentTo) { setTentMsg("Pick a from and to date."); return; }
+    const out: string[] = [];
+    const d = new Date(tentFrom + "T12:00:00"), end = new Date(tentTo + "T12:00:00");
+    while (d <= end && out.length < 62) {
+      if (tentDows.includes(d.getDay())) out.push(d.toISOString().slice(0, 10));
+      d.setDate(d.getDate() + 1);
+    }
+    if (out.length === 0) { setTentMsg("No days matched — check the weekday boxes."); return; }
+    await tentAct({ action: "openDates", dates: out, capacity: Number(tentCap) || 4 });
+    setTentMsg(`Opened ${out.length} date${out.length === 1 ? "" : "s"}. ✓`);
   };
 
   const decideApplication = async (id: string, action: "accept" | "decline") => {
@@ -750,7 +787,7 @@ export default function AdminPage() {
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
         {(role === "admin"
-          ? (["register", "time", "reports", "bank", "floor", "vendors", "contracts", "team", "links", "settings"] as const)
+          ? (["register", "time", "reports", "bank", "floor", "vendors", "contracts", "tents", "team", "links", "settings"] as const)
           : (["register", "time", "floor"] as const)
         ).map((t) => (
           <button key={t} className={`btn small ${tab === t ? "" : "ghost"}`} onClick={() => { setTab(t); setReceipt(null); }}>
@@ -1538,6 +1575,61 @@ export default function AdminPage() {
         </>
       )}
 
+      {tab === "tents" && role === "admin" && (
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>OPEN TENT DATES ⛺</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>$25/day · $12.50 deposit online books the spot · $12.50 collected at the front desk at setup. Open the days you want, vendors book at <b>/tents</b>.</p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ flex: "1 1 130px" }}><label>From</label><input type="date" value={tentFrom} onChange={(e) => setTentFrom(e.target.value)} /></span>
+              <span style={{ flex: "1 1 130px" }}><label>To</label><input type="date" value={tentTo} onChange={(e) => setTentTo(e.target.value)} /></span>
+              <span style={{ flex: "0 0 110px" }}><label>Spots per day</label><input type="number" min="1" max="20" value={tentCap} onChange={(e) => setTentCap(e.target.value)} /></span>
+            </div>
+            <label>Which weekdays in that range</label>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((d, i) => (
+                <button key={d} className={`btn small ${tentDows.includes(i) ? "" : "ghost"}`}
+                  onClick={() => setTentDows((x) => x.includes(i) ? x.filter((n) => n !== i) : [...x, i])}>{d}</button>
+              ))}
+            </div>
+            <div style={{ marginTop: 10 }}><button className="btn small" onClick={openTentRange}>OPEN THESE DATES</button></div>
+            {tentMsg && <p className={tentMsg.includes("✓") ? "ok" : "err"}>{tentMsg}</p>}
+          </div>
+
+          {tentDates.map((d) => {
+            const taken = d.bookings.filter((b) => ["PAID_DEPOSIT", "CHECKED_IN"].includes(b.status)).length;
+            return (
+              <div className="card" key={d.id} style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 15 }}>{new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</b>
+                  <span style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700 }}>{taken}/{d.capacity} booked · {d.open ? "OPEN" : "CLOSED"}</span>
+                    <button className="btn small ghost" onClick={() => tentAct({ action: "toggle", dateId: d.id, open: !d.open })}>{d.open ? "CLOSE" : "RE-OPEN"}</button>
+                    <button className="btn small ghost" onClick={() => tentAct({ action: "weatherDay", dateId: d.id }, "Call a WEATHER DAY? Every paid booking on this date becomes a future-date credit and gets emailed. This also closes the date.")}>⛈ WEATHER DAY</button>
+                  </span>
+                </div>
+                {d.bookings.filter((b) => !["CANCELED", "CREDIT_USED"].includes(b.status)).map((b) => (
+                  <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", padding: "7px 0", borderTop: "1px dashed var(--ink)", fontSize: 13 }}>
+                    <span>
+                      <b>{b.businessName || b.name}</b> · {b.name} · {b.phone}
+                      <span style={{ fontWeight: 700 }}> · {b.status === "PAID_DEPOSIT" ? "DEPOSIT PAID — $12.50 DUE AT DESK" : b.status === "CHECKED_IN" ? "CHECKED IN ✓" : b.status === "WEATHER_CREDIT" ? "WEATHER CREDIT ISSUED" : b.status}</span>
+                    </span>
+                    <span style={{ display: "flex", gap: 5 }}>
+                      {b.status === "PAID_DEPOSIT" && <button className="btn small" onClick={() => tentAct({ action: "checkin", bookingId: b.id })}>✓ CHECK IN ($12.50)</button>}
+                      {["PAID_DEPOSIT", "RESERVED"].includes(b.status) && <button className="btn small ghost" onClick={() => tentAct({ action: "cancelBooking", bookingId: b.id }, "Cancel this booking? (No automatic refund — handle any refund in Stripe if owed.)")}>CANCEL</button>}
+                    </span>
+                  </div>
+                ))}
+                {d.bookings.filter((b) => !["CANCELED", "CREDIT_USED"].includes(b.status)).length === 0 && (
+                  <p style={{ fontSize: 12.5, color: "var(--ash)", margin: "6px 0 0" }}>No bookings yet.</p>
+                )}
+              </div>
+            );
+          })}
+          {tentDates.length === 0 && <p style={{ textAlign: "center", color: "var(--ash)" }}>No tent dates opened yet — open a range above.</p>}
+        </div>
+      )}
+
       {tab === "links" && role === "admin" && (
         <div className="card">
           <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>SITE DIRECTORY — EVERY PAGE</h2>
@@ -1546,6 +1638,7 @@ export default function AdminPage() {
           <table className="grid"><tbody>
             <tr><td><a href="/market" target="_blank" rel="noopener">/market</a></td><td>Shopper directory — every vendor + what&rsquo;s on the floor right now. Put this on your website and socials.</td></tr>
             <tr><td><a href="/apply" target="_blank" rel="noopener">/apply</a></td><td>Vendor application.</td></tr>
+            <tr><td><a href="/tents" target="_blank" rel="noopener">/tents</a></td><td>Outdoor tent booking — $12.50 deposit online, $12.50 at the desk.</td></tr>
             <tr><td>/v/CODE</td><td>Each vendor&rsquo;s public page (reviews + messaging) — their table QR points here.{vendors.length > 0 ? " Yours:" : ""}</td></tr>
             {vendors.filter((v) => v.active).map((v) => (
               <tr key={v.id}><td><a href={`/v/${v.code}`} target="_blank" rel="noopener">/v/{v.code}</a></td><td>{v.businessName}</td></tr>

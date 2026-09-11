@@ -246,3 +246,26 @@ model VendorApplication {
   createdAt    DateTime  @default(now())
   decidedAt    DateTime?
 }
+
+model TentDate {
+  id       String        @id @default(cuid())
+  date     String        @unique
+  capacity Int           @default(4)
+  open     Boolean       @default(true)
+  bookings TentBooking[]
+}
+
+model TentBooking {
+  id              String   @id @default(cuid())
+  dateId          String
+  date            TentDate @relation(fields: [dateId], references: [id], onDelete: Cascade)
+  name            String
+  businessName    String   @default("")
+  email           String
+  phone           String
+  status          String   @default("RESERVED")
+  token           String   @unique
+  stripeSessionId String   @default("")
+  creditFromId    String   @default("")
+  createdAt       DateTime @default(now())
+}

@@ -14,7 +14,7 @@ export default function ApplyPage() {
   const [f, setF] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<{ enabled: boolean; title: string; dateLine: string; message: string } | null>(null);
   const [rate, setRate] = useState(6);
-  const [boothMode, setBoothMode] = useState<"standard" | "custom">("standard");
+  const [boothMode, setBoothMode] = useState<"standard" | "custom" | "tent">("standard");
   const [bw, setBw] = useState("5");
   const [bd, setBd] = useState("5");
   const [hffaAck, setHffaAck] = useState(false);
@@ -33,7 +33,9 @@ export default function ApplyPage() {
   const standardRent = Math.round(25 * rate * 100) / 100;
   const boothRequest = boothMode === "standard"
     ? `Standard 5×5 — $${standardRent.toFixed(2)}/mo`
-    : `Custom ${bw || "?"}×${bd || "?"} (${sqft} sqft) — $${customRent.toFixed(2)}/mo`;
+    : boothMode === "custom"
+    ? `Custom ${bw || "?"}×${bd || "?"} (${sqft} sqft) — $${customRent.toFixed(2)}/mo`
+    : "Outdoor tent — daily rate";
 
   const isFood = !!f.foodStatus && f.foodStatus !== "Not a food vendor";
 
@@ -85,6 +87,13 @@ export default function ApplyPage() {
         </div>
       )}
 
+      <div style={{ border: "2px solid #000", textAlign: "center", padding: "12px 14px", marginBottom: 16 }}>
+        <div className="display" style={{ fontSize: 17 }}>15 STANDARD BOOTHS AVAILABLE</div>
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 4 }}>
+          Depending on vendor space needs, final availability may be more or less — applications are reviewed in the order they arrive.
+        </div>
+      </div>
+
       <div className="card" style={{ marginBottom: 16 }}>
         <h2 className="display" style={{ fontSize: 15, marginBottom: 6 }}>WHAT YOUR BOOTH RENT GETS YOU</h2>
         <ul style={{ margin: "0 0 0 18px", fontSize: 13, lineHeight: 1.75, listStyle: "disc" }}>
@@ -101,7 +110,9 @@ export default function ApplyPage() {
         <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>
           We&rsquo;re a homegrown-and-homemade market: you make it or grow it, we sell it.
           Restocking happens in morning (7&ndash;8 AM) and evening (6&ndash;8 PM) windows, coordinated with staff so the sales floor stays pleasant for shoppers &mdash; pre-order handoffs are welcome anytime.
-          Booth rent is priced by the square foot, month to month, with 30 days&rsquo; notice to leave. Everything else gets settled person-to-person on your setup call.
+          Booth rent is priced by the square foot, month to month, with 30 days&rsquo; notice to leave.
+          Prefer outside? We also offer <b>outdoor tent spots at a daily rate</b> &mdash; manned by you, weather permitting.
+          Everything else gets settled person-to-person on your setup call.
         </p>
       </div>
 
@@ -182,7 +193,20 @@ export default function ApplyPage() {
           <button type="button" className={`btn small ${boothMode === "custom" ? "" : "ghost"}`} onClick={() => setBoothMode("custom")}>
             CUSTOM SIZE
           </button>
+          <button type="button" className={`btn small ${boothMode === "tent" ? "" : "ghost"}`} onClick={() => setBoothMode("tent")}>
+            OUTDOOR TENT — DAILY
+          </button>
         </div>
+        {boothMode === "tent" && (
+          <div style={{ fontSize: 12.5, border: "1px solid #000", padding: "10px 12px", lineHeight: 1.65, marginTop: 8 }}>
+            <b>Outdoor tent spots — how they work:</b>
+            <ul style={{ margin: "4px 0 0 18px", listStyle: "disc" }}>
+              <li><b>$25 per day.</b> A $12.50 deposit (half) books your date at <b>market.dailybreadbaked.com/tents</b>; the $12.50 balance is due at the front desk when you set up.</li>
+              <li><b>Bring your own tent and tables</b> — the market doesn&rsquo;t supply them. Your tent must be <b>manned by you</b> the whole time; outdoor sales are yours, hand to hand.</li>
+              <li>Outdoor days are <b>contingent on weather</b>. If we call a weather day, deposits are non-refundable but <b>apply in full to a future date</b>.</li>
+            </ul>
+          </div>
+        )}
         {boothMode === "custom" && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
             <span style={{ flex: "0 0 90px" }}><label style={{ margin: "0 0 4px" }}>Width (ft)</label>

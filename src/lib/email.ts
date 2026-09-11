@@ -199,3 +199,28 @@ export async function sendApplicationDecisionEmail(to: string, contactName: stri
     <p style="font-size:13px;color:#555;">Our vendor mix changes through the year &mdash; you&rsquo;re welcome to apply again down the road.</p>`;
   await send(to, accepted ? "You're in! Next steps — Community Harvest" : "Your Community Harvest application", shell(inner));
 }
+
+export async function sendTentConfirmEmail(to: string, name: string, date: string, token: string, viaCredit: boolean) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">TENT SPOT CONFIRMED ⛺</h2>
+    <p style="font-size:14px;color:#555;">Hi ${name} &mdash; your outdoor tent spot at Community Harvest is booked for:</p>
+    <div style="display:inline-block;background:#fff;border:1px dashed #000;padding:12px 20px;margin:8px 0;">
+      <div style="font-size:17px;font-weight:900;">${date}</div>
+      <div style="font-size:13px;margin-top:4px;">${viaCredit ? "Booked with your weather credit &mdash; deposit already covered." : "Deposit paid: $12.50"}</div>
+      <div style="font-size:13px;"><b>Balance due at the front desk when you set up: $12.50</b> (day rate $25 total)</div>
+    </div>
+    <p style="font-size:12.5px;color:#555;"><b>Bring your own tent and tables</b> &mdash; the market doesn&rsquo;t supply them. Your tent must be manned by you all day &mdash; outdoor sales are yours, hand to hand.
+    Weather looking bad? If we call a weather day, your deposit converts to a credit good for any future date.</p>
+    <p style="font-size:11px;color:#999;">Keep this email &mdash; your booking link: ${baseUrl()}/tents?manage=${token}</p>`;
+  await send(to, `Tent spot confirmed — ${date}`, shell(inner));
+}
+
+export async function sendTentWeatherCreditEmail(to: string, name: string, date: string, token: string) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">WEATHER DAY — YOUR DEPOSIT IS SAFE ⛈</h2>
+    <p style="font-size:14px;color:#555;">Hi ${name} &mdash; we called a weather day for <b>${date}</b>, so outdoor tents are off.
+    Your $12.50 deposit is now a <b>credit good for any future tent date</b> &mdash; pick a new day and it books with no new deposit:</p>
+    <br>
+    <a href="${baseUrl()}/tents?credit=${token}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">PICK A NEW DATE</a>`;
+  await send(to, `Weather day — your tent deposit became a credit`, shell(inner));
+}
