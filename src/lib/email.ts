@@ -71,3 +71,20 @@ export async function sendWelcomeEmail(
     <p style="font-size:12px;color:#999;margin-top:12px;">Please change your password after your first login.</p>`;
   await send(vendor.email, "Your vendor account is ready", shell(inner));
 }
+
+export async function sendPasswordResetEmail(
+  vendor: { email: string; businessName: string },
+  tempPassword: string
+) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">PASSWORD RESET</h2>
+    <p style="font-size:14px;color:#555;">Hi ${vendor.businessName} &mdash; here&rsquo;s your new temporary password for the vendor portal.</p>
+    <div style="display:inline-block;text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin:10px 0;">
+      <div style="font-size:14px;"><b>Login:</b> ${vendor.email}</div>
+      <div style="font-size:14px;"><b>Temporary password:</b> ${tempPassword}</div>
+    </div>
+    <br>
+    <a href="${baseUrl()}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">LOG IN</a>
+    <p style="font-size:12px;color:#999;margin-top:12px;">Please change it after you sign in.</p>`;
+  await send(vendor.email, "Your password was reset", shell(inner));
+}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin, hashPassword } from "@/lib/auth";
+import { sendPasswordResetEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -30,5 +31,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     where: { id: params.id },
     data: { ...data, ...(tempPassword ? { passwordHash: hashPassword(tempPassword) } : {}) },
   });
+  if (tempPassword) {
+    try { await sendPasswordResetEmail(vendor, tempPassword); } catch (err) { console.error("reset email failed", err); }
+  }
   return NextResponse.json({ vendor, tempPassword });
 }
