@@ -14,6 +14,8 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
     select: { name: true, priceCents: true, quantity: true },
     orderBy: { name: "asc" },
   });
+  const photos = await db.vendorPhoto.findMany({ where: { vendorId: vendor.id, kind: "PRODUCT" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  const logo = await db.vendorPhoto.findFirst({ where: { vendorId: vendor.id, kind: "LOGO" }, select: { id: true } });
   const reviews = await db.review.findMany({ where: { vendorId: vendor.id }, orderBy: { createdAt: "desc" }, take: 100 });
   const comments = await db.reviewComment.findMany({
     where: { reviewId: { in: reviews.map((r) => r.id) } },
@@ -22,6 +24,8 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
   const { id, ...pub } = vendor;
   return NextResponse.json({
     vendor: pub,
+    logoId: logo?.id || null,
+    photos: photos.map((x) => x.id),
     items,
     reviews: reviews.map((r) => ({
       ...r,

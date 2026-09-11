@@ -7,6 +7,7 @@ type V = {
   acceptsPreorders: boolean; acceptsRequests: boolean;
   items: { name: string; priceCents: number; quantity: number }[];
   rating: { avg: number; n: number } | null;
+  logoId: string | null;
 };
 const money = (c: number) => `$${(c / 100).toFixed(2)}`;
 
@@ -36,7 +37,7 @@ export default function MarketDirectory() {
         <div className="display" style={{ fontSize: 26 }}>COMMUNITY HARVEST</div>
         <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET · NOBLE, OK</div>
         <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>Live list — what our vendors have on the floor right now.</p>
-        <a href="/apply" style={{ fontSize: 12, fontWeight: 700, color: "#000" }}>Want a booth? Apply to become a vendor →</a>
+
       </div>
 
       {banner?.enabled && (
@@ -48,13 +49,24 @@ export default function MarketDirectory() {
         </div>
       )}
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <a href="/tents" className="btn" style={{ flex: 1, textAlign: "center", textDecoration: "none" }}>⛺ BOOK A TENT</a>
+        <a href="/apply" className="btn ghost" style={{ flex: 1, textAlign: "center", textDecoration: "none" }}>BECOME A VENDOR</a>
+      </div>
+
       <input placeholder="Search vendors or products… (honey, bread, candles)" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 14 }} />
 
       {loaded && shown.length === 0 && <p style={{ textAlign: "center", color: "var(--ash)" }}>Nothing matches.</p>}
       {shown.map((v) => (
-        <div className="card" key={v.code} style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-            <a href={`/v/${v.code}`} className="display" style={{ fontSize: 17, color: "#000", textDecoration: "none" }}>{v.businessName.toUpperCase()}</a>
+        <a href={`/v/${v.code}`} key={v.code} style={{ display: "block", border: "2px solid #000", padding: "12px 14px", marginBottom: 12, background: "#fff", color: "#000", textDecoration: "none", boxShadow: "4px 4px 0 #000", cursor: "pointer" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {v.logoId && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src={`/api/public/photo/${v.logoId}`} alt="" style={{ height: 44, width: "auto", maxWidth: 90, display: "block" }} />
+              )}
+              <span className="display" style={{ fontSize: 17 }}>{v.businessName.toUpperCase()}</span>
+            </span>
             <span style={{ fontSize: 12, fontWeight: 700 }}>
               {v.rating ? `★ ${v.rating.avg} (${v.rating.n})` : ""}
             </span>
@@ -72,12 +84,10 @@ export default function MarketDirectory() {
               {v.items.length > 12 && <span style={{ fontSize: 12, padding: "3px 4px" }}>+{v.items.length - 12} more…</span>}
             </div>
           )}
-          <div style={{ marginTop: 8 }}>
-            <a className="btn small ghost" href={`/v/${v.code}`}>
-              REVIEWS{v.acceptsPreorders ? " · PRE-ORDER" : ""}{v.acceptsRequests ? " · REQUESTS" : ""} →
-            </a>
+          <div style={{ marginTop: 10, fontWeight: 800, fontSize: 13, letterSpacing: "0.04em" }}>
+            VIEW BOOTH — REVIEWS{v.acceptsPreorders ? " · PRE-ORDER" : ""}{v.acceptsRequests ? " · REQUESTS" : ""} →
           </div>
-        </div>
+        </a>
       ))}
     </main>
   );

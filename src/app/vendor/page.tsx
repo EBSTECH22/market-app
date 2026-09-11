@@ -33,6 +33,9 @@ export default function VendorDashboard() {
   const [pubReq, setPubReq] = useState(false);
   const [pubBlurb, setPubBlurb] = useState("");
   const [pubMsg, setPubMsg] = useState("");
+  const [myPhotos, setMyPhotos] = useState<{ id: string; kind: string }[]>([]);
+  const [photoMsg, setPhotoMsg] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [po, setPo] = useState<{ status: string; description: string; subtotalCents: number; taxCents: number; totalCents: number; expectedDate: string; payUrl: string } | null>(null);
   const [poDesc, setPoDesc] = useState("");
   const [poAmt, setPoAmt] = useState("");
@@ -123,6 +126,60 @@ export default function VendorDashboard() {
     });
     await openInboxThread(openThread.id);
     await loadInbox();
+  };
+
+  const loadPhotos = useCallback(async () => {
+    const r = await fetch("/api/vendor/photos");
+    if (r.ok) setMyPhotos((await r.json()).photos || []);
+  }, []);
+  useEffect(() => { loadPhotos(); }, [loadPhotos]);
+
+  const compressImage = (file: File): Promise<{ data: string; mime: string }> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const MAX = 1200;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          const k = MAX / Math.max(width, height);
+          width = Math.round(width * k); height = Math.round(height * k);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { reject(new Error("no canvas")); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        resolve({ data: dataUrl.split(",")[1], mime: "image/jpeg" });
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+      img.src = url;
+    });
+
+  const uploadPhoto = async (file: File | undefined, kind: "PRODUCT" | "LOGO" = "PRODUCT") => {
+    if (!file) return;
+    setPhotoMsg(""); setPhotoBusy(true);
+    try {
+      const { data, mime } = await compressImage(file);
+      const r = await fetch("/api/vendor/photos", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data, mime, kind }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setPhotoMsg(d.error || "Couldn't upload."); return; }
+      setPhotoMsg("Added. ✓");
+      await loadPhotos();
+    } catch {
+      setPhotoMsg("That file didn't read as a photo — try a JPEG or PNG.");
+    } finally { setPhotoBusy(false); }
+  };
+
+  const deletePhoto = async (id: string) => {
+    if (!confirm("Remove this photo from your public page?")) return;
+    await fetch(`/api/vendor/photos/${id}`, { method: "DELETE" });
+    await loadPhotos();
   };
 
   const savePublic = async () => {
@@ -432,6 +489,34 @@ export default function VendorDashboard() {
           <input type="checkbox" checked={pubReq} onChange={(e) => setPubReq(e.target.checked)} style={{ width: "auto" }} />
           Accept REQUESTS
         </label>
+        <label>Your logo (optional — brands your card on the market directory)</label>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "4px 0 8px", flexWrap: "wrap" }}>
+          {myPhotos.filter((ph) => ph.kind === "LOGO").map((ph) => (
+            <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`/api/public/photo/${ph.id}`} alt="Your logo" style={{ height: 64, width: "auto", border: "2px solid #000", display: "block" }} />
+              <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
+            </span>
+          ))}
+          {myPhotos.filter((ph) => ph.kind === "LOGO").length === 0 && <span style={{ fontSize: 12, color: "var(--ash)" }}>No logo — your card shows your name in market style (which looks sharp too).</span>}
+        </div>
+        <input type="file" accept="image/*" disabled={photoBusy} onChange={(e) => { uploadPhoto(e.target.files?.[0], "LOGO"); e.target.value = ""; }} />
+        <p style={{ fontSize: 11, color: "var(--ash)", margin: "2px 0 8px" }}>Uploading a new logo replaces the old one.</p>
+
+        <label>Product photos (up to 6 — these showcase on your public page)</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "4px 0 8px" }}>
+          {myPhotos.filter((ph) => ph.kind !== "LOGO").map((ph) => (
+            <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`/api/public/photo/${ph.id}`} alt="" style={{ height: 84, width: "auto", border: "2px solid #000", display: "block" }} />
+              <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
+            </span>
+          ))}
+          {myPhotos.filter((ph) => ph.kind !== "LOGO").length === 0 && <span style={{ fontSize: 12, color: "var(--ash)" }}>No photos yet — phone photos work great.</span>}
+        </div>
+        <input type="file" accept="image/*" disabled={photoBusy} onChange={(e) => { uploadPhoto(e.target.files?.[0], "PRODUCT"); e.target.value = ""; }} />
+        {photoMsg && <p className={photoMsg.includes("✓") ? "ok" : "err"} style={{ marginTop: 4 }}>{photoMsg}</p>}
+
         <label>Short blurb for your public page (what you make, in a sentence)</label>
         <input value={pubBlurb} onChange={(e) => setPubBlurb(e.target.value)} maxLength={300} />
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>

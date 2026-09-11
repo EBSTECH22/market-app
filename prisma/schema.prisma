@@ -269,3 +269,12 @@ model TentBooking {
   creditFromId    String   @default("")
   createdAt       DateTime @default(now())
 }
+
+model VendorPhoto {
+  id        String   @id @default(cuid())
+  vendorId  String
+  kind      String   @default("PRODUCT")
+  mime      String
+  data      String
+  createdAt DateTime @default(now())
+}

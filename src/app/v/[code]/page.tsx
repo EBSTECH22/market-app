@@ -15,6 +15,8 @@ const markLiked = (id: string) => { try { window.localStorage.setItem(`ch_like_$
 export default function VendorPublicPage({ params }: { params: { code: string } }) {
   const [vendor, setVendor] = useState<Vendor | null>(null);
   const [items, setItems] = useState<Item[]>([]);
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [logoId, setLogoId] = useState<string | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [missing, setMissing] = useState(false);
 
@@ -40,7 +42,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
     const res = await fetch(`/api/public/vendor/${params.code}`);
     if (!res.ok) { setMissing(true); return; }
     const data = await res.json();
-    setVendor(data.vendor); setItems(data.items); setReviews(data.reviews);
+    setVendor(data.vendor); setItems(data.items); setReviews(data.reviews); setPhotos(data.photos || []); setLogoId(data.logoId || null);
   }, [params.code]);
 
   useEffect(() => { load(); }, [load]);
@@ -92,11 +94,26 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
     <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px 70px" }}>
       <div style={{ textAlign: "center", marginBottom: 6 }}>
         <img src="/logo-receipt.png" alt="Community Harvest" style={{ width: 110, margin: "0 auto 4px", display: "block" }} />
+        {logoId && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img src={`/api/public/photo/${logoId}`} alt="" style={{ height: 70, width: "auto", maxWidth: 200, margin: "0 auto 4px", display: "block" }} />
+        )}
         <div className="display" style={{ fontSize: 24 }}>{vendor.businessName.toUpperCase()}</div>
         {avg !== null && <div style={{ fontSize: 13, fontWeight: 700 }}>{stars(Math.round(avg))} {avg} · {reviews.length} review{reviews.length === 1 ? "" : "s"}</div>}
         {vendor.publicBlurb && <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>{vendor.publicBlurb}</p>}
         <div style={{ fontSize: 11, color: "var(--ash)", marginTop: 4 }}>at Community Harvest — Food and Craft Market, Noble OK · <a href="/market">all vendors</a></div>
       </div>
+
+      {photos.length > 0 && (
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", marginBottom: 16, paddingBottom: 4 }}>
+          {photos.map((id) => (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <a key={id} href={`/api/public/photo/${id}`} target="_blank" rel="noopener" style={{ flex: "0 0 auto" }}>
+              <img src={`/api/public/photo/${id}`} alt="Product photo" style={{ height: 150, width: "auto", border: "2px solid #000", display: "block" }} />
+            </a>
+          ))}
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: 16 }}>
         <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>AT THE MARKET RIGHT NOW</h2>
