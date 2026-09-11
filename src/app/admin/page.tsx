@@ -92,12 +92,23 @@ export default function AdminPage() {
   const [empMsg, setEmpMsg] = useState("");
 
   const loadDrawer = useCallback(async () => {
-    const res = await fetch("/api/admin/drawer");
-    if (res.status === 401) { setAuthed(false); return; }
-    setAuthed(true);
-    const data = await res.json();
-    setDrawer(data.session);
-    setDrawerLoaded(true);
+    try {
+      const res = await fetch("/api/admin/drawer");
+      if (res.status === 401) { setAuthed(false); return; }
+      setAuthed(true);
+      let data: { session?: Drawer; error?: string } = {};
+      try { data = await res.json(); } catch { data = { error: "Server error." }; }
+      if (!res.ok) {
+        setDrawerErr(`Register can't reach the drawer system (${data.error || res.status}). If you just deployed, make sure the SQL for Employee + DrawerSession ran in Supabase.`);
+      } else {
+        setDrawerErr("");
+        setDrawer(data.session ?? null);
+      }
+    } catch {
+      setDrawerErr("Network problem loading the register — refresh to retry.");
+    } finally {
+      setDrawerLoaded(true);
+    }
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -464,6 +475,9 @@ export default function AdminPage() {
         ))}
       </div>
 
+      {tab === "register" && !drawer && drawerErr && (
+        <div className="card" style={{ marginBottom: 14 }}><p className="err" style={{ marginTop: 0 }}>{drawerErr}</p></div>
+      )}
       {tab === "register" && closeReport && (
         <div className="card">
           <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>DRAWER CLOSED — COUNT REPORT</h2>
