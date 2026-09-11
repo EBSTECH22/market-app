@@ -13,6 +13,10 @@ const F = (props: { label: string; hint?: string; children: React.ReactNode }) =
 export default function ApplyPage() {
   const [f, setF] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<{ enabled: boolean; title: string; dateLine: string; message: string } | null>(null);
+  const [rate, setRate] = useState(6);
+  const [boothMode, setBoothMode] = useState<"standard" | "custom">("standard");
+  const [bw, setBw] = useState("5");
+  const [bd, setBd] = useState("5");
   const [hffaAck, setHffaAck] = useState(false);
   const [msg, setMsg] = useState("");
   const [sent, setSent] = useState(false);
@@ -21,7 +25,15 @@ export default function ApplyPage() {
 
   useEffect(() => {
     fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
+    fetch("/api/public/rates").then(async (r) => { if (r.ok) setRate((await r.json()).rentPerSqft || 6); }).catch(() => {});
   }, []);
+
+  const sqft = Math.max(0, (Number(bw) || 0) * (Number(bd) || 0));
+  const customRent = Math.round(sqft * rate * 100) / 100;
+  const standardRent = Math.round(25 * rate * 100) / 100;
+  const boothRequest = boothMode === "standard"
+    ? `Standard 5×5 — $${standardRent.toFixed(2)}/mo`
+    : `Custom ${bw || "?"}×${bd || "?"} (${sqft} sqft) — $${customRent.toFixed(2)}/mo`;
 
   const isFood = !!f.foodStatus && f.foodStatus !== "Not a food vendor";
 
@@ -34,7 +46,7 @@ export default function ApplyPage() {
       : "";
     const res = await fetch("/api/public/apply", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...f, licenses, website: "" }),
+      body: JSON.stringify({ ...f, licenses, boothRequest, website: "" }),
     });
     const data = await res.json();
     setBusy(false);
@@ -61,7 +73,7 @@ export default function ApplyPage() {
         <div className="display" style={{ fontSize: 24 }}>BECOME A VENDOR</div>
         <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>COMMUNITY HARVEST · FOOD AND CRAFT MARKET · NOBLE, OK</div>
         <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>
-          Year-round indoor market. 5×5 booths, monthly rent, we run the register — you make, we sell, you get paid.
+          Year-round indoor market. Booths sized to fit you — priced by the square foot (standard 5×5 runs $150/mo). We run the register — you make, we sell, you get paid.
         </p>
       </div>
 
@@ -140,6 +152,29 @@ export default function ApplyPage() {
             <option>Not sure what I need</option>
           </select>
         </F>
+
+        <h2 className="display" style={{ fontSize: 15, margin: "16px 0 2px" }}>BOOTH SIZE</h2>
+        <div style={{ fontSize: 12, color: "var(--ash)", margin: "2px 0 6px" }}>Booths price by the square foot (${rate}/sqft per month). Pick the standard or tell us what you need — final size and spot get settled on the call.</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button type="button" className={`btn small ${boothMode === "standard" ? "" : "ghost"}`} onClick={() => setBoothMode("standard")}>
+            STANDARD 5×5 — ${standardRent.toFixed(0)}/MO
+          </button>
+          <button type="button" className={`btn small ${boothMode === "custom" ? "" : "ghost"}`} onClick={() => setBoothMode("custom")}>
+            CUSTOM SIZE
+          </button>
+        </div>
+        {boothMode === "custom" && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <span style={{ flex: "0 0 90px" }}><label style={{ margin: "0 0 4px" }}>Width (ft)</label>
+              <input type="number" min="1" step="1" value={bw} onChange={(e) => setBw(e.target.value)} /></span>
+            <b style={{ marginTop: 16 }}>×</b>
+            <span style={{ flex: "0 0 90px" }}><label style={{ margin: "0 0 4px" }}>Depth (ft)</label>
+              <input type="number" min="1" step="1" value={bd} onChange={(e) => setBd(e.target.value)} /></span>
+            <span style={{ fontSize: 13, fontWeight: 700, marginTop: 14 }}>
+              = {sqft} sqft → ${customRent.toFixed(2)}/mo
+            </span>
+          </div>
+        )}
 
         <h2 className="display" style={{ fontSize: 15, margin: "16px 0 2px" }}>LOGISTICS</h2>
         <F label="How often can you stock your booth?" hint="Booths are rented monthly; the market sells for you every open day — you restock on your schedule.">

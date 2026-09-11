@@ -225,3 +225,24 @@ model PreOrder {
   createdAt       DateTime  @default(now())
   paidAt          DateTime?
 }
+
+model VendorApplication {
+  id           String    @id @default(cuid())
+  businessName String
+  contactName  String
+  email        String
+  phone        String
+  category     String    @default("")
+  products     String
+  madeByYou    String    @default("")
+  links        String    @default("")
+  licenses     String    @default("")
+  insurance    String    @default("")
+  availability String    @default("")
+  boothRequest String    @default("")
+  heardFrom    String    @default("")
+  notes        String    @default("")
+  status       String    @default("PENDING")
+  createdAt    DateTime  @default(now())
+  decidedAt    DateTime?
+}

@@ -45,7 +45,7 @@ export default function AdminPage() {
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [teamMsg, setTeamMsg] = useState("");
-  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; heardFrom: string; notes: string; createdAt: string }[]>([]);
+  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; notes: string; createdAt: string }[]>([]);
   const [appOpen, setAppOpen] = useState<string | null>(null);
   const [complaints, setComplaints] = useState<{ id: string; status: string; customerName: string; email: string; phone: string; vendor: { code: string; businessName: string } | null; messages: { sender: string; body: string }[] }[]>([]);
   const [punchName, setPunchName] = useState("");
@@ -108,6 +108,10 @@ export default function AdminPage() {
   // contract form
   const [cVendor, setCVendor] = useState(""); const [cBooth, setCBooth] = useState("");
   const [cRent, setCRent] = useState("150"); const [cStart, setCStart] = useState("");
+  const [cW, setCW] = useState("5"); const [cD, setCD] = useState("5");
+  const [cMode, setCMode] = useState<"standard" | "custom">("standard");
+  const [rentPerSqft, setRentPerSqft] = useState(6);
+  const [rateMsg, setRateMsg] = useState("");
   const [cMsg, setCMsg] = useState("");
 
   // settings
@@ -164,7 +168,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) setTaxRate((await s.json()).taxRatePercent);
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -619,6 +623,18 @@ export default function AdminPage() {
       body: JSON.stringify({ banner: { enabled: banEnabled, title: banTitle, dateLine: banDate, message: banMessage } }),
     });
     setBanMsg(ok ? "Saved — live on /apply and /market. ✓" : String(data.error || "Failed."));
+  };
+
+  const sqft = Math.max(0, (Number(cW) || 0) * (Number(cD) || 0));
+  const suggestedRent = Math.round(sqft * rentPerSqft * 100) / 100;
+
+  const saveRate = async () => {
+    setRateMsg("");
+    const { ok, data } = await safeFetch("/api/admin/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rentPerSqft }),
+    });
+    setRateMsg(ok ? "Saved. ✓" : String(data.error || "Failed."));
   };
 
   const saveTax = async () => {
@@ -1386,6 +1402,7 @@ export default function AdminPage() {
                       {a.licenses && <><b>Licensing:</b> {a.licenses}<br /></>}
                       {a.insurance && <><b>Insurance:</b> {a.insurance}<br /></>}
                       {a.availability && <><b>Restocking:</b> {a.availability}<br /></>}
+                      {a.boothRequest && <><b>Booth requested:</b> {a.boothRequest}<br /></>}
                       {a.heardFrom && <><b>Heard via:</b> {a.heardFrom}<br /></>}
                       {a.notes && <><b>Notes:</b> {a.notes}<br /></>}
                       <span style={{ color: "var(--ash)" }}>Applied {new Date(a.createdAt).toLocaleDateString()}</span>
@@ -1496,7 +1513,20 @@ export default function AdminPage() {
             </select>
             <label>Booth (e.g. A3, 5, NW Corner)</label>
             <input value={cBooth} onChange={(e) => setCBooth(e.target.value)} />
-            <label>Monthly rent (dollars — 0 allowed, every booth can differ)</label>
+            <label>Booth size — rent prices by the square foot</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+              <button className={`btn small ${cMode === "standard" ? "" : "ghost"}`} onClick={() => {
+                setCMode("standard"); setCW("5"); setCD("5"); setCRent(String(Math.round(25 * rentPerSqft * 100) / 100));
+              }}>STANDARD 5×5 — {money(Math.round(25 * rentPerSqft * 100))}/MO</button>
+              <button className={`btn small ${cMode === "custom" ? "" : "ghost"}`} onClick={() => setCMode("custom")}>CUSTOM SIZE</button>
+            </div>
+            <div style={{ display: cMode === "custom" ? "flex" : "none", gap: 8, alignItems: "center" }}>
+              <input value={cW} onChange={(e) => { setCW(e.target.value); const w = Number(e.target.value) || 0, d = Number(cD) || 0; if (w > 0 && d > 0) setCRent(String(Math.round(w * d * rentPerSqft * 100) / 100)); }} type="number" min="1" step="1" style={{ width: 80 }} />
+              <b>×</b>
+              <input value={cD} onChange={(e) => { setCD(e.target.value); const d = Number(e.target.value) || 0, w = Number(cW) || 0; if (w > 0 && d > 0) setCRent(String(Math.round(w * d * rentPerSqft * 100) / 100)); }} type="number" min="1" step="1" style={{ width: 80 }} />
+              <span style={{ fontSize: 12.5, fontWeight: 700 }}>= {sqft} sqft → {money(Math.round(suggestedRent * 100))}/mo at ${rentPerSqft}/sqft</span>
+            </div>
+            <label>Monthly rent (auto-filled from size — change it freely for deals)</label>
             <input value={cRent} onChange={(e) => setCRent(e.target.value)} type="number" min="0" step="5" />
             <label>Lease start date (first month prorates from this day)</label>
             <input value={cStart} onChange={(e) => setCStart(e.target.value)} type="date" />
@@ -1559,6 +1589,18 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
               Verify Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
             </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>BOOTH RENT RATE</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>Every booth prices at this rate × its square footage. $6/sqft makes the standard 5×5 exactly $150.</p>
+            <label>Rate ($ per square foot per month)</label>
+            <input type="number" min="0.5" step="0.25" value={rentPerSqft} onChange={(e) => setRentPerSqft(Number(e.target.value))} />
+            <p style={{ fontSize: 12, marginTop: 8 }}>
+              At ${rentPerSqft}/sqft: 4×4 = {money(Math.round(16 * rentPerSqft * 100))} · 5×5 = {money(Math.round(25 * rentPerSqft * 100))} · 5×10 = {money(Math.round(50 * rentPerSqft * 100))} · 10×10 = {money(Math.round(100 * rentPerSqft * 100))}
+            </p>
+            <div style={{ marginTop: 10 }}><button className="btn small" onClick={saveRate}>SAVE RATE</button></div>
+            {rateMsg && <p className={rateMsg.includes("✓") ? "ok" : "err"}>{rateMsg}</p>}
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
