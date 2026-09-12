@@ -61,6 +61,7 @@ export default function SelfCheckout() {
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
       setScanning(true);
+      await new Promise((r) => setTimeout(r, 80)); // let the video box render first
       const scanner = new Html5Qrcode("scan-box");
       scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
       let last = "";
@@ -123,15 +124,9 @@ export default function SelfCheckout() {
       )}
       {!paused && (
       <div className="card" style={{ marginBottom: 12 }}>
-        {!scanning ? (
-          <button className="btn" onClick={startScan}>📷 SCAN A BARCODE</button>
-        ) : (
-          <>
-            <div id="scan-box" style={{ borderRadius: 12, overflow: "hidden" }} />
-            <div style={{ marginTop: 8 }}><button className="btn small ghost" onClick={stopScan}>STOP CAMERA</button></div>
-          </>
-        )}
-        {!scanning && <div id="scan-box" style={{ display: "none" }} />}
+        {!scanning && <button className="btn" onClick={startScan}>📷 SCAN A BARCODE</button>}
+        <div id="scan-box" style={{ borderRadius: 12, overflow: "hidden", display: scanning ? "block" : "none" }} />
+        {scanning && <div style={{ marginTop: 8 }}><button className="btn small ghost" onClick={stopScan}>STOP CAMERA</button></div>}
         <label>Or type the code printed under the barcode</label>
         <div style={{ display: "flex", gap: 8 }}>
           <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="V01-0003"
