@@ -460,9 +460,15 @@ export default function VendorDashboard() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <div>
                       <span className="display" style={{ fontSize: 15 }}>{it.name.toUpperCase()}</span>{" "}
-                      <span className="display" style={{ fontSize: 15, color: "var(--green)" }}>
-                        ${(it.priceCents / 100) % 1 === 0 ? (it.priceCents / 100).toFixed(0) : (it.priceCents / 100).toFixed(2)}
-                      </span>
+                      {(it.salePercent || 0) > 0 && (
+                        <s style={{ color: "var(--ash)", fontSize: 13 }}>${(it.priceCents / 100).toFixed(2)}</s>
+                      )}{" "}
+                      <span className="display" style={{ fontSize: 15, color: (it.salePercent || 0) > 0 ? "var(--red)" : "var(--green)" }}>
+                        ${(() => { const e = Math.max(0, Math.round(it.priceCents * (100 - Math.min(90, Math.max(0, it.salePercent || 0))) / 100)) / 100; return e % 1 === 0 ? e.toFixed(0) : e.toFixed(2); })()}
+                      </span>{" "}
+                      {(it.salePercent || 0) > 0 && (
+                        <span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>🏷️ {it.salePercent}% OFF</span>
+                      )}
                       <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{it.sku} · <b style={{ color: it.quantity > 0 ? "var(--green)" : "var(--red)" }}>{it.quantity} on the floor</b></div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -520,7 +526,7 @@ export default function VendorDashboard() {
                   {me.items.filter((it) => !it.active).map((it) => (
                     <li key={it.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, opacity: 0.75 }}>
                       <span style={{ fontSize: 13.5 }}>
-                        <b>{it.name}</b>{(it.salePercent || 0) > 0 && <span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px", marginLeft: 6 }}>🏷️ {it.salePercent}% OFF</span>} <span style={{ color: "var(--ash)", fontSize: 11.5 }}>{it.sku} · ${(it.priceCents / 100).toFixed(2)}</span>
+                        <b>{it.name}</b> <span style={{ color: "var(--ash)", fontSize: 11.5 }}>{it.sku} · ${(it.priceCents / 100).toFixed(2)}</span>
                       </span>
                       <button className="btn small ghost" disabled={busy} onClick={() => patchItem(it.id, { active: true })}>♻️ BRING BACK</button>
                     </li>

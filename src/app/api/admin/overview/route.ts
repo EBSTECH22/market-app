@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { effectivePriceCents } from "@/lib/pricing";
 import { isAdmin, isStaff } from "@/lib/auth";
 import { centralDayStart, centralMonthStart } from "@/lib/time";
 
@@ -35,7 +36,8 @@ export async function GET() {
     month: admin ? { count: monthSales.length, totalCents: sum(monthSales) - refundBack(monthRefunds), taxCents: tax(monthSales) - refundTax(monthRefunds) } : { count: 0, totalCents: 0, taxCents: 0 },
     vendors,
     floor: floor.map((i) => ({
-      id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, quantity: i.quantity,
+      id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents,
+      salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity,
       vendorName: i.vendor.businessName, vendorCode: i.vendor.code,
     })),
   });
