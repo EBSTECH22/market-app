@@ -1039,7 +1039,7 @@ export default function AdminPage() {
             {search.trim() && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
                 {searchHits.map((i) => (
-                  <button key={i.id} className="btn small ghost" onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, vendorName: i.vendorName })}>
+                  <button key={i.id} className="btn small ghost" onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}>
                     {i.sku} · {i.name} · {money(i.priceCents)}{i.quantity === 0 ? " · OUT" : ""}
                   </button>
                 ))}
@@ -1058,7 +1058,7 @@ export default function AdminPage() {
             {openVendor && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
                 {floor.filter((i) => i.vendorCode === openVendor).map((i) => (
-                  <button key={i.id} className="btn small ghost" onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, vendorName: i.vendorName })}>
+                  <button key={i.id} className="btn small ghost" onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}>
                     {i.name} · {money(i.priceCents)}{i.quantity === 0 ? " · OUT" : ""}
                   </button>
                 ))}
@@ -1072,13 +1072,13 @@ export default function AdminPage() {
               <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid var(--border)", gap: 8, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{l.name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{l.vendorName} · {l.sku} · {(l.basePriceCents || l.priceCents) > l.priceCents ? <><s>{money(l.basePriceCents || 0)}</s> <b style={{ color: "var(--red)" }}>{money(l.priceCents)}</b> each <span style={{ color: "var(--red)", fontWeight: 800 }}>🏷️ SALE</span></> : <>{money(l.priceCents)} each</>}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{l.vendorName} · {l.sku} · {money(l.basePriceCents || l.priceCents)} each{(l.basePriceCents || l.priceCents) > l.priceCents && <span style={{ color: "var(--red)", fontWeight: 800 }}> · 🏷️ ON SALE −{money(((l.basePriceCents || 0) - l.priceCents))} each</span>}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button className="btn small ghost" onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}>−</button>
                   <b>{l.quantity}</b>
                   <button className="btn small ghost" onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: x.quantity + 1 } : x))}>+</button>
-                  <b style={{ minWidth: 64, textAlign: "right" }}>{money(l.priceCents * l.quantity)}</b>
+                  <b style={{ minWidth: 64, textAlign: "right" }}>{money((l.basePriceCents || l.priceCents) * l.quantity)}</b>
                   <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "var(--red)" }} onClick={() => setCart((c) => c.filter((x) => x.sku !== l.sku))}>✕</button>
                 </div>
               </div>
@@ -1089,7 +1089,7 @@ export default function AdminPage() {
                   {(() => { const sv = cart.reduce((n, l) => n + Math.max(0, ((l.basePriceCents || l.priceCents) - l.priceCents)) * l.quantity, 0); return sv > 0 ? (
                     <>
                       <div>Subtotal: <b>{money(subtotal + sv)}</b></div>
-                      <div style={{ color: "var(--red)" }}>🏷️ Sale savings: <b>−{money(sv)}</b></div>
+                      <div style={{ color: "var(--red)", fontWeight: 700 }}>🏷️ SALE DISCOUNT: <b>−{money(sv)}</b></div>
                     </>
                   ) : (
                     <div>Subtotal: <b>{money(subtotal)}</b></div>
