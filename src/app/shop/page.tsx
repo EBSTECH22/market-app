@@ -25,11 +25,17 @@ export default function SelfCheckout() {
   const holdRef = useRef(false); // true while a scanned item awaits SCAN NEXT - blocks re-reads
 
   useEffect(() => {
-    fetch("/api/public/shop").then(async (r) => {
-      if (r.ok) { const d = await r.json(); setItems(d.items || []); setTaxRate(d.taxRatePercent || 0); setPaused(!!d.paused); }
-      setLoaded(true);
-    });
-    return () => { scannerRef.current?.stop().catch(() => {}); };
+    const loadShop = () => {
+      fetch("/api/public/shop").then(async (r) => {
+        if (r.ok) { const d = await r.json(); setItems(d.items || []); setTaxRate(d.taxRatePercent || 0); setPaused(!!d.paused); }
+        setLoaded(true);
+      });
+    };
+    loadShop();
+    const t = setInterval(loadShop, 60000);
+    const onFocus = () => loadShop();
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); scannerRef.current?.stop().catch(() => {}); };
   }, []);
 
   const addItem = useCallback((it: Item) => {

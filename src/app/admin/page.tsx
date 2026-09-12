@@ -210,7 +210,13 @@ export default function AdminPage() {
     if (t.ok) setTeam((await t.json()).employees || []);
   }, []);
 
-  useEffect(() => { probeRole(); loadDrawer(); loadAll(); }, [probeRole, loadDrawer, loadAll]);
+  useEffect(() => {
+    probeRole(); loadDrawer(); loadAll();
+    const t = setInterval(() => { loadDrawer(); loadAll(); }, 60000);
+    const onFocus = () => { loadDrawer(); loadAll(); };
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
+  }, [probeRole, loadDrawer, loadAll]);
   useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
   useEffect(() => { if (authed && role === "admin" && tab === "team") loadTeam(); }, [authed, role, tab, loadTeam]);
   useEffect(() => {

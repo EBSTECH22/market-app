@@ -18,11 +18,18 @@ export default function MarketDirectory() {
   const [banner, setBanner] = useState<{ enabled: boolean; title: string; dateLine: string; message: string } | null>(null);
 
   useEffect(() => {
+    const loadMarket = () => {
+      fetch("/api/public/market").then(async (r) => {
+        if (r.ok) setVendors((await r.json()).vendors || []);
+        setLoaded(true);
+      });
+    };
     fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
-    fetch("/api/public/market").then(async (r) => {
-      if (r.ok) setVendors((await r.json()).vendors || []);
-      setLoaded(true);
-    });
+    loadMarket();
+    const t = setInterval(loadMarket, 60000);
+    const onFocus = () => loadMarket();
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
   }, []);
 
   const needle = q.trim().toLowerCase();

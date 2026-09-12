@@ -20,8 +20,12 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const vendorId = currentVendorId();
   if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  const { endpoint } = await req.json();
-  if (endpoint) await db.pushSub.deleteMany({ where: { endpoint, vendorId } });
+  const { endpoint, all } = await req.json().catch(() => ({}));
+  if (all) {
+    await db.pushSub.deleteMany({ where: { vendorId } });
+  } else if (endpoint) {
+    await db.pushSub.deleteMany({ where: { endpoint, vendorId } });
+  }
   return NextResponse.json({ ok: true });
 }
 

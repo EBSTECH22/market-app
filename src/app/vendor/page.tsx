@@ -59,7 +59,14 @@ export default function VendorDashboard() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 30000);
+    const onFocus = () => load();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
+  }, [load]);
 
   const loadInbox = useCallback(async () => {
     const r = await fetch("/api/vendor/inbox");
@@ -680,8 +687,15 @@ export default function VendorDashboard() {
               Get a push notification the moment your items sell. Without this you get one summary email at the end of each selling day — never an email per sale.
               {pushDevices !== null && pushDevices > 0 ? ` Currently ON for ${pushDevices} device${pushDevices === 1 ? "" : "s"}.` : ""}
             </p>
-            <div style={{ margin: "10px 0 4px" }}>
+            <div style={{ margin: "10px 0 4px", display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn small" onClick={enablePush}>TURN ON FOR THIS DEVICE</button>
+              {pushDevices !== null && pushDevices > 0 && (
+                <button className="btn small ghost" onClick={async () => {
+                  if (!confirm("Turn off sale alert pushes on all your devices? You'll get the daily summary email instead.")) return;
+                  const r = await fetch("/api/vendor/push", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
+                  if (r.ok) { setPushDevices(0); setPushMsg("Sale alerts off \u2014 you'll get the end-of-day summary email instead. \u2713"); }
+                }}>TURN OFF \u2014 DAILY EMAIL INSTEAD</button>
+              )}
             </div>
             <p style={{ fontSize: 11.5, color: "var(--ash)" }}>
               iPhone: works on iOS 16.4+ only after you add this site to your home screen (share button → Add to Home Screen) and open it from that icon. Android: works right in Chrome.
