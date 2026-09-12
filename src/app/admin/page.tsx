@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
-type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; quantity: number };
+type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number };
 type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string } };
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
@@ -477,12 +477,12 @@ export default function AdminPage() {
   };
 
   // ---------- register ----------
-  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; vendorName: string }) => {
+  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string }) => {
     setScanErr(""); setSearch(""); setOpenVendor(null);
     setCart((c) => {
       const line = c.find((l) => l.sku === item.sku);
       if (line) return c.map((l) => (l.sku === item.sku ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { itemId: item.id, sku: item.sku, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, quantity: 1 }];
+      return [...c, { itemId: item.id, sku: item.sku, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1 }];
     });
   };
 
@@ -491,11 +491,11 @@ export default function AdminPage() {
     setScan("");
     if (!code) return;
     const inCart = cart.find((l) => l.sku === code);
-    if (inCart) { addItemToCart({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, vendorName: inCart.vendorName }); return; }
+    if (inCart) { addItemToCart({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName }); return; }
     const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(code)}`);
     const data = await res.json();
     if (!res.ok) { setScanErr(data.error || `Nothing found for ${code}.`); return; }
-    addItemToCart({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, vendorName: data.item.vendor.businessName });
+    addItemToCart({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName });
   };
 
   const floor = overview?.floor || [];
@@ -521,10 +521,10 @@ export default function AdminPage() {
           RECEIPT #${sale.number}<br>${new Date(sale.createdAt).toLocaleDateString("en-US")} ${new Date(sale.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}${sale.employee ? "<br>CLERK: " + sale.employee : ""}
         </div>
         <div style="text-align:left">
-          ${sale.lines.map((l: { quantity: number; name: string; priceCents: number }) => `<div style="display:flex;justify-content:space-between"><span>${l.quantity}x ${l.name.slice(0, 26)}</span><span>${money(l.priceCents * l.quantity)}</span></div>`).join("")}
+          ${sale.lines.map((l: { quantity: number; name: string; priceCents: number; basePriceCents?: number }) => `<div style="display:flex;justify-content:space-between"><span>${l.quantity}x ${l.name.slice(0, 26)}</span><span>${money((l.basePriceCents || l.priceCents) * l.quantity)}</span></div>`).join("")}
         </div>
         <div style="border-top:1px dashed #000;margin-top:4px;padding-top:4px;text-align:left">
-          <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents)}</span></div>
+          <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents + (sale.saleSavingsCents || 0))}</span></div>
           ${sale.saleSavingsCents ? `<div style="display:flex;justify-content:space-between"><span>SALE SAVINGS</span><span>-${money(sale.saleSavingsCents)}</span></div>` : ""}
           ${sale.cardAdjustCents ? `<div style="display:flex;justify-content:space-between"><span>NON-CASH ADJ</span><span>${money(sale.cardAdjustCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>
@@ -955,11 +955,11 @@ export default function AdminPage() {
           <div style={{ textAlign: "left", maxWidth: 340, margin: "12px auto" }}>
             {receipt.lines.map((l) => (
               <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "4px 0" }}>
-                <span>{l.quantity}× {l.name}</span><b>{money(l.priceCents * l.quantity)}</b>
+                <span>{l.quantity}× {l.name}</span><b>{money((l.basePriceCents || l.priceCents) * l.quantity)}</b>
               </div>
             ))}
             <div style={{ borderTop: "2px solid var(--border)", marginTop: 6, paddingTop: 6, fontSize: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(receipt.subtotalCents)}</b></div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(receipt.subtotalCents + (receipt.saleSavingsCents || 0))}</b></div>
               {typeof receipt.saleSavingsCents === "number" && receipt.saleSavingsCents > 0 && (
                 <div style={{ display: "flex", justifyContent: "space-between", color: "var(--red)" }}><span>🏷️ Sale savings</span><b>&minus;{money(receipt.saleSavingsCents)}</b></div>
               )}
@@ -1072,7 +1072,7 @@ export default function AdminPage() {
               <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid var(--border)", gap: 8, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{l.name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{l.vendorName} · {l.sku} · {money(l.priceCents)} each</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{l.vendorName} · {l.sku} · {(l.basePriceCents || l.priceCents) > l.priceCents ? <><s>{money(l.basePriceCents || 0)}</s> <b style={{ color: "var(--red)" }}>{money(l.priceCents)}</b> each <span style={{ color: "var(--red)", fontWeight: 800 }}>🏷️ SALE</span></> : <>{money(l.priceCents)} each</>}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button className="btn small ghost" onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}>−</button>
@@ -1086,7 +1086,14 @@ export default function AdminPage() {
             {cart.length > 0 && (
               <>
                 <div style={{ textAlign: "right", marginTop: 12, fontSize: 15 }}>
-                  <div>Subtotal: <b>{money(subtotal)}</b></div>
+                  {(() => { const sv = cart.reduce((n, l) => n + Math.max(0, ((l.basePriceCents || l.priceCents) - l.priceCents)) * l.quantity, 0); return sv > 0 ? (
+                    <>
+                      <div>Subtotal: <b>{money(subtotal + sv)}</b></div>
+                      <div style={{ color: "var(--red)" }}>🏷️ Sale savings: <b>−{money(sv)}</b></div>
+                    </>
+                  ) : (
+                    <div>Subtotal: <b>{money(subtotal)}</b></div>
+                  ); })()}
                   <div>Tax ({taxRate}%): <b>{money(taxCents)}</b></div>
                   <div className="display" style={{ fontSize: 26 }}>TOTAL: {money(total)}</div>
                 </div>

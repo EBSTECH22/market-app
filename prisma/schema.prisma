@@ -118,6 +118,7 @@ model SaleLine {
   itemId          String
   vendorId        String
   name            String
+  basePriceCents Int @default(0)
   priceCents      Int
   quantity        Int
   commissionCents Int    @default(0)

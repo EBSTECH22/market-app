@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
   const taxRate = await getTaxRatePercent();
   let subtotal = 0;
   const saleLines: {
-    itemId: string; vendorId: string; name: string; priceCents: number; quantity: number;
+    itemId: string; vendorId: string; name: string; basePriceCents: number; priceCents: number; quantity: number;
     commissionCents: number; vendorNetCents: number;
   }[] = [];
 
@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
       itemId: item.id,
       vendorId: item.vendorId,
       name: item.name,
+      basePriceCents: item.priceCents,
       priceCents: unit,
       quantity: q,
       commissionCents: commission,
@@ -143,7 +144,7 @@ export async function POST(req: NextRequest) {
     if (customer.email) {
       try {
         await sendCustomerReceiptEmail(customer.email, sale.number,
-          saleLines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.priceCents })),
+          saleLines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.basePriceCents || l.priceCents })),
           subtotal, taxCents, discountCents, totalCents, customerPoints ?? 0, saleSavingsCents);
       } catch {}
     }
