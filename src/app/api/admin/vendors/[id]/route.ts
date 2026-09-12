@@ -7,7 +7,7 @@ import { randomBytes } from "crypto";
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const body = await req.json();
-  const data: { businessName?: string; contactName?: string; phone?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean } = {};
+  const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean } = {};
   if (typeof body.businessName === "string" && body.businessName.trim()) data.businessName = body.businessName.trim();
   if (typeof body.contactName === "string") data.contactName = body.contactName.trim();
   if (typeof body.phone === "string") data.phone = body.phone.trim();
@@ -15,6 +15,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const c = Number(body.commissionPercent);
     if (Number.isNaN(c) || c < 0 || c > 50) return NextResponse.json({ error: "Commission must be 0-50%." }, { status: 400 });
     data.commissionPercent = c;
+  }
+  if (typeof body.email === "string") {
+    const email = body.email.toLowerCase().trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return NextResponse.json({ error: "That email doesn't look right." }, { status: 400 });
+    const clash = await db.vendor.findFirst({ where: { email: { equals: email, mode: "insensitive" }, id: { not: params.id } } });
+    if (clash) return NextResponse.json({ error: `${clash.businessName} already uses that email.` }, { status: 400 });
+    data.email = email;
   }
   if (typeof body.active === "boolean") data.active = body.active;
   if (typeof body.allowSelfCheckout === "boolean") data.allowSelfCheckout = body.allowSelfCheckout;

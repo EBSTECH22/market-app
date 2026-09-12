@@ -115,6 +115,8 @@ export default function AdminPage() {
   const [scPaused, setScPaused] = useState(false);
   const [cardAdj, setCardAdj] = useState("0");
   const [cardConfirm, setCardConfirm] = useState(false);
+  const [editV, setEditV] = useState<string | null>(null);
+  const [editF, setEditF] = useState({ businessName: "", contactName: "", email: "", phone: "" });
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
   const [adminPushKey, setAdminPushKey] = useState("");
@@ -1541,8 +1543,32 @@ export default function AdminPage() {
                       <button className="btn small ghost" disabled={busy} onClick={() => patchVendor(v.id, { active: !v.active })}>
                         {v.active ? "DEACTIVATE" : "REACTIVATE"}
                       </button>
+                      <button className="btn small ghost" disabled={busy} onClick={() => {
+                        if (editV === v.id) { setEditV(null); return; }
+                        setEditV(v.id);
+                        setEditF({ businessName: v.businessName, contactName: v.contactName || "", email: v.email, phone: v.phone || "" });
+                      }}>✏️ EDIT</button>
                     </div>
                   </div>
+                  {editV === v.id && (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
+                      <label>Business name</label>
+                      <input value={editF.businessName} onChange={(e) => setEditF((f) => ({ ...f, businessName: e.target.value }))} />
+                      <label>Contact name</label>
+                      <input value={editF.contactName} onChange={(e) => setEditF((f) => ({ ...f, contactName: e.target.value }))} />
+                      <label>Email (their login + where contracts, guides &amp; alerts go)</label>
+                      <input type="email" value={editF.email} onChange={(e) => setEditF((f) => ({ ...f, email: e.target.value }))} />
+                      <label>Phone</label>
+                      <input value={editF.phone} onChange={(e) => setEditF((f) => ({ ...f, phone: e.target.value }))} />
+                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                        <button className="btn small" disabled={busy} onClick={async () => {
+                          await patchVendor(v.id, { businessName: editF.businessName.trim(), contactName: editF.contactName.trim(), email: editF.email.trim(), phone: editF.phone.trim() });
+                          setEditV(null);
+                        }}>SAVE</button>
+                        <button className="btn small ghost" onClick={() => setEditV(null)}>CANCEL</button>
+                      </div>
+                    </div>
+                  )}
                 </li>
               ))}
               {vendors.length === 0 && <li style={{ color: "var(--ash)", fontSize: 14, paddingTop: 8 }}>No vendors yet — add your first below.</li>}
