@@ -776,7 +776,8 @@ export default function AdminPage() {
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="Community Harvest" style={{ width: 130, height: 130, marginBottom: 10 }} />
-          <div className="display" style={{ fontSize: 26 }}>COMMUNITY HARVEST</div>
+{/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 210, maxWidth: "70%", height: "auto", margin: "2px auto 2px", display: "block" }} />
           <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
           <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Register &amp; Management</div>
         </div>
@@ -820,7 +821,8 @@ export default function AdminPage() {
         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" style={{ width: 40, height: 40 }} />
-          <span className="display" style={{ fontSize: 20 }}>COMMUNITY HARVEST</span>
+{/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/wordmark.png" alt="Community Harvest" style={{ width: 150, height: "auto", display: "block" }} />
         </span>
         {overview && (
           <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ash)" }}>

@@ -281,7 +281,8 @@ export default function VendorDashboard() {
         <div style={{ textAlign: "center", marginBottom: 18 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" style={{ width: 110, height: 110, marginBottom: 8 }} />
-          <div className="display" style={{ fontSize: 24 }}>COMMUNITY HARVEST</div>
+{/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 210, maxWidth: "70%", height: "auto", margin: "2px auto 2px", display: "block" }} />
           <div style={{ fontWeight: 700, fontSize: 11, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
         </div>
         <div className="card">
@@ -304,11 +305,9 @@ export default function VendorDashboard() {
     <main style={{ maxWidth: 640, margin: "0 auto", padding: "26px 16px 70px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="" style={{ width: 34, height: 34 }} />
-            <div className="display" style={{ fontSize: 22 }}>{me.vendor.businessName.toUpperCase()}</div>
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 128, height: "auto", display: "block", marginBottom: 4 }} />
+          <div className="display" style={{ fontSize: 22 }}>{me.vendor.businessName.toUpperCase()}</div>
           <div style={{ fontSize: 12, color: "var(--ash)", fontWeight: 600 }}>
             Vendor {me.vendor.code}
             {me.vendor.commissionPercent > 0 ? ` · ${me.vendor.commissionPercent}% market commission` : ""}

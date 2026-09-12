@@ -34,7 +34,8 @@ export default function MarketDirectory() {
     <main style={{ maxWidth: 640, margin: "0 auto", padding: "26px 14px 70px" }}>
       <div style={{ textAlign: "center", marginBottom: 14 }}>
         <img src="/logo.png" alt="Community Harvest" style={{ width: 130, margin: "0 auto 4px", display: "block" }} />
-        <div className="display" style={{ fontSize: 26 }}>COMMUNITY HARVEST</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/wordmark.png" alt="Community Harvest" style={{ width: 270, maxWidth: "82%", height: "auto", margin: "2px auto 4px", display: "block" }} />
         <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET · NOBLE, OK</div>
         <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>Live list — what our vendors have on the floor right now.</p>
 
