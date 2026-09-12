@@ -138,6 +138,12 @@ model Contract {
   status           String    @default("ACTIVE")
   noticeGivenAt    DateTime?
   endDate          DateTime?
+  vendorSignedName    String    @default("")
+  vendorSignatureData String    @default("")
+  vendorSignedAt      DateTime?
+  marketSignedName    String    @default("")
+  marketSignatureData String    @default("")
+  marketSignedAt      DateTime?
   createdAt        DateTime  @default(now())
 }
 

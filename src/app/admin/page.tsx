@@ -1472,6 +1472,7 @@ export default function AdminPage() {
                       <span style={{ fontSize: 12, color: "var(--ash)" }}> · {a.contactName} · {a.category || "uncategorized"}</span>
                       <b style={{ fontSize: 12 }}> · {a.status}</b>
                     </div>
+                    <a className="btn small ghost" href={`/admin/applications/${a.id}/print`} target="_blank" rel="noopener" style={{ marginRight: 5 }}>🖨</a>
                     {a.status === "PENDING" && (
                       <span style={{ display: "flex", gap: 5 }}>
                         <button className="btn small" disabled={busy} onClick={() => decideApplication(a.id, "accept")}>✅ ACCEPT</button>
@@ -1564,7 +1565,7 @@ export default function AdminPage() {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                      <a className="btn small ghost" href={`/admin/contracts/${c.id}/print`} target="_blank" rel="noopener">🖨 PRINT</a>
+                      <a className="btn small ghost" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">🖨 PRINT</a>
                       {c.status === "ACTIVE" && (
                         <>
                           <button className="btn small ghost" disabled={busy} onClick={() => {

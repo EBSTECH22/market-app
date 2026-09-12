@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 
@@ -392,6 +392,11 @@ export default function VendorDashboard() {
               <a className="btn small ghost" href="/vendor/qr">📱 PRINT TABLE QR</a>
               <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">👀 VIEW MY PUBLIC PAGE</a>
               <a className="btn small ghost" href="/rules" target="_blank" rel="noopener">📋 MARKET RULES</a>
+              {me.vendor.contracts && me.vendor.contracts[0] && (
+                <a className="btn small" href={`/contract/${me.vendor.contracts[0].id}/packet`}>
+                  📄 {me.vendor.contracts[0].vendorSignedAt ? "MY CONTRACT" : "SIGN YOUR CONTRACT"}
+                </a>
+              )}
             </div>
           </div>
 
