@@ -62,9 +62,16 @@ export default function MarketDirectory() {
 
       <input placeholder="Search vendors or products… (honey, bread, candles)" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 14 }} />
 
+      {!loaded && (
+        <div>
+          <div className="skel" style={{ height: 120, marginBottom: 12 }} />
+          <div className="skel" style={{ height: 120, marginBottom: 12 }} />
+          <div className="skel" style={{ height: 120 }} />
+        </div>
+      )}
       {loaded && shown.length === 0 && <p style={{ textAlign: "center", color: "var(--ash)" }}>Nothing matches.</p>}
       {shown.map((v) => (
-        <a href={`/v/${v.code}`} key={v.code} style={{ display: "block", border: "1px solid var(--border)", borderRadius: 14, padding: "14px 16px", marginBottom: 12, background: "#fff", color: "var(--ink)", textDecoration: "none", boxShadow: "0 1px 3px rgba(0,0,0,0.07)", cursor: "pointer" }}>
+        <a href={`/v/${v.code}`} key={v.code} className="cardlink" style={{ padding: "14px 16px", marginBottom: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {v.logoId && (

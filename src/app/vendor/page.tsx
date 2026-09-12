@@ -274,7 +274,18 @@ export default function VendorDashboard() {
     window.location.href = "/";
   };
 
-  if (!me) return <main style={{ padding: 60, textAlign: "center" }}>Loading…</main>;
+  if (!me) return (
+    <main style={{ maxWidth: 640, margin: "0 auto", padding: "22px 16px" }}>
+      <div className="skel" style={{ width: 128, height: 24, marginBottom: 10 }} />
+      <div className="skel" style={{ width: 220, height: 28, marginBottom: 18 }} />
+      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+        <div className="skel" style={{ flex: 1, height: 86 }} />
+        <div className="skel" style={{ flex: 1, height: 86 }} />
+      </div>
+      <div className="skel" style={{ height: 130, marginBottom: 14 }} />
+      <div className="skel" style={{ height: 220 }} />
+    </main>
+  );
 
   if (me.vendor.mustChangePassword) {
     return (
@@ -318,11 +329,11 @@ export default function VendorDashboard() {
     </button>
   );
 
-  const Stat = (props: { label: string; value: string; sub?: string; color?: string; onClick?: () => void }) => (
-    <div className="card" style={{ flex: "1 1 140px", textAlign: "center", cursor: props.onClick ? "pointer" : "default" }} onClick={props.onClick}>
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ash)", letterSpacing: "0.06em" }}>{props.label}</div>
-      <div className="display" style={{ fontSize: 24, color: props.color || "var(--ink)" }}>{props.value}</div>
-      {props.sub && <div style={{ fontSize: 11, color: "var(--ash)" }}>{props.sub}</div>}
+  const Stat = (props: { label: string; value: string; sub?: string; color?: string; hero?: boolean; onClick?: () => void }) => (
+    <div className={`card${props.hero ? " stat-hero" : ""}`} style={{ flex: "1 1 140px", textAlign: "center", cursor: props.onClick ? "pointer" : "default" }} onClick={props.onClick}>
+      <div className="statlabel" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ash)", letterSpacing: "0.06em" }}>{props.label}</div>
+      <div className="display" style={{ fontSize: 24, color: props.hero ? "#fff" : props.color || "var(--ink)" }}>{props.value}</div>
+      {props.sub && <div style={{ fontSize: 11, color: props.hero ? "#9ca3af" : "var(--ash)" }}>{props.sub}</div>}
     </div>
   );
 
@@ -341,7 +352,7 @@ export default function VendorDashboard() {
         <button className="btn small ghost" onClick={logout}>LOG OUT</button>
       </div>
 
-      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 16, WebkitOverflowScrolling: "touch" }}>
+      <div className="glassbar" style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 16, WebkitOverflowScrolling: "touch" }}>
         <Tab id="home" label="🏠 HOME" />
         <Tab id="items" label="📦 MY ITEMS" />
         <Tab id="inbox" label="📩 INBOX" badge={needsReply} />
@@ -353,7 +364,7 @@ export default function VendorDashboard() {
       {vtab === "home" && (
         <div>
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-            <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} color={me.balance >= 0 ? "var(--green)" : "var(--red)"} onClick={() => setVtab("money")} />
+            <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} hero onClick={() => setVtab("money")} />
             <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
             <Stat label="ON THE FLOOR" value={String(floorUnits)} sub="units in stock" onClick={() => setVtab("items")} />
             <Stat label="NEEDS A REPLY" value={String(needsReply)} color={needsReply > 0 ? "var(--red)" : "var(--green)"} sub={needsReply > 0 ? "open messages" : "all caught up"} onClick={() => setVtab("inbox")} />

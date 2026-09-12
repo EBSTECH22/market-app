@@ -86,7 +86,14 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
   };
 
   if (missing) return <main style={{ padding: 60, textAlign: "center" }}>Vendor not found.</main>;
-  if (!vendor) return <main style={{ padding: 60, textAlign: "center" }}>Loading…</main>;
+  if (!vendor) return (
+    <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px" }}>
+      <div className="skel" style={{ width: 180, height: 26, margin: "0 auto 14px" }} />
+      <div className="skel" style={{ height: 150, marginBottom: 14 }} />
+      <div className="skel" style={{ height: 190, marginBottom: 14 }} />
+      <div className="skel" style={{ height: 240 }} />
+    </main>
+  );
 
   const avg = reviews.length ? Math.round((reviews.reduce((n, r) => n + r.rating, 0) / reviews.length) * 10) / 10 : null;
 
