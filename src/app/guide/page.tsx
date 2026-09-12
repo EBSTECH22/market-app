@@ -27,6 +27,8 @@ export default function GuidePage() {
         <img src="/wordmark.png" alt="Community Harvest" style={{ width: 210, maxWidth: "70%", height: "auto", margin: "0 auto 6px", display: "block" }} />
         <div className="display" style={{ fontSize: 21 }}>VENDOR SETUP &amp; PORTAL GUIDE</div>
         <p style={{ fontSize: 12.5, color: "var(--ash)", marginTop: 4 }}>Everything from putting the app on your phone to your first payout.</p>
+        <a className="btn" href="/" style={{ maxWidth: 340, margin: "12px auto 0" }}>🔑 OPEN YOUR VENDOR PORTAL →</a>
+        <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 6 }}>Every step below happens in your portal — that button is the door.</p>
       </div>
 
       <Divider>PART 1 · PUT THE APP ON YOUR PHONE</Divider>
@@ -102,6 +104,7 @@ export default function GuidePage() {
         <Step n={3}>Tap <b>✅ ACCEPT &amp; SEND LINK</b>. They get a secure card-payment link by email.</Step>
         <Step n={4}>When they pay, it lands in <b>your balance automatically</b> and shows in the register for pickup day. You&rsquo;ll see PAID ✓ on the thread.</Step>
         <Step n={5}>Can&rsquo;t do it? <b>❌ DECLINE</b> with one tap — no hard feelings, fast answers keep customers coming back. Regular questions: type a reply and <b>SEND</b>; they get it by email.</Step>
+        <p style={{ fontSize: 12.5, color: "var(--ash)", marginTop: 4 }}>Don&rsquo;t want pre-orders at all? That&rsquo;s fine — flip <b>Accept PRE-ORDERS</b> off in <b>⭐ MY PAGE</b> and customers never see the option. Same for requests. Complaints always stay open — that&rsquo;s a market rule that protects everyone.</p>
       </div>
 
       <div className="card" style={{ marginBottom: 16 }} id="mypage">
@@ -131,8 +134,9 @@ export default function GuidePage() {
         <Chip>💬 Stuck? Ask any staff member</Chip>
       </div>
 
+      <a className="btn" href="/" style={{ maxWidth: 340, margin: "0 auto 12px" }}>🔑 OPEN YOUR VENDOR PORTAL →</a>
       <p style={{ textAlign: "center", fontSize: 12.5, color: "var(--ash)" }}>
-        We built all of this so your booth works for you while you live your life. Welcome aboard. 🌾 · <a href="/">Vendor login</a>
+        We built all of this so your booth works for you while you live your life. Welcome aboard. 🌾
       </p>
     </main>
   );

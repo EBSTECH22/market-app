@@ -296,6 +296,7 @@ export async function sendSetupGuideEmail(to: string, businessName: string, phon
   const inner = `
     <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">YOUR VENDOR SETUP GUIDE \ud83c\udf3e</h2>
     <p style="font-size:14px;color:#333;">Hi ${businessName} — here&rsquo;s your Community Harvest setup guide again: how to put the vendor app on your phone, add products, print barcode labels, and run your booth.</p>
+    <p style="margin:14px 0 4px;"><a href="${baseUrl()}" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">🔑 OPEN YOUR VENDOR PORTAL</a></p>
     ${installBlock(phoneType)}
     <p style="margin:16px 0;"><a href="${baseUrl()}/guide" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">OPEN THE FULL GUIDE</a></p>
     <p style="font-size:12px;color:#777;">Covers everything: products, labels (and which sticker sheets to buy), restocking, pre-orders, your public page, and getting paid. Stuck? Just reply to this email.</p>`;
