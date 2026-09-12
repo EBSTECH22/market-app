@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { isStaff } from "@/lib/auth";
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
-import { getTaxRatePercent } from "@/lib/settings";
+import { getTaxRatePercent, getCardAdjustPercent } from "@/lib/settings";
+
 import { pushToVendor } from "@/lib/push";
 
 export async function POST(req: NextRequest) {
@@ -51,7 +52,10 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const taxCents = Math.round((subtotal * taxRate) / 100);
+  // dual pricing: posted prices are card prices; cash skips the non-cash adjustment
+  const adjustPercent = await getCardAdjustPercent();
+  const cardAdjustCents = paymentMethod === "CARD" && adjustPercent > 0 ? Math.round((subtotal * adjustPercent) / 100) : 0;
+  const taxCents = Math.round(((subtotal + cardAdjustCents) * taxRate) / 100);
 
   // rewards: find the customer up front so redemption can discount this sale
   let customer = customerContact ? await findOrCreateCustomer(customerContact) : null;
@@ -61,7 +65,7 @@ export async function POST(req: NextRequest) {
     if (customer.points < REDEEM_POINTS) return NextResponse.json({ error: `Only ${customer.points} points — ${REDEEM_POINTS} needed for $5 off.` }, { status: 400 });
     discountCents = Math.min(REDEEM_CENTS, subtotal + taxCents);
   }
-  const totalCents = subtotal + taxCents - discountCents;
+  const totalCents = subtotal + cardAdjustCents + taxCents - discountCents;
 
   const sale = await db.$transaction(async (tx) => {
     const last = await tx.sale.aggregate({ _max: { number: true } });
@@ -70,6 +74,7 @@ export async function POST(req: NextRequest) {
       data: {
         customerId: customer ? customer.id : "",
         discountCents,
+        cardAdjustCents,
         number,
         cardName: paymentMethod === "CARD" ? (cardName || "").trim().slice(0, 60) : "",
         employee: drawer.employee,
@@ -139,5 +144,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, totalCents, taxRate, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, totalCents, taxRate, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
 }

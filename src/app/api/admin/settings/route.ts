@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdmin, isStaff } from "@/lib/auth";
-import { getTaxRatePercent, setTaxRatePercent } from "@/lib/settings";
+import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent } from "@/lib/settings";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 
 export async function GET() {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused() });
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent() });
 }
 
 export async function POST(req: NextRequest) {
@@ -39,6 +39,13 @@ export async function POST(req: NextRequest) {
       update: { value: JSON.stringify(banner) },
     });
     return NextResponse.json({ ok: true, banner });
+  }
+
+  if (body.cardAdjustPercent !== undefined) {
+    const v = Number(body.cardAdjustPercent);
+    if (!Number.isFinite(v) || v < 0 || v > 4) return NextResponse.json({ error: "Card adjustment must be between 0 and 4%." }, { status: 400 });
+    await db.setting.upsert({ where: { key: "cardAdjustPercent" }, create: { key: "cardAdjustPercent", value: String(v) }, update: { value: String(v) } });
+    return NextResponse.json({ ok: true, cardAdjustPercent: v });
   }
 
   if (body.selfCheckoutPaused !== undefined) {

@@ -7,7 +7,7 @@ type FloorItem = { id: string; sku: string; name: string; priceCents: number; qu
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; quantity: number };
 type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string } };
-type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; customerPoints?: number | null; customerContact?: string;
+type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
@@ -113,6 +113,7 @@ export default function AdminPage() {
   const [cMode, setCMode] = useState<"standard" | "custom">("standard");
   const [rentPerSqft, setRentPerSqft] = useState(6);
   const [scPaused, setScPaused] = useState(false);
+  const [cardAdj, setCardAdj] = useState("0");
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
   const [adminPushKey, setAdminPushKey] = useState("");
@@ -173,7 +174,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -515,7 +516,9 @@ export default function AdminPage() {
         </div>
         <div style="border-top:1px dashed #000;margin-top:4px;padding-top:4px;text-align:left">
           <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents)}</span></div>
+          ${sale.cardAdjustCents ? `<div style="display:flex;justify-content:space-between"><span>NON-CASH ADJ</span><span>${money(sale.cardAdjustCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>
+          ${sale.discountCents ? `<div style="display:flex;justify-content:space-between"><span>REWARDS</span><span>-${money(sale.discountCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px"><span>TOTAL</span><span>${money(sale.totalCents)}</span></div>
           <div>${sale.paymentMethod}${sale.cardName ? " - " + sale.cardName : ""}</div>
         </div>
@@ -947,6 +950,9 @@ export default function AdminPage() {
             ))}
             <div style={{ borderTop: "2px solid var(--border)", marginTop: 6, paddingTop: 6, fontSize: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(receipt.subtotalCents)}</b></div>
+              {typeof receipt.cardAdjustCents === "number" && receipt.cardAdjustCents > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between" }}><span>Non-cash adjustment</span><b>{money(receipt.cardAdjustCents)}</b></div>
+              )}
               <div style={{ display: "flex", justifyContent: "space-between" }}><span>Tax ({receipt.taxRate}%)</span><b>{money(receipt.taxCents)}</b></div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18 }} className="display">
                 <span>TOTAL ({receipt.paymentMethod}{receipt.cardName ? ` — ${receipt.cardName}` : ""})</span><span>{money(receipt.totalCents)}</span>
@@ -1880,6 +1886,21 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
               Verify Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
             </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>DUAL PRICING 💳</h2>
+            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
+              Posted prices are card prices; cash customers skip the non-cash adjustment. Applied automatically at the register when CARD is tapped (0 turns it off; card networks cap this at 4%). Post the disclosure sign at the door and register: <a href="/admin/dual-pricing-sign" target="_blank" rel="noopener"><b>print the sign</b></a>.
+            </p>
+            <label>Non-cash adjustment (%)</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input type="number" min="0" max="4" step="0.5" value={cardAdj} onChange={(e) => setCardAdj(e.target.value)} style={{ maxWidth: 120 }} />
+              <button className="btn small" onClick={async () => {
+                const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cardAdjustPercent: Number(cardAdj) }) });
+                if (!r.ok) { const d = await r.json(); alert(d.error || "Couldn't save."); }
+              }}>SAVE</button>
+            </div>
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>

@@ -13,3 +13,9 @@ export async function setTaxRatePercent(v: number): Promise<void> {
     update: { value: String(v) },
   });
 }
+
+export async function getCardAdjustPercent(): Promise<number> {
+  const row = await db.setting.findUnique({ where: { key: "cardAdjustPercent" } });
+  const v = row ? Number(row.value) : 0;
+  return Number.isFinite(v) && v >= 0 && v <= 4 ? v : 0;
+}
