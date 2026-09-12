@@ -26,7 +26,7 @@ function shell(inner: string) {
   return `
   <div style="background:#f3f4f6;padding:28px 12px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:#111827;">
     <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;padding:32px 28px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
-      <img src="${baseUrl()}/wordmark.png" alt="${name}" width="190" style="width:190px;max-width:70%;height:auto;margin:0 auto 6px;display:block;" />
+      <img src="${baseUrl()}/wordmark-email.png" alt="${name}" width="210" style="width:210px;max-width:74%;height:auto;margin:0 auto 8px;display:block;" />
       <div style="font-weight:600;font-size:10px;letter-spacing:.16em;color:#9ca3af;margin-bottom:22px;">FOOD AND CRAFT MARKET \u00b7 NOBLE, OK</div>
       ${inner}
     </div>
