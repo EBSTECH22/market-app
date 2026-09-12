@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { pushToVendor, pushToAdmin } from "@/lib/push";
 import { sendSelfCheckoutReceiptEmail } from "@/lib/email";
+import { findOrCreateCustomer, pointsFor } from "@/lib/customers";
 
 export type CartLine = { itemId: string; sku: string; name: string; priceCents: number; quantity: number; vendorId: string; vendorName: string };
 
@@ -66,6 +67,17 @@ export async function finalizeSelfCartIfPaid(cartId: string): Promise<boolean> {
   }
   try { await pushToAdmin("Self-checkout sale 💳", `#${number} — $${(cart.totalCents / 100).toFixed(2)}, ${lines.length} line${lines.length === 1 ? "" : "s"}`); } catch {}
   if (cart.email) {
+    try {
+      const customer = await findOrCreateCustomer(cart.email);
+      if (customer) {
+        const earned = pointsFor(cart.totalCents);
+        if (earned > 0) {
+          await db.customer.update({ where: { id: customer.id }, data: { points: { increment: earned } } });
+          await db.loyaltyEvent.create({ data: { customerId: customer.id, saleId: cart.saleId, delta: earned, note: `Self-checkout #${number}` } });
+        }
+        await db.sale.updateMany({ where: { id: cart.saleId }, data: { customerId: customer.id } });
+      }
+    } catch {}
     try { await sendSelfCheckoutReceiptEmail(cart.email, number, lines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.priceCents })), cart.subtotalCents, cart.taxCents, cart.totalCents); } catch {}
   }
   return true;

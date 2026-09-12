@@ -20,6 +20,7 @@ model Vendor {
   acceptsPreorders  Boolean  @default(false)
   acceptsRequests   Boolean  @default(false)
   allowSelfCheckout Boolean  @default(true)
+  lastRestockAlertAt DateTime?
   publicBlurb       String   @default("")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
@@ -51,6 +52,8 @@ model Sale {
   taxCents      Int
   totalCents    Int
   paymentMethod String
+  customerId    String     @default("")
+  discountCents Int        @default(0)
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
 }
@@ -301,4 +304,33 @@ model SelfCart {
   saleId          String    @default("")
   createdAt       DateTime  @default(now())
   paidAt          DateTime?
+}
+
+model Customer {
+  id           String   @id @default(cuid())
+  email        String   @default("")
+  phone        String   @default("")
+  points       Int      @default(0)
+  token        String   @unique
+  unsubscribed Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  follows      VendorFollow[]
+}
+
+model VendorFollow {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  vendorId   String
+  createdAt  DateTime @default(now())
+  @@unique([customerId, vendorId])
+}
+
+model LoyaltyEvent {
+  id         String   @id @default(cuid())
+  customerId String
+  saleId     String   @default("")
+  delta      Int
+  note       String   @default("")
+  createdAt  DateTime @default(now())
 }

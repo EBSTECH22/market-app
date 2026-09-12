@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { findOrCreateCustomer, pointsFor } from "@/lib/customers";
 import { stripe } from "@/lib/stripe";
 import { pushToAdmin, pushToVendor } from "@/lib/push";
 import { sendVendorInboxEmail, sendPreorderPaidEmail } from "@/lib/email";
@@ -68,6 +69,19 @@ export async function finalizeIfPaid(preorderId: string): Promise<boolean> {
     }
   });
 
+  try {
+    if (thread && thread.email) {
+      const customer = await findOrCreateCustomer(thread.email);
+      if (customer) {
+        const earned = pointsFor(po.totalCents);
+        if (earned > 0) {
+          await db.customer.update({ where: { id: customer.id }, data: { points: { increment: earned } } });
+          await db.loyaltyEvent.create({ data: { customerId: customer.id, saleId: po.saleId || "", delta: earned, note: "Pre-order paid online" } });
+        }
+        if (po.saleId) await db.sale.updateMany({ where: { id: po.saleId }, data: { customerId: customer.id } });
+      }
+    }
+  } catch {}
   try {
     if (thread) await sendPreorderPaidEmail(thread.email, thread.customerName, vendor.businessName, po.description, po.totalCents, po.expectedDate, thread.token);
   } catch (err) { console.error("paid email failed", err); }

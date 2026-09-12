@@ -7,7 +7,8 @@ type FloorItem = { id: string; sku: string; name: string; priceCents: number; qu
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; quantity: number };
 type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string } };
-type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[] };
+type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]   discountCents?: number; customerPoints?: number | null; customerContact?: string;
+};
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
 type Employee = { id: string; name: string };
@@ -55,7 +56,7 @@ export default function AdminPage() {
   const [refundQty, setRefundQty] = useState<Record<string, number>>({});
   const [refundRestock, setRefundRestock] = useState(true);
   const [refundMsg, setRefundMsg] = useState("");
-  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "contracts" | "tents" | "team" | "links" | "settings">("register");
+  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "customers" | "contracts" | "tents" | "team" | "links" | "settings">("register");
   const [busy, setBusy] = useState(false);
 
   // register / drawer
@@ -533,13 +534,39 @@ export default function AdminPage() {
     setTimeout(() => document.body.classList.remove("receiptmode"), 400);
   }, []);
 
+  const [customers, setCustomers] = useState<{ id: string; email: string; phone: string; points: number; unsubscribed: boolean; follows: number; createdAt: string; saleCount: number; spentCents: number }[]>([]);
+  const [custQ, setCustQ] = useState("");
+  const [cust, setCust] = useState<{ id: string; email: string; phone: string; points: number } | null>(null);
+  const [redeem, setRedeem] = useState(false);
+  const [custMsg, setCustMsg] = useState("");
+  const [attachQ, setAttachQ] = useState("");
+  const [attachMsg, setAttachMsg] = useState("");
+
+  const attachCustomer = async () => {
+    if (!receipt || !attachQ.trim()) return;
+    setAttachMsg("");
+    const r = await fetch("/api/admin/sale/attach", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ saleId: receipt.id, contact: attachQ.trim() }) });
+    const d = await r.json();
+    if (!r.ok) { setAttachMsg(d.error || "Couldn't add."); return; }
+    setAttachMsg(`⭐ ${d.points} points · ${d.contact}${d.contact.includes("@") ? " · receipt emailed" : ""}`);
+  };
+
+  const lookupCust = async () => {
+    setCustMsg("");
+    if (!custQ.trim()) { setCust(null); return; }
+    const r = await fetch(`/api/admin/customer?q=${encodeURIComponent(custQ.trim())}`);
+    const d = await r.json();
+    if (r.ok && d.customer) { setCust(d.customer); }
+    else { setCust(null); setCustMsg("New customer — they'll be enrolled with this sale. \u2b50"); }
+  };
+
   const completeSale = async (paymentMethod: "CASH" | "CARD") => {
     if (!cart.length) return;
     setBusy(true);
     let ok = false; let data: Record<string, unknown> = {};
     try { ({ ok, data } = await safeFetch("/api/admin/sale", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paymentMethod, cardName, lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })) }),
+      body: JSON.stringify({ paymentMethod, cardName, lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity , customerContact: custQ.trim(), redeem })) }),
     })); } finally { setBusy(false); }
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
     setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });
@@ -833,11 +860,11 @@ export default function AdminPage() {
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
         {(role === "admin"
-          ? (["register", "time", "reports", "bank", "floor", "vendors", "contracts", "tents", "team", "links", "settings"] as const)
+          ? (["register", "time", "reports", "bank", "floor", "vendors", "customers", "contracts", "tents", "team", "links", "settings"] as const)
           : (["register", "time", "floor"] as const)
         ).map((t) => (
           <button key={t} className={`btn small ${tab === t ? "" : "ghost"}`} onClick={() => { setTab(t); setReceipt(null); }}>
-            {t === "register" ? "🛒 REGISTER" : t === "time" ? "⏱ TIME" : t.toUpperCase()}
+            {t === "register" ? "🛒 REGISTER" : t === "time" ? "⏱ TIME" : t === "customers" ? "⭐ CUSTOMERS" : t.toUpperCase()}
           </button>
         ))}
         {role === "staff" && (
@@ -926,11 +953,26 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
+          {typeof receipt.discountCents === "number" && receipt.discountCents > 0 && (
+            <p style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>⭐ $5 reward applied</p>
+          )}
+          {receipt.customerContact ? (
+            <p style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>⭐ {receipt.customerPoints} points · {receipt.customerContact}{receipt.customerContact.includes("@") ? " · receipt emailed" : ""}</p>
+          ) : (
+            <div style={{ maxWidth: 340, margin: "8px auto" }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input placeholder="Email or phone for receipt & rewards" value={attachQ} onChange={(e) => setAttachQ(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && attachCustomer()} />
+                <button className="btn small" style={{ flex: "0 0 auto" }} onClick={attachCustomer}>ADD</button>
+              </div>
+              {attachMsg && <p className={attachMsg.includes("⭐") ? "ok" : "err"} style={{ marginTop: 6 }}>{attachMsg}</p>}
+            </div>
+          )}
           <p style={{ fontSize: 12, color: "var(--ash)" }}>
             Vendors notified, inventory updated.{autoPrint ? " Receipt sent to the printer." : ""}
           </p>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 10 }}>
-            <button className="btn" onClick={() => setReceipt(null)}>NEXT CUSTOMER →</button>
+            <button className="btn" onClick={() => { setReceipt(null); setCustQ(""); setCust(null); setRedeem(false); setCustMsg(""); setAttachQ(""); setAttachMsg(""); }}>NEXT CUSTOMER →</button>
             <button className="btn small ghost" onClick={() => printSale(receipt.id)}>REPRINT</button>
           </div>
         </div>
@@ -1032,6 +1074,28 @@ export default function AdminPage() {
                 <label>Customer name for CARD (the Stripe reader will fill this automatically in phase 2)</label>
                 <input value={cardName} onChange={(e) => setCardName(e.target.value)} placeholder="J. Whitaker" />
                 <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                </div>
+                <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", margin: "10px 0" }}>
+                  <b style={{ fontSize: 12.5 }}>⭐ REWARDS &amp; EMAIL RECEIPT (optional)</b>
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <input placeholder="Customer email or phone" value={custQ} onChange={(e) => { setCustQ(e.target.value); setCust(null); setRedeem(false); }}
+                      onKeyDown={(e) => e.key === "Enter" && lookupCust()} />
+                    <button className="btn small ghost" style={{ flex: "0 0 auto" }} onClick={lookupCust}>LOOK UP</button>
+                  </div>
+                  {cust && (
+                    <div style={{ fontSize: 12.5, marginTop: 6 }}>
+                      <b style={{ color: "var(--green)" }}>⭐ {cust.points} points</b>{cust.email ? ` · ${cust.email}` : ""}{cust.phone ? ` · ${cust.phone}` : ""}
+                      {cust.points >= 100 && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, cursor: "pointer", fontWeight: 700 }}>
+                          <input type="checkbox" checked={redeem} onChange={(e) => setRedeem(e.target.checked)} style={{ width: "auto" }} />
+                          REDEEM $5 OFF (100 pts)
+                        </label>
+                      )}
+                    </div>
+                  )}
+                  {custMsg && <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 4 }}>{custMsg}</p>}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
                   <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => completeSale("CASH")}>💵 CASH</button>
                   <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => completeSale("CARD")}>💳 CARD</button>
                 </div>
@@ -1725,6 +1789,40 @@ export default function AdminPage() {
             );
           })}
           {tentDates.length === 0 && <p style={{ textAlign: "center", color: "var(--ash)" }}>No tent dates opened yet — open a range above.</p>}
+        </div>
+      )}
+
+      {tab === "customers" && role === "admin" && (
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+            <h2 className="display" style={{ fontSize: 18 }}>CUSTOMERS ⭐</h2>
+            <button className="btn small ghost" onClick={async () => {
+              const r = await fetch("/api/admin/customers");
+              if (r.ok) { const d = await r.json(); setCustomers(d.customers); }
+            }}>REFRESH</button>
+          </div>
+          <p style={{ fontSize: 12.5, color: "var(--ash)" }}>Everyone who&rsquo;s given an email or phone — register, self-checkout, pre-orders, or following a vendor. 1 point per $2; $5 off at 100, redeemed at the register.</p>
+          {customers.length === 0 && <button className="btn small" style={{ marginTop: 8 }} onClick={async () => {
+            const r = await fetch("/api/admin/customers");
+            if (r.ok) { const d = await r.json(); setCustomers(d.customers); }
+          }}>LOAD CUSTOMERS</button>}
+          {customers.length > 0 && (
+            <table className="grid" style={{ marginTop: 10 }}>
+              <thead><tr><th>Contact</th><th>Points</th><th>Sales</th><th>Spent</th><th>Follows</th><th>Alerts</th></tr></thead>
+              <tbody>
+                {customers.map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.email || c.phone}</td>
+                    <td><b>{c.points}</b></td>
+                    <td>{c.saleCount}</td>
+                    <td>{money(c.spentCents)}</td>
+                    <td>{c.follows}</td>
+                    <td>{c.unsubscribed ? "❌ off" : "✅ on"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

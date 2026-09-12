@@ -301,3 +301,49 @@ export async function sendSetupGuideEmail(to: string, businessName: string, phon
     <p style="font-size:12px;color:#9ca3af;">Covers everything: products, labels (and which sticker sheets to buy), restocking, pre-orders, your public page, and getting paid. Stuck? Just reply to this email.</p>`;
   await send(to, "Your vendor setup guide — Community Harvest", shell(inner));
 }
+
+export async function sendCustomerReceiptEmail(
+  to: string, number: number,
+  lines: { name: string; quantity: number; priceCents: number }[],
+  subtotalCents: number, taxCents: number, discountCents: number, totalCents: number, points: number
+) {
+  const rows = lines.map((l) => `<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:3px 0;"><span>${l.quantity}&times; ${l.name}</span><b>$${((l.priceCents * l.quantity) / 100).toFixed(2)}</b></div>`).join("");
+  const toGo = Math.max(0, 100 - (points % 100));
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Receipt #${number} \u2705</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Thanks for shopping local!</p>
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
+      ${rows}
+      <div style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px;font-size:13.5px;display:flex;justify-content:space-between;"><span>Subtotal</span><b>$${(subtotalCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Sales tax</span><b>$${(taxCents / 100).toFixed(2)}</b></div>
+      ${discountCents > 0 ? `<div style="font-size:13.5px;display:flex;justify-content:space-between;color:#15803d;"><span>Rewards discount</span><b>\u2212$${(discountCents / 100).toFixed(2)}</b></div>` : ""}
+      <div style="font-size:15px;display:flex;justify-content:space-between;"><span><b>Total</b></span><b>$${(totalCents / 100).toFixed(2)}</b></div>
+    </div>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:12px 16px;">
+      <div style="font-size:14px;color:#15803d;"><b>\u2b50 You have ${points} reward points</b></div>
+      <div style="font-size:12px;color:#374151;margin-top:2px;">${points >= 100 ? "You&rsquo;ve earned $5 off — just say so at the register!" : `${toGo} more points and $5 comes off your next visit. You earn 1 point per $2.`}</div>
+    </div>`;
+  await send(to, `Receipt #${number} — Community Harvest`, shell(inner));
+}
+
+export async function sendFollowConfirmEmail(to: string, businessName: string, code: string, token: string) {
+  const inner = `
+    <div style="font-size:34px;line-height:1;">\ud83d\udd14</div>
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:6px 0 8px;letter-spacing:-0.02em;">You&rsquo;re following ${businessName}</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 16px;">We&rsquo;ll email you when they restock at Community Harvest — at most one heads-up a day, only when there&rsquo;s something on the shelf.</p>
+    <a href="${baseUrl()}/v/${code}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">See their booth</a>
+    <p style="font-size:11px;color:#9ca3af;margin:16px 0 0;"><a href="${baseUrl()}/u/${token}" style="color:#9ca3af;">Unsubscribe from all alerts</a></p>`;
+  await send(to, `Following ${businessName} — Community Harvest`, shell(inner));
+}
+
+export async function sendRestockAlertEmail(to: string, businessName: string, code: string, items: { name: string; priceCents: number }[], token: string) {
+  const rows = items.map((i) => `<div style="font-size:13.5px;padding:3px 0;display:flex;justify-content:space-between;"><span>${i.name}</span><b>$${(i.priceCents / 100).toFixed(2)}</b></div>`).join("");
+  const inner = `
+    <div style="font-size:34px;line-height:1;">\ud83c\udf3e</div>
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:6px 0 8px;letter-spacing:-0.02em;">${businessName} just restocked!</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Fresh on the shelf right now at Community Harvest, Mon&ndash;Sat 8&ndash;6:</p>
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">${rows}</div>
+    <a href="${baseUrl()}/v/${code}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">See what&rsquo;s on their shelf</a>
+    <p style="font-size:11px;color:#9ca3af;margin:16px 0 0;"><a href="${baseUrl()}/u/${token}" style="color:#9ca3af;">Unsubscribe</a></p>`;
+  await send(to, `${businessName} just restocked \ud83c\udf3e`, shell(inner));
+}

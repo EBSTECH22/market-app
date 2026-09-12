@@ -14,6 +14,10 @@ const markLiked = (id: string) => { try { window.localStorage.setItem(`ch_like_$
 
 export default function VendorPublicPage({ params }: { params: { code: string } }) {
   const [vendor, setVendor] = useState<Vendor | null>(null);
+  const [followOpen, setFollowOpen] = useState(false);
+  const [followEmail, setFollowEmail] = useState("");
+  const [followMsg, setFollowMsg] = useState("");
+  const [followDone, setFollowDone] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
   const [photos, setPhotos] = useState<string[]>([]);
   const [logoId, setLogoId] = useState<string | null>(null);
@@ -86,6 +90,14 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
   };
 
   if (missing) return <main style={{ padding: 60, textAlign: "center" }}>Vendor not found.</main>;
+  const doFollow = async () => {
+    setFollowMsg("");
+    const r = await fetch("/api/public/follow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vendorCode: vendor?.code, email: followEmail }) });
+    const d = await r.json();
+    if (!r.ok) { setFollowMsg(d.error || "Couldn't sign you up."); return; }
+    setFollowDone(true);
+  };
+
   if (!vendor) return (
     <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px" }}>
       <div className="skel" style={{ width: 180, height: 26, margin: "0 auto 14px" }} />
@@ -126,6 +138,23 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
         {avg !== null && <div style={{ fontSize: 13, fontWeight: 700 }}>{stars(Math.round(avg))} {avg} · {reviews.length} review{reviews.length === 1 ? "" : "s"}</div>}
         {vendor.publicBlurb && <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>{vendor.publicBlurb}</p>}
         <div style={{ fontSize: 11, color: "var(--ash)", marginTop: 4 }}>at Community Harvest — Food and Craft Market, Noble OK · <a href="/market">all vendors</a></div>
+        <div style={{ marginTop: 10 }}>
+          {!followOpen && !followDone && (
+            <button className="btn small ghost" onClick={() => setFollowOpen(true)}>🔔 GET RESTOCK ALERTS</button>
+          )}
+          {followOpen && !followDone && (
+            <div style={{ maxWidth: 320, margin: "0 auto" }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input type="email" placeholder="you@example.com" value={followEmail} onChange={(e) => setFollowEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && doFollow()} />
+                <button className="btn small" style={{ flex: "0 0 auto" }} onClick={doFollow}>🔔 FOLLOW</button>
+              </div>
+              {followMsg && <p className="err" style={{ marginTop: 6 }}>{followMsg}</p>}
+              <p style={{ fontSize: 10.5, color: "var(--ash)", marginTop: 4 }}>One email when they restock, max once a day. Unsubscribe anytime.</p>
+            </div>
+          )}
+          {followDone && <p className="ok" style={{ display: "inline-block" }}>🔔 You're in — we'll email you when {vendor.businessName} restocks ✓</p>}
+        </div>
         </div>
       </div>
 

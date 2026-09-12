@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { notifyVendorRestock } from "@/lib/customers";
 import { currentVendorId } from "@/lib/auth";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -10,6 +11,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!item || item.vendorId !== vendorId) return NextResponse.json({ error: "Item not found." }, { status: 404 });
 
   const body = await req.json();
+  let restock = false;
   const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
   if (body.priceDollars !== undefined) {
@@ -21,10 +23,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const q = Math.round(Number(body.quantity));
     if (Number.isNaN(q) || q < 0) return NextResponse.json({ error: "Invalid quantity." }, { status: 400 });
     data.quantity = q;
+    if (q > item.quantity) restock = true;
   }
   if (typeof body.active === "boolean") data.active = body.active;
   if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 
   const updated = await db.item.update({ where: { id: item.id }, data });
+  if (restock) notifyVendorRestock(vendorId).catch(() => {});
   return NextResponse.json({ item: updated });
 }

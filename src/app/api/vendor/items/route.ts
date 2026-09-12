@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { notifyVendorRestock } from "@/lib/customers";
 import { currentVendorId } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
@@ -21,5 +22,6 @@ export async function POST(req: NextRequest) {
   const item = await db.item.create({
     data: { vendorId, sku, name: name.trim(), priceCents: price, quantity: qty },
   });
+  notifyVendorRestock(vendorId).catch(() => {});
   return NextResponse.json({ item });
 }
