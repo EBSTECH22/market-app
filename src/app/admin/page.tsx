@@ -6,7 +6,7 @@ type Vendor = { id: string; code: string; businessName: string; contactName: str
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; quantity: number };
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendor: { businessName: string; code: string } };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string } };
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[] };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
@@ -1556,6 +1556,15 @@ export default function AdminPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div>
                       <span className="display" style={{ fontSize: 15 }}>BOOTH {c.boothLabel.toUpperCase()} · {c.vendor.businessName.toUpperCase()}</span>
+                      {c.vendorSignedAt && c.marketSignedAt ? (
+                        <span style={{ marginLeft: 7, background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>✅ FULLY EXECUTED</span>
+                      ) : c.vendorSignedAt ? (
+                        <span style={{ marginLeft: 7, background: "#fefce8", color: "#a16207", border: "1px solid #fde68a", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>✍️ AWAITING YOUR SIGNATURE</span>
+                      ) : c.marketSignedAt ? (
+                        <span style={{ marginLeft: 7, background: "#fefce8", color: "#a16207", border: "1px solid #fde68a", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>✍️ AWAITING VENDOR</span>
+                      ) : (
+                        <span style={{ marginLeft: 7, background: "#f3f4f6", color: "#6b7280", border: "1px solid var(--border)", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>UNSIGNED</span>
+                      )}
                       <div style={{ fontSize: 11.5, color: "var(--ash)" }}>
                         {money(c.monthlyRentCents)}/mo · started {new Date(c.startDate).toLocaleDateString()}
                         {" · "}
