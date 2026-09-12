@@ -93,7 +93,7 @@ export default function GuidePage() {
         <h2 className="display" style={{ fontSize: 16, marginBottom: 8 }}>WHEN YOU RESTOCK</h2>
         <Step n={1}>Come during a <b>restock window: 7–8 AM or 6–8 PM</b> (other times need staff approval — just ask).</Step>
         <Step n={2}>Sticker your new items <b>before</b> they go on the shelf.</Step>
-        <Step n={3}>In <b>📦 MY ITEMS</b>, tap <b>SET QTY</b> on each item and enter the new total on the floor. That number is what shoppers see online — keep it honest and your booth sells even when you&rsquo;re not there.</Step>
+        <Step n={3}>In <b>📦 MY ITEMS</b>, tap <b>➕ RESTOCK</b> on each item and enter <b>how many you just added</b> — the system does the math. (Miscounted or lost some? Fix the exact total inside ✏️ EDIT.) The count is what shoppers see online — keep it honest and your booth sells even when you&rsquo;re not there.</Step>
       </div>
 
       <div className="card" style={{ marginBottom: 16 }} id="inbox">

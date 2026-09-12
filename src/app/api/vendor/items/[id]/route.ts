@@ -19,6 +19,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (!price || price <= 0) return NextResponse.json({ error: "Enter a valid price." }, { status: 400 });
     data.priceCents = price;
   }
+  if (body.addQuantity !== undefined) {
+    const n = Math.round(Number(body.addQuantity));
+    if (Number.isNaN(n) || n <= 0 || n > 999) return NextResponse.json({ error: "Enter how many you're adding (1–999)." }, { status: 400 });
+    const updated = await db.item.update({ where: { id: item.id }, data: { quantity: { increment: n } } });
+    notifyVendorRestock(vendorId).catch(() => {});
+    return NextResponse.json({ item: updated });
+  }
   if (body.quantity !== undefined) {
     const q = Math.round(Number(body.quantity));
     if (Number.isNaN(q) || q < 0) return NextResponse.json({ error: "Invalid quantity." }, { status: 400 });

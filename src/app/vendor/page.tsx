@@ -449,10 +449,10 @@ export default function VendorDashboard() {
                       <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{it.sku} · <b style={{ color: it.quantity > 0 ? "var(--green)" : "var(--red)" }}>{it.quantity} on the floor</b></div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button className="btn small ghost" disabled={busy} onClick={() => {
-                        const v = prompt(`New quantity on the floor for ${it.name}:`, String(it.quantity));
-                        if (v !== null) patchItem(it.id, { quantity: v });
-                      }}>SET QTY</button>
+                      <button className="btn small" disabled={busy} onClick={() => {
+                        const v = prompt(`RESTOCKING ${it.name} — how many are you ADDING to the floor? (currently ${it.quantity})`);
+                        if (v !== null && v.trim()) patchItem(it.id, { addQuantity: v });
+                      }}>➕ RESTOCK</button>
                       <button className="btn small ghost" disabled={busy} onClick={() => {
                         if (editItem === it.id) { setEditItem(null); return; }
                         setEditItem(it.id);
@@ -466,7 +466,7 @@ export default function VendorDashboard() {
                       <input value={editIF.name} onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))} />
                       <label>Price (dollars)</label>
                       <input type="number" min="0.5" step="0.5" value={editIF.price} onChange={(e) => setEditIF((f) => ({ ...f, price: e.target.value }))} />
-                      <label>Quantity on the floor</label>
+                      <label>Correct the total on the floor (overrides the count — for restocks use ➕ RESTOCK instead)</label>
                       <input type="number" min="0" step="1" value={editIF.qty} onChange={(e) => setEditIF((f) => ({ ...f, qty: e.target.value }))} />
                       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                         <button className="btn small" disabled={busy} onClick={async () => {
