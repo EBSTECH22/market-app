@@ -59,16 +59,26 @@ export default function SelfCheckout() {
   const startScan = async () => {
     setMsg("");
     try {
-      const { Html5Qrcode } = await import("html5-qrcode");
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import("html5-qrcode");
       setScanning(true);
       await new Promise((r) => setTimeout(r, 80)); // let the video box render first
-      const scanner = new Html5Qrcode("scan-box");
+      const scanner = new Html5Qrcode("scan-box", {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.UPC_A,
+        ],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        verbose: false,
+      });
       scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
       let last = "";
       let lastAt = 0;
       await scanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 260, height: 140 } },
+        { fps: 12, qrbox: (w: number, _h: number) => ({ width: Math.min(340, Math.floor(w * 0.92)), height: 150 }), aspectRatio: 1.4 },
         (text) => {
           const now = Date.now();
           if (text === last && now - lastAt < 2500) return; // debounce repeat reads
