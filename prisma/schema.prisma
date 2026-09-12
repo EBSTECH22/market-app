@@ -36,6 +36,7 @@ model Item {
   sku        String   @unique
   name       String
   priceCents Int
+  salePercent Int      @default(0)
   quantity   Int      @default(0)
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())

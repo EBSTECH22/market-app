@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { effectivePriceCents } from "@/lib/pricing";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -13,7 +14,7 @@ export async function GET() {
   });
   const items = await db.item.findMany({
     where: { active: true, quantity: { gt: 0 }, vendor: { active: true } },
-    select: { name: true, priceCents: true, quantity: true, vendor: { select: { code: true } } },
+    select: { name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { code: true } } },
     orderBy: { name: "asc" },
   });
   const logos = await db.vendorPhoto.findMany({ where: { kind: "LOGO" }, select: { id: true, vendorId: true } });
@@ -33,7 +34,7 @@ export async function GET() {
   return NextResponse.json({
     vendors: vendors.map((v) => ({
       ...v,
-      items: items.filter((i) => i.vendor.code === v.code).map(({ vendor, ...rest }) => rest),
+      items: items.filter((i) => i.vendor.code === v.code).map((i) => ({ name: i.name, quantity: i.quantity, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)) })),
       rating: ratings[v.code] || null,
       logoId: logoByCode[v.code] || null,
     })),

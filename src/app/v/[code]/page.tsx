@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Comment = { id: string; name: string; body: string; likes: number; createdAt: string };
 type Review = { id: string; name: string; rating: number; body: string; likes: number; createdAt: string; comments: Comment[] };
 type Vendor = { code: string; businessName: string; publicBlurb: string; acceptsPreorders: boolean; acceptsRequests: boolean };
-type Item = { name: string; priceCents: number; quantity: number };
+type Item = { name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number };
 
 const money = (c: number) => `$${(c / 100).toFixed(2)}`;
 const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
@@ -175,7 +175,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
         {items.map((i) => (
           <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
             <span>{i.name}{i.quantity <= 3 ? <b> · only {i.quantity} left</b> : ""}</span>
-            <b>{money(i.priceCents)}</b>
+            <span>{(i.salePercent || 0) > 0 && <><s style={{ color: "var(--ash)", fontWeight: 400 }}>{money(i.basePriceCents || i.priceCents)}</s>{" "}<span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px", marginRight: 6 }}>{i.salePercent}% OFF</span></>}<b style={(i.salePercent || 0) > 0 ? { color: "var(--red)" } : {}}>{money(i.priceCents)}</b></span>
           </div>
         ))}
       </div>

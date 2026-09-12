@@ -12,7 +12,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const body = await req.json();
   let restock = false;
-  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean } = {};
+  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
   if (body.priceDollars !== undefined) {
     const price = Math.round(Number(body.priceDollars) * 100);
@@ -31,6 +31,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (Number.isNaN(q) || q < 0) return NextResponse.json({ error: "Invalid quantity." }, { status: 400 });
     data.quantity = q;
     if (q > item.quantity) restock = true;
+  }
+  if (body.salePercent !== undefined) {
+    const pct = Math.round(Number(body.salePercent));
+    if (Number.isNaN(pct) || pct < 0 || pct > 90) return NextResponse.json({ error: "Sale must be 0–90%." }, { status: 400 });
+    data.salePercent = pct;
   }
   if (typeof body.active === "boolean") data.active = body.active;
   if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });

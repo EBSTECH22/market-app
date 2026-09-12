@@ -4,6 +4,7 @@ import { isStaff } from "@/lib/auth";
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
 import { getTaxRatePercent, getCardAdjustPercent } from "@/lib/settings";
+import { effectivePriceCents } from "@/lib/pricing";
 
 import { pushToVendor } from "@/lib/push";
 
@@ -38,14 +39,15 @@ export async function POST(req: NextRequest) {
     const item = items.find((i) => i.id === l.itemId);
     if (!item) return NextResponse.json({ error: "An item on the ticket no longer exists." }, { status: 400 });
     const q = Math.max(1, Math.round(l.quantity));
-    const gross = item.priceCents * q;
+    const unit = effectivePriceCents(item);
+    const gross = unit * q;
     const commission = Math.round((gross * item.vendor.commissionPercent) / 100);
     subtotal += gross;
     saleLines.push({
       itemId: item.id,
       vendorId: item.vendorId,
       name: item.name,
-      priceCents: item.priceCents,
+      priceCents: unit,
       quantity: q,
       commissionCents: commission,
       vendorNetCents: gross - commission,

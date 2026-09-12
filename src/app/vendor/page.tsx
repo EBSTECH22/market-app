@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean salePercent?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
   vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
@@ -44,7 +44,7 @@ export default function VendorDashboard() {
   const [poMsg, setPoMsg] = useState("");
   const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "settings">("home");
   const [editItem, setEditItem] = useState<string | null>(null);
-  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "" });
+  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0" });
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -437,6 +437,23 @@ export default function VendorDashboard() {
               <h2 className="display" style={{ fontSize: 17 }}>YOUR ITEMS ON THE FLOOR</h2>
               <a className="btn small" href="/vendor/labels">🏷 PRINT BARCODE LABELS</a>
             </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+              <button className="btn small ghost" disabled={busy} onClick={async () => {
+                const v = prompt("Run a sale on EVERYTHING — % off all your items (5–90):");
+                if (v === null || !v.trim()) return;
+                const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: v }) });
+                const d = await r.json();
+                if (!r.ok) { alert(d.error || "Couldn't start the sale."); return; }
+                load();
+              }}>🏷️ RUN A SALE ON EVERYTHING</button>
+              {me.items.some((it) => it.active && (it.salePercent || 0) > 0) && (
+                <button className="btn small ghost" disabled={busy} onClick={async () => {
+                  if (!confirm("End all sales and go back to full price?")) return;
+                  const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: 0 }) });
+                  if (r.ok) load();
+                }}>END ALL SALES</button>
+              )}
+            </div>
             <ul style={{ listStyle: "none", marginTop: 8 }}>
               {me.items.filter((it) => it.active).map((it) => (
                 <li key={it.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
@@ -456,7 +473,7 @@ export default function VendorDashboard() {
                       <button className="btn small ghost" disabled={busy} onClick={() => {
                         if (editItem === it.id) { setEditItem(null); return; }
                         setEditItem(it.id);
-                        setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity) });
+                        setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0) });
                       }}>✏️ EDIT</button>
                     </div>
                   </div>
@@ -464,13 +481,15 @@ export default function VendorDashboard() {
                     <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
                       <label>Item name (prints on your labels)</label>
                       <input value={editIF.name} onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))} />
+                      <label>Sale — % off (0 = no sale; register &amp; online charge the sale price automatically)</label>
+                      <input type="number" min="0" max="90" step="5" value={editIF.sale} onChange={(e) => setEditIF((f) => ({ ...f, sale: e.target.value }))} />
                       <label>Price (dollars)</label>
                       <input type="number" min="0.5" step="0.5" value={editIF.price} onChange={(e) => setEditIF((f) => ({ ...f, price: e.target.value }))} />
                       <label>Correct the total on the floor (overrides the count — for restocks use ➕ RESTOCK instead)</label>
                       <input type="number" min="0" step="1" value={editIF.qty} onChange={(e) => setEditIF((f) => ({ ...f, qty: e.target.value }))} />
                       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                         <button className="btn small" disabled={busy} onClick={async () => {
-                          await patchItem(it.id, { name: editIF.name, priceDollars: editIF.price, quantity: editIF.qty });
+                          await patchItem(it.id, { name: editIF.name, priceDollars: editIF.price, quantity: editIF.qty, salePercent: editIF.sale });
                           setEditItem(null);
                         }}>SAVE</button>
                         <button className="btn small ghost" onClick={() => setEditItem(null)}>CANCEL</button>
@@ -501,7 +520,7 @@ export default function VendorDashboard() {
                   {me.items.filter((it) => !it.active).map((it) => (
                     <li key={it.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, opacity: 0.75 }}>
                       <span style={{ fontSize: 13.5 }}>
-                        <b>{it.name}</b> <span style={{ color: "var(--ash)", fontSize: 11.5 }}>{it.sku} · ${(it.priceCents / 100).toFixed(2)}</span>
+                        <b>{it.name}</b>{(it.salePercent || 0) > 0 && <span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px", marginLeft: 6 }}>🏷️ {it.salePercent}% OFF</span>} <span style={{ color: "var(--ash)", fontSize: 11.5 }}>{it.sku} · ${(it.priceCents / 100).toFixed(2)}</span>
                       </span>
                       <button className="btn small ghost" disabled={busy} onClick={() => patchItem(it.id, { active: true })}>♻️ BRING BACK</button>
                     </li>

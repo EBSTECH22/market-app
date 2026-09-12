@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { effectivePriceCents } from "@/lib/pricing";
 import { isStaff } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -17,5 +18,6 @@ export async function GET(req: NextRequest) {
   if (!item.vendor.active) {
     return NextResponse.json({ error: `${item.vendor.businessName} is deactivated — their items can't be sold. Pull it from the floor.` }, { status: 400 });
   }
-  return NextResponse.json({ item });
+  const unit = effectivePriceCents(item);
+  return NextResponse.json({ item: { ...item, priceCents: unit, basePriceCents: item.priceCents, salePercent: item.salePercent } });
 }

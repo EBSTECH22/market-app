@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 type V = {
   code: string; businessName: string; publicBlurb: string;
   acceptsPreorders: boolean; acceptsRequests: boolean;
-  items: { name: string; priceCents: number; quantity: number }[];
+  items: { name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number }[];
   rating: { avg: number; n: number } | null;
   logoId: string | null;
 };
@@ -98,7 +98,7 @@ export default function MarketDirectory() {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               {v.items.slice(0, 12).map((i) => (
                 <span key={i.name} style={{ border: "1px solid var(--border)", borderRadius: 999, background: "#f9fafb", padding: "4px 11px", fontSize: 12 }}>
-                  {i.name} · {money(i.priceCents)}{i.quantity <= 3 ? ` · ${i.quantity} left` : ""}
+                  {i.name} · {(i.salePercent || 0) > 0 && <s style={{ color: "var(--ash)" }}>{money(i.basePriceCents || i.priceCents)}</s>}{(i.salePercent || 0) > 0 ? " " : ""}<b style={(i.salePercent || 0) > 0 ? { color: "var(--red)" } : {}}>{money(i.priceCents)}</b>{(i.salePercent || 0) > 0 ? ` · ${i.salePercent}% OFF` : ""}{i.quantity <= 3 ? ` · ${i.quantity} left` : ""}
                 </span>
               ))}
               {v.items.length > 12 && <span style={{ fontSize: 12, padding: "3px 4px" }}>+{v.items.length - 12} more…</span>}

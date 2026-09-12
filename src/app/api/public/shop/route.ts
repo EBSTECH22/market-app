@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { effectivePriceCents } from "@/lib/pricing";
 import { stripe } from "@/lib/stripe";
 import { randomBytes } from "crypto";
 import type { CartLine } from "@/lib/selfcheckout";
@@ -18,13 +19,13 @@ export async function GET() {
   if (await selfCheckoutPaused()) return NextResponse.json({ paused: true, taxRatePercent: 0, items: [] });
   const items = await db.item.findMany({
     where: sellable,
-    select: { id: true, sku: true, name: true, priceCents: true, quantity: true, vendor: { select: { businessName: true } } },
+    select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { businessName: true } } },
     orderBy: { name: "asc" },
   });
   const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
   return NextResponse.json({
     taxRatePercent: setting ? Number(setting.value) : 0,
-    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, quantity: i.quantity, vendorName: i.vendor.businessName })),
+    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, vendorName: i.vendor.businessName })),
   });
 }
 
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
     if (!item || !item.active || !item.vendor.active) return NextResponse.json({ error: `Nothing found for ${sku} — check the code under the barcode.` }, { status: 404 });
     if (!item.vendor.allowSelfCheckout) return NextResponse.json({ error: `${item.vendor.businessName} items go through the register — take this one up front. 😊` }, { status: 400 });
     if (item.quantity <= 0) return NextResponse.json({ error: `${item.name} shows sold out — grab a staff member if you're holding one.` }, { status: 400 });
-    return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: item.priceCents, quantity: item.quantity, vendorName: item.vendor.businessName } });
+    return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), basePriceCents: item.priceCents, salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, vendorName: item.vendor.businessName } });
   }
 
   if (b.action === "checkout") {
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `${sku} isn't available for self-checkout — remove it or pay at the register.` }, { status: 400 });
       }
       if (item.quantity < qty) return NextResponse.json({ error: `Only ${item.quantity} of ${item.name} left in the system — adjust your quantity.` }, { status: 400 });
-      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: item.priceCents, quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName });
+      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName });
     }
 
     const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
