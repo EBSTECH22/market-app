@@ -76,7 +76,7 @@ export default function SelfCheckout() {
         experimentalFeatures: { useBarCodeDetectorIfSupported: true },
         verbose: false,
       });
-      scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
+      scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void; pause: (v?: boolean) => void; resume: () => void };
       holdRef.current = false;
       await scanner.start(
         { facingMode: "environment" },
