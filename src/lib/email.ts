@@ -55,6 +55,34 @@ export async function sendSaleEmail(
   await send(vendor.email, `You made a sale! ${lines[0].name}${lines.length > 1 ? " + more" : ""}`, shell(inner));
 }
 
+function installBlock(phoneType: string): string {
+  const iphone = `
+    <div style="text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin:10px 0;">
+      <div style="font-weight:800;font-size:14px;margin-bottom:6px;">\ud83d\udcf1 PUT THE VENDOR APP ON YOUR IPHONE</div>
+      <div style="font-size:13px;line-height:1.7;">
+        1. Open <b>Safari</b> and go to <a href="${baseUrl()}">market.dailybreadbaked.com</a><br>
+        2. Tap the <b>Share</b> button (square with the up arrow, bottom center)<br>
+        3. Scroll down, tap <b>&ldquo;Add to Home Screen&rdquo;</b>, then <b>Add</b><br>
+        4. Open the new icon and log in<br>
+        5. For sale alerts: <b>\u2699\ufe0f SETTINGS \u2192 SALE ALERTS \u2192 TURN ON</b> (iOS 16.4+, from the icon only)
+      </div>
+    </div>`;
+  const android = `
+    <div style="text-align:left;background:#fff;border:1px dashed #000;padding:12px 18px;margin:10px 0;">
+      <div style="font-weight:800;font-size:14px;margin-bottom:6px;">\ud83e\udd16 PUT THE VENDOR APP ON YOUR ANDROID</div>
+      <div style="font-size:13px;line-height:1.7;">
+        1. Open <b>Chrome</b> and go to <a href="${baseUrl()}">market.dailybreadbaked.com</a><br>
+        2. Tap the <b>\u22ee menu</b> (top right)<br>
+        3. Tap <b>&ldquo;Add to Home screen&rdquo;</b> (or <b>&ldquo;Install app&rdquo;</b>), then confirm<br>
+        4. Open the new icon and log in<br>
+        5. For sale alerts: <b>\u2699\ufe0f SETTINGS \u2192 SALE ALERTS \u2192 TURN ON</b>
+      </div>
+    </div>`;
+  if (phoneType === "IPHONE") return iphone;
+  if (phoneType === "ANDROID") return android;
+  return `<p style="font-size:13px;color:#333;">Want the portal as an app icon on your phone, with sale notifications? Follow the 2-minute guide: <a href="${baseUrl()}/install"><b>${baseUrl().replace("https://", "")}/install</b></a></p>`;
+}
+
 export async function sendWelcomeEmail(
   vendor: { email: string; businessName: string; code: string },
   tempPassword: string
@@ -253,11 +281,13 @@ export async function sendContractSignEmail(to: string, businessName: string, li
   await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner));
 }
 
-export async function sendExecutedContractEmail(to: string, businessName: string, link: string) {
+export async function sendExecutedContractEmail(to: string, businessName: string, link: string, phoneType: string = "") {
   const inner = `
     <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">YOUR CONTRACT IS FULLY SIGNED \u2705</h2>
     <p style="font-size:14px;color:#333;">Hi ${businessName} — both you and Community Harvest have signed your booth rental agreement. It&rsquo;s official! Your copy (agreement, application, and Market Rules, with both signatures) is at the link below — open it anytime, and use the print button to save a PDF for your records.</p>
     <p style="margin:18px 0;"><a href="${link}" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">VIEW &amp; PRINT MY SIGNED CONTRACT</a></p>
-    <p style="font-size:12px;color:#777;">Welcome to the vendor family. \ud83c\udf3e We&rsquo;ll be in touch about move-in and your vendor login.</p>`;
+    <p style="font-size:12px;color:#777;">Welcome to the vendor family. \ud83c\udf3e</p>
+    ${installBlock(phoneType)}
+    <p style="font-size:12px;color:#777;">Full guide for either phone, anytime: <a href="${baseUrl()}/install">${baseUrl().replace("https://", "")}/install</a></p>`;
   await send(to, "Fully signed — your Community Harvest booth contract \u2705", shell(inner));
 }

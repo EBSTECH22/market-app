@@ -52,8 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   });
   try { await pushToAdmin("Contract signed ✍️", `${contract.vendor.businessName} signed booth ${contract.boothLabel}${contract.marketSignedAt ? " — fully executed ✅" : " — your countersignature is next"}`); } catch {}
   if (contract.marketSignedAt) {
+    const app = await db.vendorApplication.findFirst({ where: { email: { equals: contract.vendor.email, mode: "insensitive" } }, orderBy: { createdAt: "desc" } });
     const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
-    try { await sendExecutedContractEmail(contract.vendor.email, contract.vendor.businessName, `${base}/sign/${params.token}`); } catch {}
+    try { await sendExecutedContractEmail(contract.vendor.email, contract.vendor.businessName, `${base}/sign/${params.token}`, app?.phoneType || ""); } catch {}
   }
   return NextResponse.json({ ok: true });
 }

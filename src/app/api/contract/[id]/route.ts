@@ -53,8 +53,9 @@ async function executedCopy(req: NextRequest, contractId: string) {
     token = randomBytes(16).toString("hex");
     await db.contract.update({ where: { id: c.id }, data: { signToken: token } });
   }
+  const app = await db.vendorApplication.findFirst({ where: { email: { equals: c.vendor.email, mode: "insensitive" } }, orderBy: { createdAt: "desc" } });
   const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
-  try { await sendExecutedContractEmail(c.vendor.email, c.vendor.businessName, `${base}/sign/${token}`); } catch {}
+  try { await sendExecutedContractEmail(c.vendor.email, c.vendor.businessName, `${base}/sign/${token}`, app?.phoneType || ""); } catch {}
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

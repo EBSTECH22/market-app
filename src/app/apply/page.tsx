@@ -230,6 +230,13 @@ export default function ApplyPage() {
           <input value={f.availability || ""} onChange={set("availability")} placeholder="Weekly restock, more in spring" />
         </F>
         <F label="How did you hear about us?"><input value={f.heardFrom || ""} onChange={set("heardFrom")} /></F>
+        <F label="What kind of phone do you use? (if you're selected, your signed contract comes with a setup guide made for your phone)">
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[["IPHONE", "📱 iPhone"], ["ANDROID", "🤖 Android"], ["OTHER", "Something else"]].map(([v, label]) => (
+              <button key={v} type="button" className={`btn small ${f.phoneType === v ? "" : "ghost"}`} onClick={() => setF((x) => ({ ...x, phoneType: v }))}>{label}</button>
+            ))}
+          </div>
+        </F>
         <F label="Anything else we should know?"><textarea rows={2} value={f.notes || ""} onChange={set("notes")} /></F>
 
         <div style={{ marginTop: 16 }}>
