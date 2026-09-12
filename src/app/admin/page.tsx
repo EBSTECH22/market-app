@@ -1702,6 +1702,7 @@ export default function AdminPage() {
             <tr><td><a href="/market" target="_blank" rel="noopener">/market</a></td><td>Shopper directory — every vendor + what&rsquo;s on the floor right now. Put this on your website and socials.</td></tr>
             <tr><td><a href="/apply" target="_blank" rel="noopener">/apply</a></td><td>Vendor application.</td></tr>
             <tr><td><a href="/tents" target="_blank" rel="noopener">/tents</a></td><td>Outdoor tent booking — $12.50 deposit online, $12.50 at the desk.</td></tr>
+            <tr><td><a href="/rules" target="_blank" rel="noopener">/rules</a></td><td>Market Rules &amp; booth standards — part of every vendor contract. Updates go through me and post instantly.</td></tr>
             <tr><td><a href="/shop" target="_blank" rel="noopener">/shop</a></td><td>Self-checkout — shoppers scan &amp; pay by card, no cashier. Print signs at <a href="/shop/sign" target="_blank" rel="noopener">/shop/sign</a>.</td></tr>
             <tr><td>/v/CODE</td><td>Each vendor&rsquo;s public page (reviews + messaging) — their table QR points here.{vendors.length > 0 ? " Yours:" : ""}</td></tr>
             {vendors.filter((v) => v.active).map((v) => (

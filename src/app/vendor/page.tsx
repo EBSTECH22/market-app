@@ -391,6 +391,7 @@ export default function VendorDashboard() {
               <a className="btn small ghost" href="/vendor/labels">🏷 PRINT LABELS</a>
               <a className="btn small ghost" href="/vendor/qr">📱 PRINT TABLE QR</a>
               <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">👀 VIEW MY PUBLIC PAGE</a>
+              <a className="btn small ghost" href="/rules" target="_blank" rel="noopener">📋 MARKET RULES</a>
             </div>
           </div>
 

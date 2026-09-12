@@ -93,9 +93,9 @@ export default function ApplyPage() {
       )}
 
       <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#14532d", borderRadius: 12, textAlign: "center", padding: "14px", marginBottom: 16 }}>
-        <div className="display" style={{ fontSize: 17 }}>15 STANDARD BOOTHS AVAILABLE</div>
+        <div className="display" style={{ fontSize: 17 }}>SPACE FOR ABOUT 15 STANDARD BOOTHS</div>
         <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 4 }}>
-          Depending on vendor space needs, final availability may be more or less — applications are reviewed in the order they arrive.
+          That number shrinks as vendors claim bigger spaces — applications are reviewed in the order they arrive. Applying is FREE. <a href="/rules" style={{ color: "inherit", fontWeight: 700 }}>Booth standards →</a>
         </div>
       </div>
 
