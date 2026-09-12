@@ -7,6 +7,24 @@ export default function VendorLoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [platform, setPlatform] = useState<"IOS" | "ANDROID" | "OTHER" | "INSTALLED">("OTHER");
+  const [installEvt, setInstallEvt] = useState<{ prompt: () => Promise<void> } | null>(null);
+
+  useEffect(() => {
+    // which phone is this, and is the app already on the home screen?
+    const ua = navigator.userAgent;
+    const standalone = window.matchMedia("(display-mode: standalone)").matches
+      || (navigator as unknown as { standalone?: boolean }).standalone === true;
+    if (standalone) setPlatform("INSTALLED");
+    else if (/iPhone|iPad|iPod/i.test(ua)) setPlatform("IOS");
+    else if (/Android/i.test(ua)) setPlatform("ANDROID");
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallEvt(e as unknown as { prompt: () => Promise<void> });
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+  }, []);
 
   useEffect(() => {
     // already logged in? go to the dashboard
@@ -53,6 +71,42 @@ export default function VendorLoginPage() {
           No account yet? Booth space is $150/mo for a 5×5 — ask at the market or email us.
         </p>
       </div>
+
+      {platform === "IOS" && (
+        <div className="card" style={{ marginTop: 14, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+          <b style={{ fontSize: 13.5 }}>📱 Put this on your home screen (2 minutes)</b>
+          <ol style={{ fontSize: 12.5, margin: "6px 0 0 18px", lineHeight: 1.8, listStyle: "decimal" }}>
+            <li>Tap the <b>Share</b> button below — the square with the up arrow</li>
+            <li>Scroll down, tap <b>&ldquo;Add to Home Screen,&rdquo;</b> then <b>Add</b></li>
+            <li>Open the new 🌾 icon — you&rsquo;ll get a real app, and sale alerts can buzz your phone</li>
+          </ol>
+          <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 6 }}>Full guide with everything else: <a href="/guide"><b>market.dailybreadbaked.com/guide</b></a></p>
+        </div>
+      )}
+
+      {platform === "ANDROID" && (
+        <div className="card" style={{ marginTop: 14, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+          <b style={{ fontSize: 13.5 }}>🤖 Put this on your home screen (2 minutes)</b>
+          {installEvt ? (
+            <div style={{ marginTop: 8 }}>
+              <button className="btn small" onClick={() => installEvt.prompt()}>⬇️ INSTALL THE APP — ONE TAP</button>
+            </div>
+          ) : (
+            <ol style={{ fontSize: 12.5, margin: "6px 0 0 18px", lineHeight: 1.8, listStyle: "decimal" }}>
+              <li>Tap the <b>⋮ menu</b> in the top-right corner of Chrome</li>
+              <li>Tap <b>&ldquo;Add to Home screen&rdquo;</b> (or <b>&ldquo;Install app&rdquo;</b>) and confirm</li>
+              <li>Open the new 🌾 icon — real app, and sale alerts can buzz your phone</li>
+            </ol>
+          )}
+          <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 6 }}>Full guide with everything else: <a href="/guide"><b>market.dailybreadbaked.com/guide</b></a></p>
+        </div>
+      )}
+
+      {platform === "OTHER" && (
+        <p style={{ textAlign: "center", fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
+          Setting up on your phone? The full vendor guide is at <a href="/guide"><b>/guide</b></a>
+        </p>
+      )}
     </main>
   );
 }
