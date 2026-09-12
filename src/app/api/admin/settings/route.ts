@@ -5,9 +5,20 @@ import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
+async function getRentPerSqft(): Promise<number> {
+  const row = await db.setting.findUnique({ where: { key: "rentPerSqft" } });
+  const v = row ? Number(row.value) : NaN;
+  return Number.isFinite(v) && v > 0 ? v : 6; // 5x5 at $150 = $6/sqft
+}
+
+async function getSelfCheckoutPaused(): Promise<boolean> {
+  const row = await db.setting.findUnique({ where: { key: "selfCheckoutPaused" } });
+  return row?.value === "1";
+}
+
 export async function GET() {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent() });
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused() });
 }
 
 export async function POST(req: NextRequest) {
@@ -28,6 +39,19 @@ export async function POST(req: NextRequest) {
       update: { value: JSON.stringify(banner) },
     });
     return NextResponse.json({ ok: true, banner });
+  }
+
+  if (body.selfCheckoutPaused !== undefined) {
+    const paused = !!body.selfCheckoutPaused;
+    await db.setting.upsert({ where: { key: "selfCheckoutPaused" }, create: { key: "selfCheckoutPaused", value: paused ? "1" : "0" }, update: { value: paused ? "1" : "0" } });
+    return NextResponse.json({ ok: true, selfCheckoutPaused: paused });
+  }
+
+  if (body.rentPerSqft !== undefined) {
+    const r = Number(body.rentPerSqft);
+    if (Number.isNaN(r) || r <= 0 || r > 100) return NextResponse.json({ error: "Rate must be between 0 and 100 $/sqft." }, { status: 400 });
+    await db.setting.upsert({ where: { key: "rentPerSqft" }, create: { key: "rentPerSqft", value: String(r) }, update: { value: String(r) } });
+    return NextResponse.json({ ok: true, rentPerSqft: r });
   }
 
   const v = Number(body.taxRatePercent);

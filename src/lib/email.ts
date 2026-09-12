@@ -224,3 +224,22 @@ export async function sendTentWeatherCreditEmail(to: string, name: string, date:
     <a href="${baseUrl()}/tents?credit=${token}" style="display:inline-block;background:#000;color:#fff;font-weight:800;font-size:15px;padding:14px 26px;border-radius:0;text-decoration:none;">PICK A NEW DATE</a>`;
   await send(to, `Weather day — your tent deposit became a credit`, shell(inner));
 }
+
+export async function sendSelfCheckoutReceiptEmail(
+  to: string, number: number,
+  lines: { name: string; quantity: number; priceCents: number }[],
+  subtotalCents: number, taxCents: number, totalCents: number
+) {
+  const rows = lines.map((l) => `<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:3px 0;"><span>${l.quantity}&times; ${l.name}</span><b>$${((l.priceCents * l.quantity) / 100).toFixed(2)}</b></div>`).join("");
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">RECEIPT — #${number} ✅</h2>
+    <p style="font-size:14px;color:#555;">Thanks for shopping Community Harvest! Here&rsquo;s your self-checkout receipt.</p>
+    <div style="display:inline-block;text-align:left;background:#fff;border:1px dashed #000;padding:14px 20px;margin:8px 0;min-width:240px;">
+      ${rows}
+      <div style="border-top:1px solid #000;margin-top:6px;padding-top:6px;font-size:13.5px;display:flex;justify-content:space-between;"><span>Subtotal</span><b>$${(subtotalCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Sales tax</span><b>$${(taxCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:15px;display:flex;justify-content:space-between;"><span><b>TOTAL</b></span><b>$${(totalCents / 100).toFixed(2)}</b></div>
+    </div>
+    <p style="font-size:12px;color:#999;">Community Harvest — Food and Craft Market · Noble, Oklahoma</p>`;
+  await send(to, `Receipt #${number} — Community Harvest`, shell(inner));
+}

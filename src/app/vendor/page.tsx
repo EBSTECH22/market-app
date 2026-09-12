@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 
@@ -32,6 +32,7 @@ export default function VendorDashboard() {
   const [pubPre, setPubPre] = useState(false);
   const [pubReq, setPubReq] = useState(false);
   const [pubBlurb, setPubBlurb] = useState("");
+  const [pubSelf, setPubSelf] = useState(true);
   const [pubMsg, setPubMsg] = useState("");
   const [myPhotos, setMyPhotos] = useState<{ id: string; kind: string }[]>([]);
   const [photoMsg, setPhotoMsg] = useState("");
@@ -52,6 +53,7 @@ export default function VendorDashboard() {
       setPubPre(!!data.vendor.acceptsPreorders);
       setPubReq(!!data.vendor.acceptsRequests);
       setPubBlurb(data.vendor.publicBlurb || "");
+      setPubSelf(data.vendor.allowSelfCheckout !== false);
     }
   }, []);
 
@@ -187,7 +189,7 @@ export default function VendorDashboard() {
     setPubMsg("");
     const r = await fetch("/api/vendor/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb }),
+      body: JSON.stringify({ acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb, allowSelfCheckout: pubSelf }),
     });
     setPubMsg(r.ok ? "Saved. ✓" : "Couldn't save.");
   };
@@ -563,6 +565,10 @@ export default function VendorDashboard() {
         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
           <input type="checkbox" checked={pubReq} onChange={(e) => setPubReq(e.target.checked)} style={{ width: "auto" }} />
           Accept REQUESTS
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={pubSelf} onChange={(e) => setPubSelf(e.target.checked)} style={{ width: "auto" }} />
+          Allow SELF-CHECKOUT <span style={{ fontWeight: 400, color: "var(--ash)" }}>(shoppers can scan &amp; pay your items on their phone — off means register only)</span>
         </label>
         <label>Your logo (optional — brands your card on the market directory)</label>
         <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "4px 0 8px", flexWrap: "wrap" }}>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; balance: number };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; quantity: number };
@@ -111,6 +111,7 @@ export default function AdminPage() {
   const [cW, setCW] = useState("5"); const [cD, setCD] = useState("5");
   const [cMode, setCMode] = useState<"standard" | "custom">("standard");
   const [rentPerSqft, setRentPerSqft] = useState(6);
+  const [scPaused, setScPaused] = useState(false);
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
   const [adminPushKey, setAdminPushKey] = useState("");
@@ -171,7 +172,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -1443,6 +1444,9 @@ export default function AdminPage() {
                       <button className="btn small ghost" disabled={busy} onClick={() => {
                         if (confirm(`Reset ${v.businessName}'s password?`)) patchVendor(v.id, { resetPassword: true });
                       }}>RESET PW</button>
+                      <button className="btn small ghost" disabled={busy} onClick={() => patchVendor(v.id, { allowSelfCheckout: !v.allowSelfCheckout })}>
+                        {v.allowSelfCheckout ? "🛒 SELF-CHECKOUT: ON" : "🛒 SELF-CHECKOUT: OFF"}
+                      </button>
                       <button className="btn small ghost" disabled={busy} onClick={() => patchVendor(v.id, { active: !v.active })}>
                         {v.active ? "DEACTIVATE" : "REACTIVATE"}
                       </button>
@@ -1698,6 +1702,7 @@ export default function AdminPage() {
             <tr><td><a href="/market" target="_blank" rel="noopener">/market</a></td><td>Shopper directory — every vendor + what&rsquo;s on the floor right now. Put this on your website and socials.</td></tr>
             <tr><td><a href="/apply" target="_blank" rel="noopener">/apply</a></td><td>Vendor application.</td></tr>
             <tr><td><a href="/tents" target="_blank" rel="noopener">/tents</a></td><td>Outdoor tent booking — $12.50 deposit online, $12.50 at the desk.</td></tr>
+            <tr><td><a href="/shop" target="_blank" rel="noopener">/shop</a></td><td>Self-checkout — shoppers scan &amp; pay by card, no cashier. Print signs at <a href="/shop/sign" target="_blank" rel="noopener">/shop/sign</a>.</td></tr>
             <tr><td>/v/CODE</td><td>Each vendor&rsquo;s public page (reviews + messaging) — their table QR points here.{vendors.length > 0 ? " Yours:" : ""}</td></tr>
             {vendors.filter((v) => v.active).map((v) => (
               <tr key={v.id}><td><a href={`/v/${v.code}`} target="_blank" rel="noopener">/v/{v.code}</a></td><td>{v.businessName}</td></tr>
@@ -1741,6 +1746,22 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
               Verify Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
             </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>SELF-CHECKOUT 🛒</h2>
+            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
+              Master switch for the whole scan-and-pay page at <b>/shop</b>. Pausing it hides everything and tells shoppers to pay at the register — individual vendors are toggled on their row in the VENDORS tab.
+            </p>
+            <p style={{ fontSize: 13, fontWeight: 700, marginTop: 8 }}>
+              Right now: {scPaused ? "⏸ PAUSED — register only" : "🟢 ON — shoppers can scan & pay"}
+            </p>
+            <div style={{ marginTop: 8 }}>
+              <button className="btn small" onClick={async () => {
+                const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selfCheckoutPaused: !scPaused }) });
+                if (r.ok) setScPaused((p) => !p);
+              }}>{scPaused ? "▶ TURN SELF-CHECKOUT ON" : "⏸ PAUSE SELF-CHECKOUT"}</button>
+            </div>
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>

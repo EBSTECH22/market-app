@@ -1,0 +1,72 @@
+import { db } from "@/lib/db";
+import { stripe } from "@/lib/stripe";
+import { pushToVendor, pushToAdmin } from "@/lib/push";
+import { sendSelfCheckoutReceiptEmail } from "@/lib/email";
+
+export type CartLine = { itemId: string; sku: string; name: string; priceCents: number; quantity: number; vendorId: string; vendorName: string };
+
+// Books the sale exactly like a register sale once Stripe confirms payment. Idempotent.
+export async function finalizeSelfCartIfPaid(cartId: string): Promise<boolean> {
+  const cart = await db.selfCart.findUnique({ where: { id: cartId } });
+  if (!cart) return false;
+  if (cart.status === "PAID") return true;
+  if (!cart.stripeSessionId || !stripe) return false;
+
+  let paid = false;
+  try {
+    const session = await stripe.checkout.sessions.retrieve(cart.stripeSessionId);
+    paid = session.payment_status === "paid";
+  } catch { return false; }
+  if (!paid) return false;
+
+  const lines: CartLine[] = JSON.parse(cart.linesJson);
+  const vendors = await db.vendor.findMany({ where: { id: { in: [...new Set(lines.map((l) => l.vendorId))] } } });
+  const vmap = new Map(vendors.map((v) => [v.id, v]));
+
+  let number = 0;
+  await db.$transaction(async (tx) => {
+    const fresh = await tx.selfCart.findUnique({ where: { id: cart.id } });
+    if (!fresh || fresh.status === "PAID") return;
+    const last = await tx.sale.aggregate({ _max: { number: true } });
+    number = Math.max(1000, (last._max.number || 999) + 1);
+    const saleLines = lines.map((l) => {
+      const v = vmap.get(l.vendorId);
+      const commissionCents = Math.round((l.priceCents * l.quantity * (v?.commissionPercent || 0)) / 100);
+      return {
+        itemId: l.itemId, vendorId: l.vendorId, name: l.name, priceCents: l.priceCents,
+        quantity: l.quantity, commissionCents, vendorNetCents: l.priceCents * l.quantity - commissionCents,
+      };
+    });
+    const sale = await tx.sale.create({
+      data: {
+        number, cardName: cart.email.split("@")[0] || "Self-checkout", employee: "SELF-CHECKOUT",
+        subtotalCents: cart.subtotalCents, taxCents: cart.taxCents, totalCents: cart.totalCents,
+        paymentMethod: "CARD", lines: { create: saleLines },
+      },
+    });
+    for (const sl of saleLines) {
+      await tx.item.update({ where: { id: sl.itemId }, data: { quantity: { decrement: sl.quantity } } }).catch(() => {});
+      await tx.ledgerEntry.create({
+        data: { vendorId: sl.vendorId, type: "SALE", amountCents: sl.vendorNetCents, note: `${sl.quantity}× ${sl.name} (self-checkout #${number})` },
+      });
+    }
+    await tx.item.updateMany({ where: { quantity: { lt: 0 } }, data: { quantity: 0 } });
+    await tx.selfCart.update({ where: { id: cart.id }, data: { status: "PAID", paidAt: new Date(), saleId: sale.id } });
+  });
+  if (number === 0) return true; // another request finalized it
+
+  // notify each vendor their items sold (their normal sale-alert channel)
+  const byVendor = new Map<string, CartLine[]>();
+  for (const l of lines) {
+    byVendor.set(l.vendorId, [...(byVendor.get(l.vendorId) || []), l]);
+  }
+  for (const [vendorId, vls] of byVendor) {
+    const total = vls.reduce((n, l) => n + l.priceCents * l.quantity, 0);
+    try { await pushToVendor(vendorId, "Sale! 🛒 (self-checkout)", `${vls.map((l) => `${l.quantity}× ${l.name}`).join(", ")} — $${(total / 100).toFixed(2)}`); } catch {}
+  }
+  try { await pushToAdmin("Self-checkout sale 💳", `#${number} — $${(cart.totalCents / 100).toFixed(2)}, ${lines.length} line${lines.length === 1 ? "" : "s"}`); } catch {}
+  if (cart.email) {
+    try { await sendSelfCheckoutReceiptEmail(cart.email, number, lines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.priceCents })), cart.subtotalCents, cart.taxCents, cart.totalCents); } catch {}
+  }
+  return true;
+}

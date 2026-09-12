@@ -19,6 +19,7 @@ model Vendor {
   mustChangePassword Boolean @default(false)
   acceptsPreorders  Boolean  @default(false)
   acceptsRequests   Boolean  @default(false)
+  allowSelfCheckout Boolean  @default(true)
   publicBlurb       String   @default("")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
@@ -277,4 +278,19 @@ model VendorPhoto {
   mime      String
   data      String
   createdAt DateTime @default(now())
+}
+
+model SelfCart {
+  id              String    @id @default(cuid())
+  token           String    @unique
+  linesJson       String
+  subtotalCents   Int
+  taxCents        Int
+  totalCents      Int
+  email           String    @default("")
+  status          String    @default("PENDING")
+  stripeSessionId String    @default("")
+  saleId          String    @default("")
+  createdAt       DateTime  @default(now())
+  paidAt          DateTime?
 }

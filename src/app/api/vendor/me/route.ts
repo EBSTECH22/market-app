@@ -10,7 +10,7 @@ export async function GET() {
   if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const [vendor, ledger, items, monthLines] = await Promise.all([
-    db.vendor.findUnique({ where: { id: vendorId }, select: { id: true, code: true, businessName: true, contactName: true, email: true, commissionPercent: true, mustChangePassword: true } }),
+    db.vendor.findUnique({ where: { id: vendorId }, select: { id: true, code: true, businessName: true, contactName: true, email: true, commissionPercent: true, mustChangePassword: true, acceptsPreorders: true, acceptsRequests: true, publicBlurb: true, allowSelfCheckout: true } }),
     db.ledgerEntry.findMany({ where: { vendorId }, orderBy: { createdAt: "desc" }, take: 30 }),
     db.item.findMany({ where: { vendorId, active: true }, orderBy: { createdAt: "asc" } }),
     db.saleLine.findMany({ where: { vendorId, sale: { createdAt: { gte: centralMonthStart() } } } }),
