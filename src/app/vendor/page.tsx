@@ -41,6 +41,7 @@ export default function VendorDashboard() {
   const [poAmt, setPoAmt] = useState("");
   const [poDate, setPoDate] = useState("");
   const [poMsg, setPoMsg] = useState("");
+  const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "settings">("home");
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -301,13 +302,37 @@ export default function VendorDashboard() {
     );
   }
 
+  const needsReply = inbox.filter((t) => t.status === "OPEN" && t.last && t.last.sender !== "VENDOR").length;
+  const floorUnits = me.items.reduce((n, i) => n + (i.active ? i.quantity : 0), 0);
+
+  const Tab = (props: { id: "home" | "items" | "inbox" | "page" | "money" | "settings"; label: string; badge?: number }) => (
+    <button
+      className={`btn small ${vtab === props.id ? "" : "ghost"}`}
+      style={{ position: "relative", whiteSpace: "nowrap" }}
+      onClick={() => { setVtab(props.id); window.scrollTo({ top: 0 }); }}
+    >
+      {props.label}
+      {props.badge ? (
+        <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, fontSize: 10.5, fontWeight: 700, padding: "1px 6px" }}>{props.badge}</span>
+      ) : null}
+    </button>
+  );
+
+  const Stat = (props: { label: string; value: string; sub?: string; color?: string; onClick?: () => void }) => (
+    <div className="card" style={{ flex: "1 1 140px", textAlign: "center", cursor: props.onClick ? "pointer" : "default" }} onClick={props.onClick}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ash)", letterSpacing: "0.06em" }}>{props.label}</div>
+      <div className="display" style={{ fontSize: 24, color: props.color || "var(--ink)" }}>{props.value}</div>
+      {props.sub && <div style={{ fontSize: 11, color: "var(--ash)" }}>{props.sub}</div>}
+    </div>
+  );
+
   return (
-    <main style={{ maxWidth: 640, margin: "0 auto", padding: "26px 16px 70px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+    <main style={{ maxWidth: 640, margin: "0 auto", padding: "22px 16px 70px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/wordmark.png" alt="Community Harvest" style={{ width: 128, height: "auto", display: "block", marginBottom: 4 }} />
-          <div className="display" style={{ fontSize: 22 }}>{me.vendor.businessName.toUpperCase()}</div>
+          <div className="display" style={{ fontSize: 21 }}>{me.vendor.businessName.toUpperCase()}</div>
           <div style={{ fontSize: 12, color: "var(--ash)", fontWeight: 600 }}>
             Vendor {me.vendor.code}
             {me.vendor.commissionPercent > 0 ? ` · ${me.vendor.commissionPercent}% market commission` : ""}
@@ -316,90 +341,126 @@ export default function VendorDashboard() {
         <button className="btn small ghost" onClick={logout}>LOG OUT</button>
       </div>
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
-        <div className="card" style={{ flex: "1 1 150px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ash)", letterSpacing: "0.05em" }}>YOUR BALANCE</div>
-          <div className="display" style={{ fontSize: 26, color: me.balance >= 0 ? "var(--green)" : "var(--red)" }}>
-            ${(me.balance / 100).toFixed(2)}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 16, WebkitOverflowScrolling: "touch" }}>
+        <Tab id="home" label="🏠 HOME" />
+        <Tab id="items" label="📦 MY ITEMS" />
+        <Tab id="inbox" label="📩 INBOX" badge={needsReply} />
+        <Tab id="page" label="⭐ MY PAGE" />
+        <Tab id="money" label="💵 MONEY" />
+        <Tab id="settings" label="⚙️ SETTINGS" />
+      </div>
+
+      {vtab === "home" && (
+        <div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+            <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} color={me.balance >= 0 ? "var(--green)" : "var(--red)"} onClick={() => setVtab("money")} />
+            <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
+            <Stat label="ON THE FLOOR" value={String(floorUnits)} sub="units in stock" onClick={() => setVtab("items")} />
+            <Stat label="NEEDS A REPLY" value={String(needsReply)} color={needsReply > 0 ? "var(--red)" : "var(--green)"} sub={needsReply > 0 ? "open messages" : "all caught up"} onClick={() => setVtab("inbox")} />
+          </div>
+
+          {me.items.length === 0 && (
+            <div className="card" style={{ marginBottom: 16, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+              <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>WELCOME! THREE STEPS AND YOU&rsquo;RE SELLING 🌾</h2>
+              <ol style={{ margin: "0 0 10px 18px", fontSize: 13.5, lineHeight: 1.9, listStyle: "decimal" }}>
+                <li><b>Add your items</b> with a price and how many you&rsquo;re bringing.</li>
+                <li><b>Print your barcode labels</b> and sticker every item.</li>
+                <li><b>Stock your booth</b> during a restock window — the register does the rest.</li>
+              </ol>
+              <button className="btn small" onClick={() => setVtab("items")}>START — ADD MY FIRST ITEM</button>
+            </div>
+          )}
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 15, marginBottom: 8 }}>QUICK ACTIONS</h2>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn small" onClick={() => setVtab("items")}>＋ ADD AN ITEM</button>
+              <a className="btn small ghost" href="/vendor/labels">🏷 PRINT LABELS</a>
+              <a className="btn small ghost" href="/vendor/qr">📱 PRINT TABLE QR</a>
+              <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">👀 VIEW MY PUBLIC PAGE</a>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+              <h2 className="display" style={{ fontSize: 15 }}>RECENT ACTIVITY</h2>
+              <button className="btn small ghost" onClick={() => setVtab("money")}>FULL STATEMENT →</button>
+            </div>
+            <ul style={{ listStyle: "none", marginTop: 4 }}>
+              {me.ledger.slice(0, 6).map((l) => (
+                <li key={l.id} style={{ padding: "7px 0", borderBottom: "1px solid var(--border)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span>{l.type === "SALE" ? "🛒" : l.type === "PAYOUT" ? "💸" : l.type === "RENT" ? "🏠" : "✏️"} {l.note || l.type}</span>
+                  <b style={{ color: l.amountCents >= 0 ? "var(--green)" : "var(--red)", whiteSpace: "nowrap" }}>
+                    {l.amountCents >= 0 ? "+" : "−"}${(Math.abs(l.amountCents) / 100).toFixed(2)}
+                  </b>
+                </li>
+              ))}
+              {me.ledger.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13, paddingTop: 6 }}>Sales, rent, and payouts will show here once you&rsquo;re rolling.</li>}
+            </ul>
           </div>
         </div>
-        <div className="card" style={{ flex: "1 1 150px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ash)", letterSpacing: "0.05em" }}>SOLD THIS MONTH</div>
-          <div className="display" style={{ fontSize: 26 }}>${(me.monthSales / 100).toFixed(2)}</div>
-          <div style={{ fontSize: 11, color: "var(--ash)" }}>your net: ${(me.monthNet / 100).toFixed(2)}</div>
+      )}
+
+      {vtab === "items" && (
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+              <h2 className="display" style={{ fontSize: 17 }}>YOUR ITEMS ON THE FLOOR</h2>
+              <a className="btn small" href="/vendor/labels">🏷 PRINT BARCODE LABELS</a>
+            </div>
+            <ul style={{ listStyle: "none", marginTop: 8 }}>
+              {me.items.map((it) => (
+                <li key={it.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <div>
+                      <span className="display" style={{ fontSize: 15 }}>{it.name.toUpperCase()}</span>{" "}
+                      <span className="display" style={{ fontSize: 15, color: "var(--green)" }}>
+                        ${(it.priceCents / 100) % 1 === 0 ? (it.priceCents / 100).toFixed(0) : (it.priceCents / 100).toFixed(2)}
+                      </span>
+                      <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{it.sku} · <b style={{ color: it.quantity > 0 ? "var(--green)" : "var(--red)" }}>{it.quantity} on the floor</b></div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button className="btn small ghost" disabled={busy} onClick={() => {
+                        const v = prompt(`New quantity on the floor for ${it.name}:`, String(it.quantity));
+                        if (v !== null) patchItem(it.id, { quantity: v });
+                      }}>SET QTY</button>
+                      <button className="btn small ghost" disabled={busy} onClick={() => {
+                        const v = prompt(`New price for ${it.name} (dollars):`, String(it.priceCents / 100));
+                        if (v !== null) patchItem(it.id, { priceDollars: v });
+                      }}>PRICE</button>
+                      <button className="btn small ghost" disabled={busy} onClick={() => {
+                        if (confirm(`Retire ${it.name}? It stops scanning at the register.`)) patchItem(it.id, { active: false });
+                      }}>RETIRE</button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+              {me.items.length === 0 && <li style={{ color: "var(--ash)", paddingTop: 8, fontSize: 14 }}>No items yet — add your first below. It takes 20 seconds.</li>}
+            </ul>
+          </div>
+
+          <div className="card">
+            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>ADD AN ITEM</h2>
+            <label>Item name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hand-poured soy candle" />
+            <label>Price (dollars)</label>
+            <input value={price} onChange={(e) => setPrice(e.target.value)} type="number" min="0.5" step="0.5" placeholder="14" />
+            <label>Quantity you&rsquo;re putting out</label>
+            <input value={qty} onChange={(e) => setQty(e.target.value)} type="number" min="0" step="1" placeholder="6" />
+            <div style={{ marginTop: 14 }}>
+              <button className="btn" disabled={busy} onClick={addItem}>ADD ITEM</button>
+            </div>
+            {err && <p className="err">{err}</p>}
+            <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 10 }}>
+              Each item gets a barcode. Print labels, sticker your items, restock anytime with SET QTY.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="card" style={{ marginBottom: 18 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-          <h2 className="display" style={{ fontSize: 18 }}>YOUR ITEMS ON THE FLOOR</h2>
-          <a className="btn small" href="/vendor/labels">🏷 PRINT BARCODE LABELS</a>
-        </div>
-        <ul style={{ listStyle: "none", marginTop: 8 }}>
-          {me.items.map((it) => (
-            <li key={it.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <div>
-                  <span className="display" style={{ fontSize: 15 }}>{it.name.toUpperCase()}</span>{" "}
-                  <span className="display" style={{ fontSize: 15, color: "var(--red)" }}>
-                    ${(it.priceCents / 100) % 1 === 0 ? (it.priceCents / 100).toFixed(0) : (it.priceCents / 100).toFixed(2)}
-                  </span>
-                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{it.sku} · <b style={{ color: it.quantity > 0 ? "var(--green)" : "var(--ink)" }}>{it.quantity} on the floor</b></div>
-                </div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <button className="btn small ghost" disabled={busy} onClick={() => {
-                    const v = prompt(`New quantity on the floor for ${it.name}:`, String(it.quantity));
-                    if (v !== null) patchItem(it.id, { quantity: v });
-                  }}>SET QTY</button>
-                  <button className="btn small ghost" disabled={busy} onClick={() => {
-                    const v = prompt(`New price for ${it.name} (dollars):`, String(it.priceCents / 100));
-                    if (v !== null) patchItem(it.id, { priceDollars: v });
-                  }}>PRICE</button>
-                  <button className="btn small ghost" disabled={busy} onClick={() => {
-                    if (confirm(`Retire ${it.name}? It stops scanning at the register.`)) patchItem(it.id, { active: false });
-                  }}>RETIRE</button>
-                </div>
-              </div>
-            </li>
-          ))}
-          {me.items.length === 0 && <li style={{ color: "var(--ash)", paddingTop: 8, fontSize: 14 }}>No items yet — add your first below.</li>}
-        </ul>
-      </div>
-
-      <div className="card" style={{ marginBottom: 18 }}>
-        <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>ADD AN ITEM</h2>
-        <label>Item name</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hand-poured soy candle" />
-        <label>Price (dollars)</label>
-        <input value={price} onChange={(e) => setPrice(e.target.value)} type="number" min="0.5" step="0.5" placeholder="14" />
-        <label>Quantity you&rsquo;re putting out</label>
-        <input value={qty} onChange={(e) => setQty(e.target.value)} type="number" min="0" step="1" placeholder="6" />
-        <div style={{ marginTop: 14 }}>
-          <button className="btn" disabled={busy} onClick={addItem}>ADD ITEM</button>
-        </div>
-        {err && <p className="err">{err}</p>}
-        <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 10 }}>
-          Each item gets a barcode. Print labels, sticker your items, restock anytime with SET QTY.
-        </p>
-      </div>
-
-      <div className="card" style={{ marginBottom: 18 }}>
-        <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>RECENT ACTIVITY</h2>
-        <ul style={{ listStyle: "none" }}>
-          {me.ledger.map((l) => (
-            <li key={l.id} style={{ padding: "7px 0", borderBottom: "1px solid var(--border)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span>{l.type === "SALE" ? "🛒" : l.type === "PAYOUT" ? "💸" : l.type === "RENT" ? "🏠" : "✏️"} {l.note || l.type}</span>
-              <b style={{ color: l.amountCents >= 0 ? "var(--green)" : "var(--red)", whiteSpace: "nowrap" }}>
-                {l.amountCents >= 0 ? "+" : "−"}${(Math.abs(l.amountCents) / 100).toFixed(2)}
-              </b>
-            </li>
-          ))}
-          {me.ledger.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13, paddingTop: 6 }}>Sales, rent, and payouts will show here.</li>}
-        </ul>
-      </div>
-
+      {vtab === "inbox" && (
       <div className="card">
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>INBOX 📩 — PRE-ORDERS, REQUESTS &amp; COMPLAINTS</h2>
+        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>INBOX — PRE-ORDERS, REQUESTS &amp; COMPLAINTS</h2>
         {openThread ? (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
@@ -409,7 +470,7 @@ export default function VendorDashboard() {
             <div style={{ fontSize: 12, color: "var(--ash)", margin: "2px 0 8px" }}>{openThread.email} · {openThread.phone}</div>
             {openThread.messages.map((m) => (
               <div key={m.id} style={{
-                margin: "6px 0", padding: "7px 9px", border: "1px solid var(--border)", fontSize: 13,
+                margin: "6px 0", padding: "8px 11px", border: "1px solid var(--border)", fontSize: 13,
                 background: m.sender === "VENDOR" ? "#111827" : "#f9fafb", color: m.sender === "VENDOR" ? "#fff" : "#111827", borderRadius: 12,
                 marginLeft: m.sender === "VENDOR" ? 20 : 0, marginRight: m.sender === "VENDOR" ? 0 : 20,
               }}>
@@ -417,7 +478,7 @@ export default function VendorDashboard() {
               </div>
             ))}
             {openThread.type === "PREORDER" && (
-              <div style={{ border: "1px solid var(--border)", padding: "10px 12px", margin: "10px 0" }}>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#f9fafb", padding: "10px 12px", margin: "10px 0" }}>
                 {po && po.status === "PAID" ? (
                   <p className="ok" style={{ margin: 0 }}>PAID ✓ — {money(po.totalCents)} collected online. It&rsquo;s in the register tickets and your balance (net of commission). Expected: {po.expectedDate}.</p>
                 ) : po && po.status === "ACCEPTED" ? (
@@ -462,21 +523,25 @@ export default function VendorDashboard() {
         ) : (
           <ul style={{ margin: "6px 0" }}>
             {inbox.map((t) => (
-              <li key={t.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", cursor: "pointer" }} onClick={() => openInboxThread(t.id)}>
+              <li key={t.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)", cursor: "pointer" }} onClick={() => openInboxThread(t.id)}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
-                  <b>{t.type === "PREORDER" ? "🛒" : t.type === "REQUEST" ? "🙋" : "⚠️"} {t.customerName}</b>
-                  <span style={{ fontWeight: 700 }}>{t.status === "CLOSED" ? "CLOSED" : ""}</span>
+                  <b>{t.type === "PREORDER" ? "🛒" : t.type === "REQUEST" ? "🙋" : "⚠️"} {t.customerName}
+                    {t.status === "OPEN" && t.last && t.last.sender !== "VENDOR" && <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>REPLY</span>}
+                  </b>
+                  <span style={{ fontWeight: 600, color: "var(--ash)", fontSize: 11.5 }}>{t.status === "CLOSED" ? "CLOSED" : ""}</span>
                 </div>
                 {t.last && <div style={{ fontSize: 12, color: "var(--ash)" }}>{t.last.sender === "VENDOR" ? "You: " : ""}{t.last.body}</div>}
               </li>
             ))}
-            {inbox.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>Nothing yet. Customers reach you here from your table QR card.</li>}
+            {inbox.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>Nothing yet. Customers reach you here from your table QR card and public page.</li>}
           </ul>
         )}
       </div>
+      )}
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR PUBLIC PAGE &amp; TABLE QR 📱</h2>
+      {vtab === "page" && (
+      <div className="card">
+        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR PUBLIC PAGE &amp; TABLE QR</h2>
         <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
           Customers scan your table card to see your goods, review you, and message you. Complaints are always open — that&rsquo;s a market rule — but pre-orders and requests are up to you:
         </p>
@@ -493,7 +558,7 @@ export default function VendorDashboard() {
           {myPhotos.filter((ph) => ph.kind === "LOGO").map((ph) => (
             <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${ph.id}`} alt="Your logo" style={{ height: 64, width: "auto", border: "1px solid var(--border)", display: "block" }} />
+              <img src={`/api/public/photo/${ph.id}`} alt="Your logo" style={{ height: 64, width: "auto", border: "1px solid var(--border)", borderRadius: 8, display: "block" }} />
               <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
             </span>
           ))}
@@ -507,7 +572,7 @@ export default function VendorDashboard() {
           {myPhotos.filter((ph) => ph.kind !== "LOGO").map((ph) => (
             <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${ph.id}`} alt="" style={{ height: 84, width: "auto", border: "1px solid var(--border)", display: "block" }} />
+              <img src={`/api/public/photo/${ph.id}`} alt="" style={{ height: 84, width: "auto", border: "1px solid var(--border)", borderRadius: 8, display: "block" }} />
               <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
             </span>
           ))}
@@ -525,35 +590,66 @@ export default function VendorDashboard() {
         </div>
         {pubMsg && <p className={pubMsg.includes("✓") ? "ok" : "err"}>{pubMsg}</p>}
       </div>
+      )}
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>SALE ALERTS 🔔</h2>
-        <p style={{ fontSize: 13, color: "var(--ash)" }}>
-          Get a push notification the moment your items sell. Without this you get one summary email at the end of each selling day — never an email per sale.
-          {pushDevices !== null && pushDevices > 0 ? ` Currently ON for ${pushDevices} device${pushDevices === 1 ? "" : "s"}.` : ""}
-        </p>
-        <div style={{ margin: "10px 0 4px" }}>
-          <button className="btn small" onClick={enablePush}>TURN ON FOR THIS DEVICE</button>
+      {vtab === "money" && (
+        <div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+            <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} color={me.balance >= 0 ? "var(--green)" : "var(--red)"} />
+            <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
+          </div>
+          <div className="card">
+            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR STATEMENT</h2>
+            <p style={{ fontSize: 12, color: "var(--ash)" }}>Every sale (your net after commission), booth rent, adjustment, and payout. Balance pays out monthly.</p>
+            <ul style={{ listStyle: "none", marginTop: 6 }}>
+              {me.ledger.map((l) => (
+                <li key={l.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span>{l.type === "SALE" ? "🛒" : l.type === "PAYOUT" ? "💸" : l.type === "RENT" ? "🏠" : "✏️"} {l.note || l.type}
+                    <span style={{ color: "var(--ash)", fontSize: 11 }}> · {new Date(l.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                  </span>
+                  <b style={{ color: l.amountCents >= 0 ? "var(--green)" : "var(--red)", whiteSpace: "nowrap" }}>
+                    {l.amountCents >= 0 ? "+" : "−"}${(Math.abs(l.amountCents) / 100).toFixed(2)}
+                  </b>
+                </li>
+              ))}
+              {me.ledger.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13, paddingTop: 6 }}>Sales, rent, and payouts will show here.</li>}
+            </ul>
+          </div>
         </div>
-        <p style={{ fontSize: 11.5, color: "var(--ash)" }}>
-          iPhone: works on iOS 16.4+ only after you add this site to your home screen (share button → Add to Home Screen) and open it from that icon. Android: works right in Chrome.
-        </p>
-        {pushMsg && <p className={pushMsg.includes("✓") ? "ok" : "err"}>{pushMsg}</p>}
-      </div>
+      )}
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>CHANGE PASSWORD</h2>
-        <label>Current password</label>
-        <input type="password" value={pwCur} onChange={(e) => setPwCur(e.target.value)} />
-        <label>New password (8+ characters)</label>
-        <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
-        <label>Type it again</label>
-        <input type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} />
-        <div style={{ marginTop: 12 }}>
-          <button className="btn small" onClick={changePw}>UPDATE PASSWORD</button>
+      {vtab === "settings" && (
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>SALE ALERTS 🔔</h2>
+            <p style={{ fontSize: 13, color: "var(--ash)" }}>
+              Get a push notification the moment your items sell. Without this you get one summary email at the end of each selling day — never an email per sale.
+              {pushDevices !== null && pushDevices > 0 ? ` Currently ON for ${pushDevices} device${pushDevices === 1 ? "" : "s"}.` : ""}
+            </p>
+            <div style={{ margin: "10px 0 4px" }}>
+              <button className="btn small" onClick={enablePush}>TURN ON FOR THIS DEVICE</button>
+            </div>
+            <p style={{ fontSize: 11.5, color: "var(--ash)" }}>
+              iPhone: works on iOS 16.4+ only after you add this site to your home screen (share button → Add to Home Screen) and open it from that icon. Android: works right in Chrome.
+            </p>
+            {pushMsg && <p className={pushMsg.includes("✓") ? "ok" : "err"}>{pushMsg}</p>}
+          </div>
+
+          <div className="card">
+            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>CHANGE PASSWORD</h2>
+            <label>Current password</label>
+            <input type="password" value={pwCur} onChange={(e) => setPwCur(e.target.value)} />
+            <label>New password (8+ characters)</label>
+            <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
+            <label>Type it again</label>
+            <input type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} />
+            <div style={{ marginTop: 12 }}>
+              <button className="btn small" onClick={changePw}>UPDATE PASSWORD</button>
+            </div>
+            {pwMsg && <p className={pwMsg.includes("✓") ? "ok" : "err"}>{pwMsg}</p>}
+          </div>
         </div>
-        {pwMsg && <p className={pwMsg.includes("✓") ? "ok" : "err"}>{pwMsg}</p>}
-      </div>
+      )}
     </main>
   );
 }
