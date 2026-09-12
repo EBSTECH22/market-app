@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Comment = { id: string; name: string; body: string; likes: number; createdAt: string };
 type Review = { id: string; name: string; rating: number; body: string; likes: number; createdAt: string; comments: Comment[] };
 type Vendor = { code: string; businessName: string; publicBlurb: string; acceptsPreorders: boolean; acceptsRequests: boolean };
-type Item = { name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number };
+type Item = { name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; photoId?: string | null };
 
 const money = (c: number) => `$${(c / 100).toFixed(2)}`;
 const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
@@ -174,7 +174,10 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
         {items.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>Nothing on the floor at the moment — check back or send a request below.</p>}
         {items.map((i) => (
           <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
-            <span>{i.name}{i.quantity <= 3 ? <b> · only {i.quantity} left</b> : ""}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{i.photoId && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto" }} />
+            )}{i.name}{i.quantity <= 3 ? <b> · only {i.quantity} left</b> : ""}</span>
             <span>{(i.salePercent || 0) > 0 && <><s style={{ color: "var(--ash)", fontWeight: 400 }}>{money(i.basePriceCents || i.priceCents)}</s>{" "}<span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px", marginRight: 6 }}>{i.salePercent}% OFF</span></>}<b style={(i.salePercent || 0) > 0 ? { color: "var(--red)" } : {}}>{money(i.priceCents)}</b></span>
           </div>
         ))}

@@ -17,6 +17,8 @@ async function selfCheckoutPaused(): Promise<boolean> {
 // GET: everything on the floor that's open to self-checkout + the tax rate
 export async function GET() {
   if (await selfCheckoutPaused()) return NextResponse.json({ paused: true, taxRatePercent: 0, items: [] });
+  const itemPhotos = await db.vendorPhoto.findMany({ where: { kind: "ITEM" }, select: { id: true, itemId: true } });
+  const photoMap = new Map(itemPhotos.map((x) => [x.itemId, x.id]));
   const items = await db.item.findMany({
     where: sellable,
     select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { businessName: true } } },
@@ -25,7 +27,7 @@ export async function GET() {
   const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
   return NextResponse.json({
     taxRatePercent: setting ? Number(setting.value) : 0,
-    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, vendorName: i.vendor.businessName })),
+    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
   });
 }
 

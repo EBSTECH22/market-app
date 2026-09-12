@@ -289,6 +289,7 @@ model TentBooking {
 model VendorPhoto {
   id        String   @id @default(cuid())
   vendorId  String
+  itemId    String   @default("")
   kind      String   @default("PRODUCT")
   mime      String
   data      String

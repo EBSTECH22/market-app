@@ -34,7 +34,7 @@ export default function VendorDashboard() {
   const [pubBlurb, setPubBlurb] = useState("");
   const [pubSelf, setPubSelf] = useState(true);
   const [pubMsg, setPubMsg] = useState("");
-  const [myPhotos, setMyPhotos] = useState<{ id: string; kind: string }[]>([]);
+  const [myPhotos, setMyPhotos] = useState<{ id: string; kind: string; itemId?: string }[]>([]);
   const [photoMsg, setPhotoMsg] = useState("");
   const [photoBusy, setPhotoBusy] = useState(false);
   const [po, setPo] = useState<{ status: string; description: string; subtotalCents: number; taxCents: number; totalCents: number; expectedDate: string; payUrl: string } | null>(null);
@@ -169,6 +169,18 @@ export default function VendorDashboard() {
       img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
       img.src = url;
     });
+
+  const uploadItemPhoto = async (file: File | undefined, itemId: string) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const { data, mime } = await compressImage(file);
+      const r = await fetch("/api/vendor/photos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data, mime, kind: "ITEM", itemId }) });
+      const d = await r.json();
+      if (!r.ok) { alert(d.error || "Upload failed."); return; }
+      await loadPhotos();
+    } finally { setBusy(false); }
+  };
 
   const uploadPhoto = async (file: File | undefined, kind: "PRODUCT" | "LOGO" = "PRODUCT") => {
     if (!file) return;
@@ -485,6 +497,14 @@ export default function VendorDashboard() {
                   </div>
                   {editItem === it.id && (
                     <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
+                      <label>Product photo (shows online — one per product; new upload replaces it)</label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                        {(() => { const ph = myPhotos.find((x) => x.kind === "ITEM" && x.itemId === it.id); return ph ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={`/api/public/photo/${ph.id}`} alt={it.name} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 10, border: "1px solid var(--border)" }} />
+                        ) : <span style={{ fontSize: 11.5, color: "var(--ash)" }}>No photo yet</span>; })()}
+                        <input type="file" accept="image/*" style={{ width: "auto" }} onChange={(e) => uploadItemPhoto(e.target.files?.[0], it.id)} />
+                      </div>
                       <label>Item name (prints on your labels)</label>
                       <input value={editIF.name} onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))} />
                       <label>Sale — % off (0 = no sale; register &amp; online charge the sale price automatically)</label>

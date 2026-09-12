@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string photoId?: string | null };
 type Line = Item & { qty: number };
 
 const money = (c: number) => `$${(c / 100).toFixed(2)}`;
@@ -213,7 +213,10 @@ export default function SelfCheckout() {
         {!loaded && <div className="skel" style={{ height: 120 }} />}
         {loaded && browse.slice(0, 60).map((i) => (
           <div key={i.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13.5 }}>
-            <span><b>{i.name}</b> <span style={{ color: "var(--ash)" }}>· {i.vendorName}</span></span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{i.photoId && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto" }} />
+            )}<span><b>{i.name}</b> <span style={{ color: "var(--ash)" }}>· {i.vendorName}</span></span></span>
             <span style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto" }}>
               <b>{money(i.priceCents)}</b>
               <button className="btn small" onClick={() => addItem(i)}>ADD</button>
