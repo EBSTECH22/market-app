@@ -249,6 +249,7 @@ model VendorApplication {
   availability String    @default("")
   boothRequest String    @default("")
   heardFrom    String    @default("")
+  phoneType    String    @default("")
   notes        String    @default("")
   status       String    @default("PENDING")
   createdAt    DateTime  @default(now())

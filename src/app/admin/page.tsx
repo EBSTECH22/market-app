@@ -45,7 +45,7 @@ export default function AdminPage() {
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [teamMsg, setTeamMsg] = useState("");
-  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; notes: string; createdAt: string }[]>([]);
+  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; phoneType?: string; notes: string; createdAt: string }[]>([]);
   const [appOpen, setAppOpen] = useState<string | null>(null);
   const [complaints, setComplaints] = useState<{ id: string; status: string; customerName: string; email: string; phone: string; vendor: { code: string; businessName: string } | null; messages: { sender: string; body: string }[] }[]>([]);
   const [punchName, setPunchName] = useState("");
@@ -1491,6 +1491,7 @@ export default function AdminPage() {
                       {a.availability && <><b>Restocking:</b> {a.availability}<br /></>}
                       {a.boothRequest && <><b>Booth requested:</b> {a.boothRequest}<br /></>}
                       {a.heardFrom && <><b>Heard via:</b> {a.heardFrom}<br /></>}
+                      {a.phoneType && <><b>Phone:</b> {a.phoneType === "IPHONE" ? "iPhone 📱" : a.phoneType === "ANDROID" ? "Android 🤖" : a.phoneType}<br /></>}
                       {a.notes && <><b>Notes:</b> {a.notes}<br /></>}
                       <span style={{ color: "var(--ash)" }}>Applied {new Date(a.createdAt).toLocaleDateString()}</span>
                     </div>

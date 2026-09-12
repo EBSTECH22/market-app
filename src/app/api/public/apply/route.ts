@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
       licenses: need(b.licenses).slice(0, 500), insurance: need(b.insurance).slice(0, 200),
       availability: need(b.availability).slice(0, 300), boothRequest: need(b.boothRequest).slice(0, 120),
       heardFrom: need(b.heardFrom).slice(0, 200),
+      phoneType: ["IPHONE", "ANDROID", "OTHER"].includes(String(b.phoneType || "").toUpperCase()) ? String(b.phoneType).toUpperCase() : "",
       notes: need(b.notes).slice(0, 1000),
     },
   });
