@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Lightbox from "@/components/Lightbox";
 
 type Comment = { id: string; name: string; body: string; likes: number; createdAt: string };
 type Review = { id: string; name: string; rating: number; body: string; likes: number; createdAt: string; comments: Comment[] };
