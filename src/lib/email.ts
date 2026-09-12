@@ -252,3 +252,12 @@ export async function sendContractSignEmail(to: string, businessName: string, li
     <p style="font-size:12px;color:#777;">Sign right on your phone with your finger. This link is private to you — don&rsquo;t forward it. Questions? Just reply to this email.</p>`;
   await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner));
 }
+
+export async function sendExecutedContractEmail(to: string, businessName: string, link: string) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">YOUR CONTRACT IS FULLY SIGNED \u2705</h2>
+    <p style="font-size:14px;color:#333;">Hi ${businessName} — both you and Community Harvest have signed your booth rental agreement. It&rsquo;s official! Your copy (agreement, application, and Market Rules, with both signatures) is at the link below — open it anytime, and use the print button to save a PDF for your records.</p>
+    <p style="margin:18px 0;"><a href="${link}" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">VIEW &amp; PRINT MY SIGNED CONTRACT</a></p>
+    <p style="font-size:12px;color:#777;">Welcome to the vendor family. \ud83c\udf3e We&rsquo;ll be in touch about move-in and your vendor login.</p>`;
+  await send(to, "Fully signed — your Community Harvest booth contract \u2705", shell(inner));
+}

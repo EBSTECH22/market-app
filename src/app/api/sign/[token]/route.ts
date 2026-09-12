@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { pushToAdmin } from "@/lib/push";
+import { sendExecutedContractEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -48,5 +50,10 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     where: { id: contract.id },
     data: { vendorSignedName: name, vendorSignatureData: signatureData, vendorSignedAt: new Date() },
   });
+  try { await pushToAdmin("Contract signed ✍️", `${contract.vendor.businessName} signed booth ${contract.boothLabel}${contract.marketSignedAt ? " — fully executed ✅" : " — your countersignature is next"}`); } catch {}
+  if (contract.marketSignedAt) {
+    const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+    try { await sendExecutedContractEmail(contract.vendor.email, contract.vendor.businessName, `${base}/sign/${params.token}`); } catch {}
+  }
   return NextResponse.json({ ok: true });
 }

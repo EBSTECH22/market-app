@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isStaff, isAdmin, currentVendorId } from "@/lib/auth";
+import { pushToAdmin } from "@/lib/push";
+import { sendExecutedContractEmail } from "@/lib/email";
+import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +45,20 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 // POST { signatureData, typedName } — vendor signs as vendor, admin signs as market
+async function executedCopy(req: NextRequest, contractId: string) {
+  const c = await db.contract.findUnique({ where: { id: contractId }, include: { vendor: true } });
+  if (!c || !c.vendorSignedAt || !c.marketSignedAt) return;
+  let token = c.signToken;
+  if (!token) {
+    token = randomBytes(16).toString("hex");
+    await db.contract.update({ where: { id: c.id }, data: { signToken: token } });
+  }
+  const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+  try { await sendExecutedContractEmail(c.vendor.email, c.vendor.businessName, `${base}/sign/${token}`); } catch {}
+}
+
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const contract = await db.contract.findUnique({ where: { id: params.id } });
+  const contract = await db.contract.findUnique({ where: { id: params.id }, include: { vendor: true } });
   if (!contract) return NextResponse.json({ error: "Not found." }, { status: 404 });
   const { signatureData, typedName } = await req.json();
   if (typeof signatureData !== "string" || !signatureData.startsWith("data:image/png") || signatureData.length > 300000) {
@@ -56,11 +71,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (vid && vid === contract.vendorId) {
     if (contract.vendorSignedAt) return NextResponse.json({ error: "Already signed." }, { status: 400 });
     await db.contract.update({ where: { id: contract.id }, data: { vendorSignedName: name, vendorSignatureData: signatureData, vendorSignedAt: new Date() } });
+    try { await pushToAdmin("Contract signed ✍️", `${contract.vendor.businessName} signed booth ${contract.boothLabel}${contract.marketSignedAt ? " — fully executed ✅" : " — your countersignature is next"}`); } catch {}
+    await executedCopy(req, contract.id);
     return NextResponse.json({ ok: true });
   }
   if (isAdmin()) {
     if (contract.marketSignedAt) return NextResponse.json({ error: "Already signed." }, { status: 400 });
     await db.contract.update({ where: { id: contract.id }, data: { marketSignedName: name, marketSignatureData: signatureData, marketSignedAt: new Date() } });
+    await executedCopy(req, contract.id);
     return NextResponse.json({ ok: true });
   }
   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
