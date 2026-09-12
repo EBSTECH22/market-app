@@ -20,7 +20,9 @@ export default function SelfCheckout() {
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [paused, setPaused] = useState(false);
-  const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
+  const [scanHit, setScanHit] = useState<{ kind: "ok" | "err"; title: string; sub: string } | null>(null);
+  const scannerRef = useRef<{ stop: () => Promise<void>; clear: () => void; pause: (v?: boolean) => void; resume: () => void } | null>(null);
+  const holdRef = useRef(false); // true while a scanned item awaits SCAN NEXT - blocks re-reads
 
   useEffect(() => {
     fetch("/api/public/shop").then(async (r) => {
@@ -45,15 +47,16 @@ export default function SelfCheckout() {
     if (navigator.vibrate) navigator.vibrate(40);
   }, []);
 
-  const lookupSku = useCallback(async (sku: string) => {
+  const lookupSku = useCallback(async (sku: string): Promise<{ ok: boolean; error?: string; item?: Item }> => {
     setMsg("");
     const r = await fetch("/api/public/shop", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "lookup", sku }),
     });
     const d = await r.json();
-    if (!r.ok) { setMsg(d.error || "Couldn't find that one."); return; }
+    if (!r.ok) { setMsg(d.error || "Couldn't find that one."); return { ok: false, error: d.error }; }
     addItem(d.item);
+    return { ok: true, item: d.item };
   }, [addItem]);
 
   const startScan = async () => {
@@ -74,16 +77,22 @@ export default function SelfCheckout() {
         verbose: false,
       });
       scannerRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
-      let last = "";
-      let lastAt = 0;
+      holdRef.current = false;
       await scanner.start(
         { facingMode: "environment" },
         { fps: 12, qrbox: (w: number, _h: number) => ({ width: Math.min(340, Math.floor(w * 0.92)), height: 150 }), aspectRatio: 1.4 },
         (text) => {
-          const now = Date.now();
-          if (text === last && now - lastAt < 2500) return; // debounce repeat reads
-          last = text; lastAt = now;
-          lookupSku(text.trim().toUpperCase());
+          if (holdRef.current) return; // one read at a time - camera freezes until SCAN NEXT
+          holdRef.current = true;
+          try { scanner.pause(true); } catch {}
+          if (navigator.vibrate) navigator.vibrate(50);
+          lookupSku(text.trim().toUpperCase()).then((res) => {
+            if (res.ok && res.item) {
+              setScanHit({ kind: "ok", title: "ADDED - " + res.item.name.toUpperCase(), sub: "$" + (res.item.priceCents / 100).toFixed(2) + " - it's in your cart" });
+            } else {
+              setScanHit({ kind: "err", title: "THAT ONE DIDN'T WORK", sub: res.error || "Try again, or type the code under the barcode." });
+            }
+          });
         },
         () => {}
       );
@@ -95,6 +104,8 @@ export default function SelfCheckout() {
 
   const stopScan = async () => {
     try { await scannerRef.current?.stop(); scannerRef.current?.clear(); } catch {}
+    holdRef.current = false;
+    setScanHit(null);
     setScanning(false);
   };
 
@@ -136,7 +147,22 @@ export default function SelfCheckout() {
       <div className="card" style={{ marginBottom: 12 }}>
         {!scanning && <button className="btn" onClick={startScan}>📷 SCAN A BARCODE</button>}
         <div id="scan-box" style={{ borderRadius: 12, overflow: "hidden", display: scanning ? "block" : "none" }} />
-        {scanning && <div style={{ marginTop: 8 }}><button className="btn small ghost" onClick={stopScan}>STOP CAMERA</button></div>}
+        {scanning && scanHit && (
+          <div style={{
+            marginTop: 10, borderRadius: 12, padding: "14px 14px", textAlign: "center",
+            background: scanHit.kind === "ok" ? "#f0fdf4" : "#fef2f2",
+            border: scanHit.kind === "ok" ? "2px solid #16a34a" : "2px solid #fca5a5",
+          }}>
+            <div style={{ fontSize: 26, lineHeight: 1 }}>{scanHit.kind === "ok" ? "\u2705" : "\ud83e\udd14"}</div>
+            <div className="display" style={{ fontSize: 16, marginTop: 4 }}>{scanHit.title}</div>
+            <div style={{ fontSize: 12.5, color: "var(--ash)", marginTop: 2 }}>{scanHit.sub}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="btn" style={{ flex: 1 }} onClick={() => { setScanHit(null); holdRef.current = false; try { scannerRef.current?.resume(); } catch {} }}>\ud83d\udcf7 SCAN NEXT ITEM</button>
+              <button className="btn small ghost" onClick={() => { setScanHit(null); stopScan(); }}>DONE</button>
+            </div>
+          </div>
+        )}
+        {scanning && !scanHit && <div style={{ marginTop: 8 }}><button className="btn small ghost" onClick={stopScan}>STOP CAMERA</button></div>}
         <label>Or type the code printed under the barcode</label>
         <div style={{ display: "flex", gap: 8 }}>
           <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="V01-0003"
