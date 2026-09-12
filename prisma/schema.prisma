@@ -144,6 +144,7 @@ model Contract {
   marketSignedName    String    @default("")
   marketSignatureData String    @default("")
   marketSignedAt      DateTime?
+  signToken           String    @default("")
   createdAt        DateTime  @default(now())
 }
 

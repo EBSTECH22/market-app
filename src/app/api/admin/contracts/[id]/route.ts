@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
+import { sendContractSignEmail } from "@/lib/email";
+import { randomBytes } from "crypto";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -9,6 +11,23 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const contract = await db.contract.findUnique({ where: { id: params.id } });
   if (!contract) return NextResponse.json({ error: "Contract not found." }, { status: 404 });
+
+  if (action === "send_for_signature") {
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+    if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
+    let token = contract.signToken;
+    if (!token) {
+      token = randomBytes(16).toString("hex");
+      await db.contract.update({ where: { id: contract.id }, data: { signToken: token } });
+    }
+    const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+    try {
+      await sendContractSignEmail(vendor.email, vendor.businessName, `${base}/sign/${token}`);
+    } catch {
+      return NextResponse.json({ error: "Email failed to send — check the vendor's email address." }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, sentTo: vendor.email });
+  }
 
   if (action === "give_notice") {
     const nd = typeof (body as { noticeDate?: string }).noticeDate === "string" && (body as { noticeDate: string }).noticeDate

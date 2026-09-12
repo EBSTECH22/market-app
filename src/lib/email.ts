@@ -243,3 +243,12 @@ export async function sendSelfCheckoutReceiptEmail(
     <p style="font-size:12px;color:#999;">Community Harvest — Food and Craft Market · Noble, Oklahoma</p>`;
   await send(to, `Receipt #${number} — Community Harvest`, shell(inner));
 }
+
+export async function sendContractSignEmail(to: string, businessName: string, link: string) {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">YOUR BOOTH CONTRACT IS READY \u270d\ufe0f</h2>
+    <p style="font-size:14px;color:#333;">Hi ${businessName} — your Community Harvest booth rental agreement is ready to review and sign. The packet includes your agreement, your application, and the Market Rules.</p>
+    <p style="margin:18px 0;"><a href="${link}" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">REVIEW &amp; SIGN</a></p>
+    <p style="font-size:12px;color:#777;">Sign right on your phone with your finger. This link is private to you — don&rsquo;t forward it. Questions? Just reply to this email.</p>`;
+  await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner));
+}

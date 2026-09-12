@@ -1565,7 +1565,14 @@ export default function AdminPage() {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                      <a className="btn small ghost" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">🖨 PRINT</a>
+                      <a className="btn small ghost" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">🖨 PACKET</a>
+                      <button className="btn small ghost" disabled={busy} onClick={async () => {
+                        setBusy(true);
+                        const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_for_signature" }) });
+                        const d = await r.json();
+                        setBusy(false);
+                        alert(r.ok ? `Signing link emailed to ${d.sentTo} ✓` : d.error || "Couldn't send.");
+                      }}>📧 SEND FOR SIGNATURE</button>
                       {c.status === "ACTIVE" && (
                         <>
                           <button className="btn small ghost" disabled={busy} onClick={() => {
