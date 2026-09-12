@@ -59,7 +59,7 @@ export default function ApplyPage() {
   if (sent) {
     return (
       <main style={{ maxWidth: 520, margin: "0 auto", padding: "60px 14px", textAlign: "center" }}>
-        <img src="/logo-receipt.png" alt="Community Harvest" style={{ width: 140, margin: "0 auto 10px", display: "block" }} />
+        <img src="/logo.png" alt="Community Harvest" style={{ width: 140, margin: "0 auto 10px", display: "block" }} />
         <div className="display" style={{ fontSize: 22 }}>APPLICATION IN ✅</div>
         <p style={{ fontSize: 14, marginTop: 10 }}>
           Thanks — we review every application personally. Watch your email; if it&rsquo;s a fit, we&rsquo;ll call you to get you set up.
@@ -71,7 +71,7 @@ export default function ApplyPage() {
   return (
     <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px 70px" }}>
       <div style={{ textAlign: "center", marginBottom: 14 }}>
-        <img src="/logo-receipt.png" alt="Community Harvest" style={{ width: 130, margin: "0 auto 4px", display: "block" }} />
+        <img src="/logo.png" alt="Community Harvest" style={{ width: 130, margin: "0 auto 4px", display: "block" }} />
         <div className="display" style={{ fontSize: 24 }}>BECOME A VENDOR</div>
         <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>COMMUNITY HARVEST · FOOD AND CRAFT MARKET · NOBLE, OK</div>
         <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>
@@ -80,8 +80,8 @@ export default function ApplyPage() {
       </div>
 
       {banner?.enabled && (
-        <div style={{ position: "relative", background: "#000", color: "#fff", textAlign: "center", padding: "22px 96px 18px 20px", marginBottom: 16 }}>
-          <div style={{ position: "absolute", top: 14, right: -12, width: 120, height: 120, background: "#000", border: "2px dashed #fff", outline: "3px solid #000", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, transform: "rotate(12deg)", boxShadow: "5px 6px 0 rgba(0,0,0,0.3)", zIndex: 2 }}>
+        <div style={{ position: "relative", background: "#111827", color: "#fff", textAlign: "center", padding: "22px 96px 18px 20px", marginBottom: 16, borderRadius: 16 }}>
+          <div style={{ position: "absolute", top: 14, right: -12, width: 120, height: 120, background: "#111827", border: "2px dashed rgba(255,255,255,0.75)", borderRadius: "50%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, transform: "rotate(12deg)", boxShadow: "0 10px 24px rgba(0,0,0,0.28)", zIndex: 2 }}>
             <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.13em", color: "#fff" }}>SPONSORED BY</span>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/sponsor-lightfoot.png" alt="Lightfoot Roofs" style={{ width: "72%", height: "auto", display: "block" }} />
@@ -92,7 +92,7 @@ export default function ApplyPage() {
         </div>
       )}
 
-      <div style={{ border: "2px solid #000", textAlign: "center", padding: "12px 14px", marginBottom: 16 }}>
+      <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#14532d", borderRadius: 12, textAlign: "center", padding: "14px", marginBottom: 16 }}>
         <div className="display" style={{ fontSize: 17 }}>15 STANDARD BOOTHS AVAILABLE</div>
         <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 4 }}>
           Depending on vendor space needs, final availability may be more or less — applications are reviewed in the order they arrive.
@@ -153,7 +153,7 @@ export default function ApplyPage() {
         </F>
 
         <h2 className="display" style={{ fontSize: 15, margin: "16px 0 2px" }}>FOOD VENDORS — OKLAHOMA&rsquo;S RULES</h2>
-        <div style={{ fontSize: 12.5, border: "1px solid #000", padding: "10px 12px", lineHeight: 1.6, margin: "6px 0" }}>
+        <div style={{ fontSize: 12.5, border: "1px solid var(--border)", borderRadius: 12, background: "#f9fafb", padding: "12px 14px", lineHeight: 1.6, margin: "6px 0" }}>
           Good news: under Oklahoma&rsquo;s <b>Homemade Food Freedom Act</b>, most homemade food needs <b>no license and no inspection</b>. You just have to follow these:
           <ul style={{ margin: "6px 0 0 18px", listStyle: "disc" }}>
             <li><b>Label every product</b> (10-point font or larger): your name and contact (or your optional $15/yr ODAFF registration number instead of your home address), the product&rsquo;s ingredients, a note for any of the 9 major allergens (milk, eggs, peanuts, tree nuts, fish, shellfish, wheat, soy, sesame), and this exact sentence: <i>&ldquo;This product was produced in a private residence that is exempt from government licensing and inspection.&rdquo;</i></li>
@@ -203,7 +203,7 @@ export default function ApplyPage() {
           </button>
         </div>
         {boothMode === "tent" && (
-          <div style={{ fontSize: 12.5, border: "1px solid #000", padding: "10px 12px", lineHeight: 1.65, marginTop: 8 }}>
+          <div style={{ fontSize: 12.5, border: "1px solid var(--border)", borderRadius: 12, background: "#f9fafb", padding: "12px 14px", lineHeight: 1.65, marginTop: 8 }}>
             <b>Outdoor tent spots — how they work:</b>
             <ul style={{ margin: "4px 0 0 18px", listStyle: "disc" }}>
               <li><b>$25 per day.</b> A $12.50 deposit (half) books your date at <b>market.dailybreadbaked.com/tents</b>; the $12.50 balance is due at the front desk when you set up.</li>

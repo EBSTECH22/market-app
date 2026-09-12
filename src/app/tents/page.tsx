@@ -76,7 +76,7 @@ export default function TentsPage() {
   return (
     <main style={{ maxWidth: 520, margin: "0 auto", padding: "26px 14px 70px" }}>
       <div style={{ textAlign: "center", marginBottom: 12 }}>
-        <img src="/logo-receipt.png" alt="Community Harvest" style={{ width: 120, margin: "0 auto 4px", display: "block" }} />
+        <img src="/logo.png" alt="Community Harvest" style={{ width: 120, margin: "0 auto 4px", display: "block" }} />
         <div className="display" style={{ fontSize: 24 }}>OUTDOOR TENT SPOTS ⛺</div>
         <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>COMMUNITY HARVEST · NOBLE, OK</div>
       </div>
@@ -96,7 +96,7 @@ export default function TentsPage() {
       )}
 
       {credit && !bookedDate && (
-        <div style={{ background: "#000", color: "#fff", textAlign: "center", padding: "10px 14px", marginBottom: 14, fontWeight: 700, fontSize: 13 }}>
+        <div style={{ background: "#111827", color: "#fff", textAlign: "center", padding: "10px 14px", marginBottom: 14, borderRadius: 12, fontWeight: 700, fontSize: 13 }}>
           WEATHER CREDIT ACTIVE — pick your new date below, no new deposit needed.
         </div>
       )}
@@ -118,7 +118,7 @@ export default function TentsPage() {
 
           {!loaded && <p style={{ textAlign: "center" }}>Loading dates…</p>}
           {loaded && paused && (
-            <div style={{ background: "#000", color: "#fff", textAlign: "center", padding: "16px 14px", marginBottom: 14 }}>
+            <div style={{ background: "#111827", color: "#fff", textAlign: "center", padding: "16px 14px", marginBottom: 14, borderRadius: 14 }}>
               <div className="display" style={{ fontSize: 18 }}>BOOKINGS PAUSED</div>
               <div style={{ fontSize: 13, marginTop: 6 }}>{pausedMsg || "Tent bookings open soon — check back!"}</div>
             </div>
@@ -131,7 +131,7 @@ export default function TentsPage() {
             <div key={g.month} className="card" style={{ marginBottom: 12 }}>
               <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>{g.month.toUpperCase()}</h2>
               {g.days.map((d) => (
-                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: "1px dashed var(--ink)" }}>
+                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: "1px solid var(--border)" }}>
                   <span style={{ fontSize: 13.5 }}>
                     <b>{new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</b>
                     <span style={{ color: "var(--ash)" }}> · {d.spotsLeft} spot{d.spotsLeft === 1 ? "" : "s"} left</span>

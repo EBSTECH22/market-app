@@ -338,7 +338,7 @@ export default function VendorDashboard() {
         </div>
         <ul style={{ listStyle: "none", marginTop: 8 }}>
           {me.items.map((it) => (
-            <li key={it.id} style={{ padding: "11px 0", borderBottom: "2px dashed var(--ink)" }}>
+            <li key={it.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <div>
                   <span className="display" style={{ fontSize: 15 }}>{it.name.toUpperCase()}</span>{" "}
@@ -388,7 +388,7 @@ export default function VendorDashboard() {
         <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>RECENT ACTIVITY</h2>
         <ul style={{ listStyle: "none" }}>
           {me.ledger.map((l) => (
-            <li key={l.id} style={{ padding: "7px 0", borderBottom: "1px dashed var(--ink)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <li key={l.id} style={{ padding: "7px 0", borderBottom: "1px solid var(--border)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
               <span>{l.type === "SALE" ? "🛒" : l.type === "PAYOUT" ? "💸" : l.type === "RENT" ? "🏠" : "✏️"} {l.note || l.type}</span>
               <b style={{ color: l.amountCents >= 0 ? "var(--green)" : "var(--red)", whiteSpace: "nowrap" }}>
                 {l.amountCents >= 0 ? "+" : "−"}${(Math.abs(l.amountCents) / 100).toFixed(2)}
@@ -410,15 +410,15 @@ export default function VendorDashboard() {
             <div style={{ fontSize: 12, color: "var(--ash)", margin: "2px 0 8px" }}>{openThread.email} · {openThread.phone}</div>
             {openThread.messages.map((m) => (
               <div key={m.id} style={{
-                margin: "6px 0", padding: "7px 9px", border: "1px solid #000", fontSize: 13,
-                background: m.sender === "VENDOR" ? "#000" : "#fff", color: m.sender === "VENDOR" ? "#fff" : "#000",
+                margin: "6px 0", padding: "7px 9px", border: "1px solid var(--border)", fontSize: 13,
+                background: m.sender === "VENDOR" ? "#111827" : "#f9fafb", color: m.sender === "VENDOR" ? "#fff" : "#111827", borderRadius: 12,
                 marginLeft: m.sender === "VENDOR" ? 20 : 0, marginRight: m.sender === "VENDOR" ? 0 : 20,
               }}>
                 {m.body}
               </div>
             ))}
             {openThread.type === "PREORDER" && (
-              <div style={{ border: "2px solid #000", padding: "10px 12px", margin: "10px 0" }}>
+              <div style={{ border: "1px solid var(--border)", padding: "10px 12px", margin: "10px 0" }}>
                 {po && po.status === "PAID" ? (
                   <p className="ok" style={{ margin: 0 }}>PAID ✓ — {money(po.totalCents)} collected online. It&rsquo;s in the register tickets and your balance (net of commission). Expected: {po.expectedDate}.</p>
                 ) : po && po.status === "ACCEPTED" ? (
@@ -463,7 +463,7 @@ export default function VendorDashboard() {
         ) : (
           <ul style={{ margin: "6px 0" }}>
             {inbox.map((t) => (
-              <li key={t.id} style={{ padding: "8px 0", borderBottom: "1px dashed var(--ink)", cursor: "pointer" }} onClick={() => openInboxThread(t.id)}>
+              <li key={t.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", cursor: "pointer" }} onClick={() => openInboxThread(t.id)}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
                   <b>{t.type === "PREORDER" ? "🛒" : t.type === "REQUEST" ? "🙋" : "⚠️"} {t.customerName}</b>
                   <span style={{ fontWeight: 700 }}>{t.status === "CLOSED" ? "CLOSED" : ""}</span>
@@ -494,7 +494,7 @@ export default function VendorDashboard() {
           {myPhotos.filter((ph) => ph.kind === "LOGO").map((ph) => (
             <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${ph.id}`} alt="Your logo" style={{ height: 64, width: "auto", border: "2px solid #000", display: "block" }} />
+              <img src={`/api/public/photo/${ph.id}`} alt="Your logo" style={{ height: 64, width: "auto", border: "1px solid var(--border)", display: "block" }} />
               <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
             </span>
           ))}
@@ -508,7 +508,7 @@ export default function VendorDashboard() {
           {myPhotos.filter((ph) => ph.kind !== "LOGO").map((ph) => (
             <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${ph.id}`} alt="" style={{ height: 84, width: "auto", border: "2px solid #000", display: "block" }} />
+              <img src={`/api/public/photo/${ph.id}`} alt="" style={{ height: 84, width: "auto", border: "1px solid var(--border)", display: "block" }} />
               <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
             </span>
           ))}

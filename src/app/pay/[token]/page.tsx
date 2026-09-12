@@ -42,7 +42,7 @@ export default function PayPage({ params }: { params: { token: string } }) {
   return (
     <main style={{ maxWidth: 460, margin: "0 auto", padding: "30px 14px 70px" }}>
       <div style={{ textAlign: "center", marginBottom: 12 }}>
-        <img src="/logo-receipt.png" alt="Community Harvest" style={{ width: 120, margin: "0 auto 4px", display: "block" }} />
+        <img src="/logo.png" alt="Community Harvest" style={{ width: 120, margin: "0 auto 4px", display: "block" }} />
         <div className="display" style={{ fontSize: 20 }}>PRE-ORDER — {order.vendorName.toUpperCase()}</div>
       </div>
       <div className="card">

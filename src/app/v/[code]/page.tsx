@@ -93,7 +93,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
   return (
     <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px 70px" }}>
       <div style={{ textAlign: "center", marginBottom: 6 }}>
-        <img src="/logo-receipt.png" alt="Community Harvest" style={{ width: 110, margin: "0 auto 4px", display: "block" }} />
+        <img src="/logo.png" alt="Community Harvest" style={{ width: 110, margin: "0 auto 4px", display: "block" }} />
         {logoId && (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img src={`/api/public/photo/${logoId}`} alt="" style={{ height: 70, width: "auto", maxWidth: 200, margin: "0 auto 4px", display: "block" }} />
@@ -109,7 +109,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
           {photos.map((id) => (
             /* eslint-disable-next-line @next/next/no-img-element */
             <a key={id} href={`/api/public/photo/${id}`} target="_blank" rel="noopener" style={{ flex: "0 0 auto" }}>
-              <img src={`/api/public/photo/${id}`} alt="Product photo" style={{ height: 150, width: "auto", border: "2px solid #000", display: "block" }} />
+              <img src={`/api/public/photo/${id}`} alt="Product photo" style={{ height: 150, width: "auto", border: "1px solid var(--border)", display: "block" }} />
             </a>
           ))}
         </div>
@@ -119,7 +119,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
         <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>AT THE MARKET RIGHT NOW</h2>
         {items.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>Nothing on the floor at the moment — check back or send a request below.</p>}
         {items.map((i) => (
-          <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px dashed var(--ink)", fontSize: 14 }}>
+          <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
             <span>{i.name}{i.quantity <= 3 ? <b> · only {i.quantity} left</b> : ""}</span>
             <b>{money(i.priceCents)}</b>
           </div>
@@ -162,7 +162,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
       <div className="card">
         <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>REVIEWS</h2>
         {reviews.map((r) => (
-          <div key={r.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--ink)" }}>
+          <div key={r.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
               <b style={{ fontSize: 14 }}>{r.name}</b>
               <span style={{ fontSize: 13 }}>{stars(r.rating)}</span>
@@ -177,7 +177,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
               </button>
             </div>
             {r.comments.map((c) => (
-              <div key={c.id} style={{ marginLeft: 16, marginTop: 8, paddingLeft: 10, borderLeft: "2px solid var(--ink)" }}>
+              <div key={c.id} style={{ marginLeft: 16, marginTop: 8, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
                 <b style={{ fontSize: 12.5 }}>{c.name}</b>
                 <p style={{ fontSize: 12.5, margin: "2px 0" }}>{c.body}</p>
                 <button className="btn small ghost" onClick={() => like("comment", c.id)} disabled={liked(c.id)} style={{ fontSize: 11 }}>

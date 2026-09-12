@@ -503,7 +503,7 @@ export default function AdminPage() {
     printRef.current.innerHTML = `
       <div style="width:280px;margin:0 auto;font-size:12px;line-height:1.5;text-align:center;font-family:'IBM Plex Mono',monospace;color:#000">
         <img src="/logo.png" alt="" style="width:70px;height:70px" />
-        <img src="/logo-receipt.png" alt="Community Harvest" style="width:100%;max-width:260px;display:block;margin:0 auto 2px" />
+        <img src="/logo.png" alt="Community Harvest" style="width:100%;max-width:260px;display:block;margin:0 auto 2px" />
         <div>Noble, Oklahoma</div>
         <div style="margin:6px 0;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:4px 0">
           RECEIPT #${sale.number}<br>${new Date(sale.createdAt).toLocaleDateString("en-US")} ${new Date(sale.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}${sale.employee ? "<br>CLERK: " + sale.employee : ""}
@@ -915,7 +915,7 @@ export default function AdminPage() {
                 <span>{l.quantity}× {l.name}</span><b>{money(l.priceCents * l.quantity)}</b>
               </div>
             ))}
-            <div style={{ borderTop: "2px solid var(--ink)", marginTop: 6, paddingTop: 6, fontSize: 14 }}>
+            <div style={{ borderTop: "2px solid var(--border)", marginTop: 6, paddingTop: 6, fontSize: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(receipt.subtotalCents)}</b></div>
               <div style={{ display: "flex", justifyContent: "space-between" }}><span>Tax ({receipt.taxRate}%)</span><b>{money(receipt.taxCents)}</b></div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18 }} className="display">
@@ -936,7 +936,7 @@ export default function AdminPage() {
       {tab === "register" && !closeReport && drawer && !closing && !receipt && (
         <>
           <div style={{ display: "flex", gap: 0, border: "3px solid var(--ink)", borderRadius: 14, overflow: "hidden", marginBottom: 14, flexWrap: "wrap", background: "var(--cream)" }}>
-            <div style={{ flex: "1 1 140px", padding: "10px 12px", borderRight: "2px solid var(--ink)" }}>
+            <div style={{ flex: "1 1 140px", padding: "10px 12px", borderRight: "2px solid var(--border)" }}>
               <div style={{ fontSize: 10.5, fontWeight: 700 }}>SIGNED IN</div>
               <div className="display" style={{ fontSize: 15 }}>{drawer.employee}</div>
             </div>
@@ -1005,7 +1005,7 @@ export default function AdminPage() {
           <div className="card">
             {cart.length === 0 && <p style={{ color: "var(--ash)", fontSize: 14 }}>Ticket is empty — scan, search, or tap an item.</p>}
             {cart.map((l) => (
-              <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "2px dashed var(--ink)", gap: 8, flexWrap: "wrap" }}>
+              <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid var(--border)", gap: 8, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{l.name}</div>
                   <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{l.vendorName} · {l.sku} · {money(l.priceCents)} each</div>
@@ -1214,7 +1214,7 @@ export default function AdminPage() {
               <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>RECURRING DEDUCTIONS (PER PAY PERIOD)</h3>
               <ul style={{ margin: "4px 0" }}>
                 {m.deductions.map((d) => (
-                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed var(--ink)", fontSize: 13 }}>
+                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
                     <span>{d.name}</span>
                     <span>{money(d.amountCents)} <button className="btn small ghost" onClick={() => dropDeduction(d.id)}>✕</button></span>
                   </li>
@@ -1226,7 +1226,7 @@ export default function AdminPage() {
               <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>DOCUMENTS (W-4 / I-9 / ID)</h3>
               <ul style={{ margin: "4px 0" }}>
                 {m.docs.map((d) => (
-                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed var(--ink)", fontSize: 13, gap: 8 }}>
+                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", fontSize: 13, gap: 8 }}>
                     <span>[{d.kind}] {d.filename}</span>
                     <span style={{ whiteSpace: "nowrap" }}>
                       <a className="btn small ghost" href={`/api/admin/team/docs/${d.id}`} target="_blank" rel="noopener">VIEW</a>{" "}
@@ -1420,7 +1420,7 @@ export default function AdminPage() {
             <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>VENDORS ({vendors.filter((v) => v.active).length} ACTIVE)</h2>
             <ul style={{ listStyle: "none" }}>
               {vendors.map((v) => (
-                <li key={v.id} style={{ padding: "11px 0", borderBottom: "2px dashed var(--ink)", opacity: v.active ? 1 : 0.5 }}>
+                <li key={v.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)", opacity: v.active ? 1 : 0.5 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div>
                       <span className="display" style={{ fontSize: 15 }}>{v.code} · {v.businessName.toUpperCase()}</span>
@@ -1459,7 +1459,7 @@ export default function AdminPage() {
             </p>
             <ul style={{ margin: "8px 0" }}>
               {applications.map((a) => (
-                <li key={a.id} style={{ padding: "9px 0", borderBottom: "1px dashed var(--ink)" }}>
+                <li key={a.id} style={{ padding: "9px 0", borderBottom: "1px solid var(--border)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <div style={{ cursor: "pointer" }} onClick={() => setAppOpen(appOpen === a.id ? null : a.id)}>
                       <b style={{ fontSize: 14 }}>{a.businessName}</b>
@@ -1474,7 +1474,7 @@ export default function AdminPage() {
                     )}
                   </div>
                   {appOpen === a.id && (
-                    <div style={{ fontSize: 12.5, marginTop: 6, paddingLeft: 8, borderLeft: "2px solid var(--ink)", lineHeight: 1.7 }}>
+                    <div style={{ fontSize: 12.5, marginTop: 6, paddingLeft: 8, borderLeft: "2px solid var(--border)", lineHeight: 1.7 }}>
                       <b>Contact:</b> {a.email} · {a.phone}<br />
                       <b>Products:</b> {a.products}<br />
                       <b>Who makes it:</b> {a.madeByYou}<br />
@@ -1499,14 +1499,14 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)" }}>Every complaint filed against any vendor, newest first. Vendors handle replies; this is your accountability view.</p>
             <ul style={{ margin: "8px 0" }}>
               {complaints.map((c) => (
-                <li key={c.id} style={{ padding: "8px 0", borderBottom: "1px dashed var(--ink)" }}>
+                <li key={c.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
                     <b>{c.vendor ? `${c.vendor.code} ${c.vendor.businessName}` : "?"} ← {c.customerName}</b>
                     <span style={{ fontWeight: 700 }}>{c.status}</span>
                   </div>
                   <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{c.email} · {c.phone}</div>
                   {c.messages.map((m, i) => (
-                    <div key={i} style={{ fontSize: 12.5, marginTop: 4, paddingLeft: 8, borderLeft: "2px solid var(--ink)" }}>
+                    <div key={i} style={{ fontSize: 12.5, marginTop: 4, paddingLeft: 8, borderLeft: "2px solid var(--border)" }}>
                       <b>{m.sender === "CUSTOMER" ? c.customerName : "Vendor"}:</b> {m.body}
                     </div>
                   ))}
@@ -1545,7 +1545,7 @@ export default function AdminPage() {
             </p>
             <ul style={{ listStyle: "none" }}>
               {contracts.map((c) => (
-                <li key={c.id} style={{ padding: "11px 0", borderBottom: "2px dashed var(--ink)" }}>
+                <li key={c.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div>
                       <span className="display" style={{ fontSize: 15 }}>BOOTH {c.boothLabel.toUpperCase()} · {c.vendor.businessName.toUpperCase()}</span>
@@ -1666,7 +1666,7 @@ export default function AdminPage() {
                   </span>
                 </div>
                 {d.bookings.filter((b) => !["CANCELED", "CREDIT_USED"].includes(b.status)).map((b) => (
-                  <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", padding: "7px 0", borderTop: "1px dashed var(--ink)", fontSize: 13 }}>
+                  <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", padding: "7px 0", borderTop: "1px solid var(--border)", fontSize: 13 }}>
                     <span>
                       <b>{b.businessName || b.name}</b> · {b.name} · {b.phone}
                       <span style={{ fontWeight: 700 }}> · {b.status === "PAID_DEPOSIT" ? "DEPOSIT PAID — $12.50 DUE AT DESK" : b.status === "CHECKED_IN" ? "CHECKED IN ✓" : b.status === "WEATHER_CREDIT" ? "WEATHER CREDIT ISSUED" : b.status}</span>
@@ -1785,7 +1785,7 @@ export default function AdminPage() {
             <p style={{ fontSize: 12, color: "var(--ash)" }}>Anyone who can sign in and open/close the cash drawer.</p>
             <ul style={{ listStyle: "none", margin: "10px 0" }}>
               {employees.map((e) => (
-                <li key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px dashed var(--ink)" }}>
+                <li key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid var(--border)" }}>
                   <b>{e.name}</b>
                   <button className="btn small ghost" onClick={() => removeEmployee(e)}>REMOVE</button>
                 </li>

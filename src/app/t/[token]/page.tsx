@@ -45,8 +45,8 @@ export default function ThreadPage({ params }: { params: { token: string } }) {
       <div className="card">
         {thread.messages.map((m) => (
           <div key={m.id} style={{
-            margin: "8px 0", padding: "8px 10px", border: "1px solid #000", fontSize: 13.5,
-            background: m.sender === "CUSTOMER" ? "#fff" : "#000", color: m.sender === "CUSTOMER" ? "#000" : "#fff",
+            margin: "8px 0", padding: "8px 10px", border: "1px solid var(--border)", fontSize: 13.5,
+            background: m.sender === "CUSTOMER" ? "#f9fafb" : "#111827", color: m.sender === "CUSTOMER" ? "#111827" : "#fff", borderRadius: 12,
             marginLeft: m.sender === "CUSTOMER" ? 0 : 24, marginRight: m.sender === "CUSTOMER" ? 24 : 0,
           }}>
             <div style={{ fontSize: 10.5, fontWeight: 700, opacity: 0.7 }}>
