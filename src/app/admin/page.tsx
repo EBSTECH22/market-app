@@ -114,6 +114,7 @@ export default function AdminPage() {
   const [rentPerSqft, setRentPerSqft] = useState(6);
   const [scPaused, setScPaused] = useState(false);
   const [cardAdj, setCardAdj] = useState("0");
+  const [cardConfirm, setCardConfirm] = useState(false);
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
   const [adminPushKey, setAdminPushKey] = useState("");
@@ -978,7 +979,7 @@ export default function AdminPage() {
             Vendors notified, inventory updated.{autoPrint ? " Receipt sent to the printer." : ""}
           </p>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 10 }}>
-            <button className="btn" onClick={() => { setReceipt(null); setCustQ(""); setCust(null); setRedeem(false); setCustMsg(""); setAttachQ(""); setAttachMsg(""); }}>NEXT CUSTOMER →</button>
+            <button className="btn" onClick={() => { setReceipt(null); setCustQ(""); setCust(null); setRedeem(false); setCustMsg(""); setAttachQ(""); setAttachMsg(""); setCardConfirm(false); }}>NEXT CUSTOMER →</button>
             <button className="btn small ghost" onClick={() => printSale(receipt.id)}>REPRINT</button>
           </div>
         </div>
@@ -1102,10 +1103,30 @@ export default function AdminPage() {
                   {custMsg && <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 4 }}>{custMsg}</p>}
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => completeSale("CASH")}>💵 CASH</button>
-                  <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={() => completeSale("CARD")}>💳 CARD</button>
+                  <button className="btn" style={{ flex: 1 }} disabled={busy || cardConfirm} onClick={() => completeSale("CASH")}>💵 CASH</button>
+                  <button className="btn" style={{ flex: 1 }} disabled={busy || cardConfirm} onClick={() => setCardConfirm(true)}>💳 CARD</button>
                 </div>
-                <button className="btn small ghost" style={{ marginTop: 10 }} onClick={() => setCart([])}>CLEAR TICKET</button>
+                {cardConfirm && (() => {
+                  const adjPct = Number(cardAdj) || 0;
+                  const adj = Math.round((subtotal * adjPct) / 100);
+                  const t = Math.round(((subtotal + adj) * taxRate) / 100);
+                  const disc = redeem ? Math.min(500, subtotal + adj + t) : 0;
+                  const chargeTotal = subtotal + adj + t - disc;
+                  return (
+                    <div style={{ border: "2px solid #16a34a", borderRadius: 14, background: "#f0fdf4", padding: "14px", marginTop: 10, textAlign: "center" }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#15803d" }}>CHARGE THE CARD TERMINAL:</div>
+                      <div className="display" style={{ fontSize: 34 }}>{money(chargeTotal)}</div>
+                      {adj > 0 && <div style={{ fontSize: 11.5, color: "var(--ash)" }}>includes {money(adj)} non-cash adjustment</div>}
+                      {disc > 0 && <div style={{ fontSize: 11.5, color: "#15803d", fontWeight: 700 }}>⭐ $5 reward applied</div>}
+                      <p style={{ fontSize: 12, color: "var(--ash)", margin: "8px 0" }}>Run the card. Approved on the terminal? Then book it below — nothing is recorded until you do.</p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={async () => { await completeSale("CARD"); setCardConfirm(false); }}>✅ PAYMENT APPROVED — BOOK SALE</button>
+                        <button className="btn small ghost" disabled={busy} onClick={() => setCardConfirm(false)}>❌ DECLINED / BACK</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+                <button className="btn small ghost" style={{ marginTop: 10 }} onClick={() => { setCart([]); setCardConfirm(false); }}>CLEAR TICKET</button>
               </>
             )}
           </div>
