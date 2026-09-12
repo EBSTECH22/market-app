@@ -11,8 +11,11 @@ export async function GET(req: NextRequest) {
 
   const item = await db.item.findUnique({
     where: { sku },
-    include: { vendor: { select: { businessName: true, code: true } } },
+    include: { vendor: { select: { businessName: true, code: true, active: true } } },
   });
   if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
+  if (!item.vendor.active) {
+    return NextResponse.json({ error: `${item.vendor.businessName} is deactivated — their items can't be sold. Pull it from the floor.` }, { status: 400 });
+  }
   return NextResponse.json({ item });
 }

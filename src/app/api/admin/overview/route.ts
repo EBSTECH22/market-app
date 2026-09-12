@@ -18,7 +18,7 @@ export async function GET() {
     db.refund.findMany({ where: { createdAt: { gte: dayStart }, note: { not: { startsWith: "VOID" } } } }),
     db.refund.findMany({ where: { createdAt: { gte: monthStart }, note: { not: { startsWith: "VOID" } } } }),
     db.item.findMany({
-      where: { active: true },
+      where: { active: true, vendor: { active: true } },
       include: { vendor: { select: { businessName: true, code: true } } },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     }),
