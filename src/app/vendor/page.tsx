@@ -392,6 +392,7 @@ export default function VendorDashboard() {
               <a className="btn small ghost" href="/vendor/qr">📱 PRINT TABLE QR</a>
               <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">👀 VIEW MY PUBLIC PAGE</a>
               <a className="btn small ghost" href="/rules" target="_blank" rel="noopener">📋 MARKET RULES</a>
+              <a className="btn small ghost" href="/guide" target="_blank" rel="noopener">📖 SETUP GUIDE</a>
               {me.vendor.contracts && me.vendor.contracts[0] && (
                 <a className="btn small" href={`/contract/${me.vendor.contracts[0].id}/packet`}>
                   📄 {me.vendor.contracts[0].vendorSignedAt ? "MY CONTRACT" : "SIGN YOUR CONTRACT"}

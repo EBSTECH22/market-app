@@ -80,7 +80,7 @@ function installBlock(phoneType: string): string {
     </div>`;
   if (phoneType === "IPHONE") return iphone;
   if (phoneType === "ANDROID") return android;
-  return `<p style="font-size:13px;color:#333;">Want the portal as an app icon on your phone, with sale notifications? Follow the 2-minute guide: <a href="${baseUrl()}/install"><b>${baseUrl().replace("https://", "")}/install</b></a></p>`;
+  return `<p style="font-size:13px;color:#333;">Want the portal as an app icon on your phone, with sale notifications? Follow the 2-minute guide: <a href="${baseUrl()}/guide"><b>${baseUrl().replace("https://", "")}/guide</b></a></p>`;
 }
 
 export async function sendWelcomeEmail(
@@ -288,6 +288,16 @@ export async function sendExecutedContractEmail(to: string, businessName: string
     <p style="margin:18px 0;"><a href="${link}" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">VIEW &amp; PRINT MY SIGNED CONTRACT</a></p>
     <p style="font-size:12px;color:#777;">Welcome to the vendor family. \ud83c\udf3e</p>
     ${installBlock(phoneType)}
-    <p style="font-size:12px;color:#777;">Full guide for either phone, anytime: <a href="${baseUrl()}/install">${baseUrl().replace("https://", "")}/install</a></p>`;
+    <p style="font-size:12px;color:#777;">Full guide for either phone, anytime: <a href="${baseUrl()}/guide">${baseUrl().replace("https://", "")}/guide</a></p>`;
   await send(to, "Fully signed — your Community Harvest booth contract \u2705", shell(inner));
+}
+
+export async function sendSetupGuideEmail(to: string, businessName: string, phoneType: string = "") {
+  const inner = `
+    <h2 style="font-size:19px;font-weight:900;color:#000;margin:0 0 8px;">YOUR VENDOR SETUP GUIDE \ud83c\udf3e</h2>
+    <p style="font-size:14px;color:#333;">Hi ${businessName} — here&rsquo;s your Community Harvest setup guide again: how to put the vendor app on your phone, add products, print barcode labels, and run your booth.</p>
+    ${installBlock(phoneType)}
+    <p style="margin:16px 0;"><a href="${baseUrl()}/guide" style="background:#000;color:#fff;padding:12px 22px;text-decoration:none;font-weight:700;display:inline-block;">OPEN THE FULL GUIDE</a></p>
+    <p style="font-size:12px;color:#777;">Covers everything: products, labels (and which sticker sheets to buy), restocking, pre-orders, your public page, and getting paid. Stuck? Just reply to this email.</p>`;
+  await send(to, "Your vendor setup guide — Community Harvest", shell(inner));
 }

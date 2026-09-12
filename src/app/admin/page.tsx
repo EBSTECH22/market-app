@@ -1583,6 +1583,13 @@ export default function AdminPage() {
                         setBusy(false);
                         alert(r.ok ? `Signing link emailed to ${d.sentTo} ✓` : d.error || "Couldn't send.");
                       }}>📧 SEND FOR SIGNATURE</button>
+                      <button className="btn small ghost" disabled={busy} onClick={async () => {
+                        setBusy(true);
+                        const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_setup_guide" }) });
+                        const d = await r.json();
+                        setBusy(false);
+                        alert(r.ok ? `Setup guide emailed to ${d.sentTo} \u2713` : d.error || "Couldn't send.");
+                      }}>📖 RESEND GUIDE</button>
                       {c.status === "ACTIVE" && (
                         <>
                           <button className="btn small ghost" disabled={busy} onClick={() => {

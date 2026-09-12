@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
-import { sendContractSignEmail } from "@/lib/email";
+import { sendContractSignEmail, sendSetupGuideEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -25,6 +25,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       await sendContractSignEmail(vendor.email, vendor.businessName, `${base}/sign/${token}`);
     } catch {
       return NextResponse.json({ error: "Email failed to send — check the vendor's email address." }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, sentTo: vendor.email });
+  }
+
+  if (action === "send_setup_guide") {
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+    if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
+    const app = await db.vendorApplication.findFirst({ where: { email: { equals: vendor.email, mode: "insensitive" } }, orderBy: { createdAt: "desc" } });
+    try {
+      await sendSetupGuideEmail(vendor.email, vendor.businessName, app?.phoneType || "");
+    } catch {
+      return NextResponse.json({ error: "Email failed to send." }, { status: 500 });
     }
     return NextResponse.json({ ok: true, sentTo: vendor.email });
   }
