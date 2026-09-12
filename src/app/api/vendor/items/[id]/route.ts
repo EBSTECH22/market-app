@@ -32,3 +32,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (restock) notifyVendorRestock(vendorId).catch(() => {});
   return NextResponse.json({ item: updated });
 }
+
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const vendorId = currentVendorId();
+  if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
+  const item = await db.item.findUnique({ where: { id: params.id } });
+  if (!item || item.vendorId !== vendorId) return NextResponse.json({ error: "Item not found." }, { status: 404 });
+
+  const soldLines = await db.saleLine.count({ where: { itemId: item.id } });
+  if (soldLines > 0) {
+    // sale history references it — retire instead so the books stay whole
+    await db.item.update({ where: { id: item.id }, data: { active: false, quantity: 0 } });
+    return NextResponse.json({ retired: true, message: `${item.name} has sales history, so it was retired instead of deleted — it's off the floor and can't be scanned.` });
+  }
+  await db.item.delete({ where: { id: item.id } });
+  return NextResponse.json({ deleted: true });
+}

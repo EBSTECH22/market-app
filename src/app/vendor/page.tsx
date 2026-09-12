@@ -43,6 +43,8 @@ export default function VendorDashboard() {
   const [poDate, setPoDate] = useState("");
   const [poMsg, setPoMsg] = useState("");
   const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "settings">("home");
+  const [editItem, setEditItem] = useState<string | null>(null);
+  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "" });
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -445,14 +447,42 @@ export default function VendorDashboard() {
                         if (v !== null) patchItem(it.id, { quantity: v });
                       }}>SET QTY</button>
                       <button className="btn small ghost" disabled={busy} onClick={() => {
-                        const v = prompt(`New price for ${it.name} (dollars):`, String(it.priceCents / 100));
-                        if (v !== null) patchItem(it.id, { priceDollars: v });
-                      }}>PRICE</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => {
-                        if (confirm(`Retire ${it.name}? It stops scanning at the register.`)) patchItem(it.id, { active: false });
-                      }}>RETIRE</button>
+                        if (editItem === it.id) { setEditItem(null); return; }
+                        setEditItem(it.id);
+                        setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity) });
+                      }}>✏️ EDIT</button>
                     </div>
                   </div>
+                  {editItem === it.id && (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
+                      <label>Item name (prints on your labels)</label>
+                      <input value={editIF.name} onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))} />
+                      <label>Price (dollars)</label>
+                      <input type="number" min="0.5" step="0.5" value={editIF.price} onChange={(e) => setEditIF((f) => ({ ...f, price: e.target.value }))} />
+                      <label>Quantity on the floor</label>
+                      <input type="number" min="0" step="1" value={editIF.qty} onChange={(e) => setEditIF((f) => ({ ...f, qty: e.target.value }))} />
+                      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                        <button className="btn small" disabled={busy} onClick={async () => {
+                          await patchItem(it.id, { name: editIF.name, priceDollars: editIF.price, quantity: editIF.qty });
+                          setEditItem(null);
+                        }}>SAVE</button>
+                        <button className="btn small ghost" onClick={() => setEditItem(null)}>CANCEL</button>
+                        <button className="btn small ghost" disabled={busy} onClick={() => {
+                          if (confirm(`Retire ${it.name}? It comes off the floor and stops scanning (history kept).`)) { patchItem(it.id, { active: false, quantity: 0 }); setEditItem(null); }
+                        }}>RETIRE</button>
+                        <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "#fecaca" }} disabled={busy} onClick={async () => {
+                          if (!confirm(`Delete ${it.name} completely? This can't be undone.`)) return;
+                          const r = await fetch(`/api/vendor/items/${it.id}`, { method: "DELETE" });
+                          const d = await r.json();
+                          if (!r.ok) { alert(d.error || "Couldn't delete."); return; }
+                          if (d.retired) alert(d.message);
+                          setEditItem(null);
+                          load();
+                        }}>🗑 DELETE</button>
+                      </div>
+                      <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 8 }}>Changed the name or price? Print fresh labels so the shelf matches the register.</p>
+                    </div>
+                  )}
                 </li>
               ))}
               {me.items.length === 0 && <li style={{ color: "var(--ash)", paddingTop: 8, fontSize: 14 }}>No items yet — add your first below. It takes 20 seconds.</li>}
