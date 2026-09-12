@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string photoId?: string | null };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; photoId?: string | null };
 type Line = Item & { qty: number };
 
 const money = (c: number) => `$${(c / 100).toFixed(2)}`;
