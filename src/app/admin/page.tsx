@@ -1578,17 +1578,27 @@ export default function AdminPage() {
                       <a className="btn small ghost" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">🖨 PACKET</a>
                       <button className="btn small ghost" disabled={busy} onClick={async () => {
                         setBusy(true);
-                        const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_for_signature" }) });
-                        const d = await r.json();
-                        setBusy(false);
-                        alert(r.ok ? `Signing link emailed to ${d.sentTo} ✓` : d.error || "Couldn't send.");
+                        try {
+                          const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_for_signature" }) });
+                          const d = await r.json().catch(() => ({}));
+                          alert(r.ok ? `Signing link emailed to ${d.sentTo} ✓` : d.error || `Couldn't send (${r.status}).`);
+                        } catch (e) {
+                          alert(`Couldn't send — ${e instanceof Error ? e.message : "network error"}`);
+                        } finally {
+                          setBusy(false);
+                        }
                       }}>📧 SEND FOR SIGNATURE</button>
                       <button className="btn small ghost" disabled={busy} onClick={async () => {
                         setBusy(true);
-                        const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_setup_guide" }) });
-                        const d = await r.json();
-                        setBusy(false);
-                        alert(r.ok ? `Setup guide emailed to ${d.sentTo} \u2713` : d.error || "Couldn't send.");
+                        try {
+                          const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_setup_guide" }) });
+                          const d = await r.json().catch(() => ({}));
+                          alert(r.ok ? `Setup guide emailed to ${d.sentTo} ✓` : d.error || `Couldn't send (${r.status}).`);
+                        } catch (e) {
+                          alert(`Couldn't send — ${e instanceof Error ? e.message : "network error"}`);
+                        } finally {
+                          setBusy(false);
+                        }
                       }}>📖 RESEND GUIDE</button>
                       {c.status === "ACTIVE" && (
                         <>
