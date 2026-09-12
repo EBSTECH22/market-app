@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Lightbox from "@/components/Lightbox";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; photoId?: string | null };
 type Line = Item & { qty: number };
@@ -11,6 +12,7 @@ export default function SelfCheckout() {
   const [items, setItems] = useState<Item[]>([]);
   const [taxRate, setTaxRate] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const [cart, setCart] = useState<Line[]>([]);
   const [q, setQ] = useState("");
   const [code, setCode] = useState("");
@@ -215,7 +217,7 @@ export default function SelfCheckout() {
           <div key={i.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13.5 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{i.photoId && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto" }} />
+              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} onClick={() => setLightbox({ src: `/api/public/photo/${i.photoId}`, alt: i.name })} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto", cursor: "zoom-in" }} />
             )}<span><b>{i.name}</b> <span style={{ color: "var(--ash)" }}>· {i.vendorName}</span></span></span>
             <span style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto" }}>
               <b>{money(i.priceCents)}</b>
@@ -227,6 +229,7 @@ export default function SelfCheckout() {
         <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 8 }}>Some items are register-only per the vendor — the page will tell you if one of yours is.</p>
       </div>
       )}
+      {lightbox && <Lightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />}
     </main>
   );
 }

@@ -18,6 +18,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
   const [followEmail, setFollowEmail] = useState("");
   const [followMsg, setFollowMsg] = useState("");
   const [followDone, setFollowDone] = useState(false);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [photos, setPhotos] = useState<string[]>([]);
   const [logoId, setLogoId] = useState<string | null>(null);
@@ -162,9 +163,10 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
         <div style={{ display: "flex", gap: 8, overflowX: "auto", marginBottom: 16, paddingBottom: 4 }}>
           {photos.map((id) => (
             /* eslint-disable-next-line @next/next/no-img-element */
-            <a key={id} href={`/api/public/photo/${id}`} target="_blank" rel="noopener" style={{ flex: "0 0 auto" }}>
+            <button key={id} onClick={() => setLightbox({ src: `/api/public/photo/${id}`, alt: "Product photo" })} style={{ flex: "0 0 auto", padding: 0, border: "none", background: "none", cursor: "zoom-in" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={`/api/public/photo/${id}`} alt="Product photo" style={{ height: 150, width: "auto", border: "1px solid var(--border)", display: "block" }} />
-            </a>
+            </button>
           ))}
         </div>
       )}
@@ -176,7 +178,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
           <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{i.photoId && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto" }} />
+              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} onClick={() => setLightbox({ src: `/api/public/photo/${i.photoId}`, alt: i.name })} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto", cursor: "zoom-in" }} />
             )}{i.name}{i.quantity <= 3 ? <b> · only {i.quantity} left</b> : ""}</span>
             <span>{(i.salePercent || 0) > 0 && <><s style={{ color: "var(--ash)", fontWeight: 400 }}>{money(i.basePriceCents || i.priceCents)}</s>{" "}<span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px", marginRight: 6 }}>{i.salePercent}% OFF</span></>}<b style={(i.salePercent || 0) > 0 ? { color: "var(--red)" } : {}}>{money(i.priceCents)}</b></span>
           </div>
@@ -269,6 +271,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
         <div style={{ marginTop: 12 }}><button className="btn small" onClick={postReview}>POST REVIEW</button></div>
         {rvMsg && <p className={rvMsg.includes("✓") ? "ok" : "err"}>{rvMsg}</p>}
       </div>
+      {lightbox && <Lightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />}
     </main>
   );
 }
