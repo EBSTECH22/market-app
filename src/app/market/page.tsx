@@ -26,7 +26,7 @@ export default function MarketDirectory() {
     };
     fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
     loadMarket();
-    const t = setInterval(loadMarket, 60000);
+    const t = setInterval(loadMarket, 30000);
     const onFocus = () => loadMarket();
     window.addEventListener("focus", onFocus);
     return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };

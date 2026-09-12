@@ -212,10 +212,11 @@ export default function AdminPage() {
 
   useEffect(() => {
     probeRole(); loadDrawer(); loadAll();
-    const t = setInterval(() => { loadDrawer(); loadAll(); }, 60000);
+    const t = setInterval(() => { loadDrawer(); loadAll(); }, 15000);
     const onFocus = () => { loadDrawer(); loadAll(); };
     window.addEventListener("focus", onFocus);
-    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
+    document.addEventListener("visibilitychange", onFocus);
+    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
   }, [probeRole, loadDrawer, loadAll]);
   useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
   useEffect(() => { if (authed && role === "admin" && tab === "team") loadTeam(); }, [authed, role, tab, loadTeam]);

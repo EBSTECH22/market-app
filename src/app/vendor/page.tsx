@@ -61,7 +61,7 @@ export default function VendorDashboard() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 30000);
+    const t = setInterval(load, 15000);
     const onFocus = () => load();
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);

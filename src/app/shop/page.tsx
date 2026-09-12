@@ -32,7 +32,7 @@ export default function SelfCheckout() {
       });
     };
     loadShop();
-    const t = setInterval(loadShop, 60000);
+    const t = setInterval(loadShop, 30000);
     const onFocus = () => loadShop();
     window.addEventListener("focus", onFocus);
     return () => { clearInterval(t); window.removeEventListener("focus", onFocus); scannerRef.current?.stop().catch(() => {}); };
