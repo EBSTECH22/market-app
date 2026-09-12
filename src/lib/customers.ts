@@ -57,7 +57,7 @@ export async function attachCustomerToSale(saleId: string, contact: string): Pro
     try {
       await sendCustomerReceiptEmail(customer.email, sale.number,
         sale.lines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.priceCents })),
-        sale.subtotalCents, sale.taxCents, sale.discountCents, sale.totalCents, fresh?.points ?? 0);
+        sale.subtotalCents, sale.taxCents, sale.discountCents, sale.totalCents, fresh?.points ?? 0, sale.saleSavingsCents);
     } catch {}
   }
   return { points: fresh?.points ?? 0, contact: customer.email || customer.phone };

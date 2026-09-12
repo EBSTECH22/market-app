@@ -56,6 +56,7 @@ model Sale {
   customerId    String     @default("")
   discountCents Int        @default(0)
   cardAdjustCents Int      @default(0)
+  saleSavingsCents Int    @default(0)
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
 }

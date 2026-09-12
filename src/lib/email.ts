@@ -305,7 +305,7 @@ export async function sendSetupGuideEmail(to: string, businessName: string, phon
 export async function sendCustomerReceiptEmail(
   to: string, number: number,
   lines: { name: string; quantity: number; priceCents: number }[],
-  subtotalCents: number, taxCents: number, discountCents: number, totalCents: number, points: number
+  subtotalCents: number, taxCents: number, discountCents: number, totalCents: number, points: number, saleSavingsCents: number = 0
 ) {
   const rows = lines.map((l) => `<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:3px 0;"><span>${l.quantity}&times; ${l.name}</span><b>$${((l.priceCents * l.quantity) / 100).toFixed(2)}</b></div>`).join("");
   const toGo = Math.max(0, 100 - (points % 100));
@@ -315,6 +315,7 @@ export async function sendCustomerReceiptEmail(
     <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
       ${rows}
       <div style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px;font-size:13.5px;display:flex;justify-content:space-between;"><span>Subtotal</span><b>$${(subtotalCents / 100).toFixed(2)}</b></div>
+      ${saleSavingsCents > 0 ? `<div style="font-size:13.5px;display:flex;justify-content:space-between;color:#b91c1c;"><span>\ud83c\udff7\ufe0f Sale savings</span><b>\u2212$${(saleSavingsCents / 100).toFixed(2)}</b></div>` : ""}
       <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Sales tax</span><b>$${(taxCents / 100).toFixed(2)}</b></div>
       ${discountCents > 0 ? `<div style="font-size:13.5px;display:flex;justify-content:space-between;color:#15803d;"><span>Rewards discount</span><b>\u2212$${(discountCents / 100).toFixed(2)}</b></div>` : ""}
       <div style="font-size:15px;display:flex;justify-content:space-between;"><span><b>Total</b></span><b>$${(totalCents / 100).toFixed(2)}</b></div>

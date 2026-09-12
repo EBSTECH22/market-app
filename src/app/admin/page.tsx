@@ -7,7 +7,7 @@ type FloorItem = { id: string; sku: string; name: string; priceCents: number; ba
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; quantity: number };
 type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string } };
-type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; customerPoints?: number | null; customerContact?: string;
+type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
@@ -525,6 +525,7 @@ export default function AdminPage() {
         </div>
         <div style="border-top:1px dashed #000;margin-top:4px;padding-top:4px;text-align:left">
           <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents)}</span></div>
+          ${sale.saleSavingsCents ? `<div style="display:flex;justify-content:space-between"><span>SALE SAVINGS</span><span>-${money(sale.saleSavingsCents)}</span></div>` : ""}
           ${sale.cardAdjustCents ? `<div style="display:flex;justify-content:space-between"><span>NON-CASH ADJ</span><span>${money(sale.cardAdjustCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>
           ${sale.discountCents ? `<div style="display:flex;justify-content:space-between"><span>REWARDS</span><span>-${money(sale.discountCents)}</span></div>` : ""}
@@ -959,6 +960,9 @@ export default function AdminPage() {
             ))}
             <div style={{ borderTop: "2px solid var(--border)", marginTop: 6, paddingTop: 6, fontSize: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(receipt.subtotalCents)}</b></div>
+              {typeof receipt.saleSavingsCents === "number" && receipt.saleSavingsCents > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between", color: "var(--red)" }}><span>🏷️ Sale savings</span><b>&minus;{money(receipt.saleSavingsCents)}</b></div>
+              )}
               {typeof receipt.cardAdjustCents === "number" && receipt.cardAdjustCents > 0 && (
                 <div style={{ display: "flex", justifyContent: "space-between" }}><span>Non-cash adjustment</span><b>{money(receipt.cardAdjustCents)}</b></div>
               )}

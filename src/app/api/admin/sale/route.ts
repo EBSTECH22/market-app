@@ -35,11 +35,13 @@ export async function POST(req: NextRequest) {
     commissionCents: number; vendorNetCents: number;
   }[] = [];
 
+  let saleSavingsCents = 0;
   for (const l of lines) {
     const item = items.find((i) => i.id === l.itemId);
     if (!item) return NextResponse.json({ error: "An item on the ticket no longer exists." }, { status: 400 });
     const q = Math.max(1, Math.round(l.quantity));
     const unit = effectivePriceCents(item);
+    saleSavingsCents += (item.priceCents - unit) * q;
     const gross = unit * q;
     const commission = Math.round((gross * item.vendor.commissionPercent) / 100);
     subtotal += gross;
@@ -77,6 +79,7 @@ export async function POST(req: NextRequest) {
         customerId: customer ? customer.id : "",
         discountCents,
         cardAdjustCents,
+        saleSavingsCents,
         number,
         cardName: paymentMethod === "CARD" ? (cardName || "").trim().slice(0, 60) : "",
         employee: drawer.employee,
@@ -141,10 +144,10 @@ export async function POST(req: NextRequest) {
       try {
         await sendCustomerReceiptEmail(customer.email, sale.number,
           saleLines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.priceCents })),
-          subtotal, taxCents, discountCents, totalCents, customerPoints ?? 0);
+          subtotal, taxCents, discountCents, totalCents, customerPoints ?? 0, saleSavingsCents);
       } catch {}
     }
   }
 
-  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, totalCents, taxRate, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
 }
