@@ -381,7 +381,7 @@ export default function VendorDashboard() {
             <Stat label="NEEDS A REPLY" value={String(needsReply)} color={needsReply > 0 ? "var(--red)" : "var(--green)"} sub={needsReply > 0 ? "open messages" : "all caught up"} onClick={() => setVtab("inbox")} />
           </div>
 
-          {me.items.length === 0 && (
+          {me.items.filter((i) => i.active).length === 0 && (
             <div className="card" style={{ marginBottom: 16, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
               <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>WELCOME! THREE STEPS AND YOU&rsquo;RE SELLING 🌾</h2>
               <ol style={{ margin: "0 0 10px 18px", fontSize: 13.5, lineHeight: 1.9, listStyle: "decimal" }}>
@@ -438,7 +438,7 @@ export default function VendorDashboard() {
               <a className="btn small" href="/vendor/labels">🏷 PRINT BARCODE LABELS</a>
             </div>
             <ul style={{ listStyle: "none", marginTop: 8 }}>
-              {me.items.map((it) => (
+              {me.items.filter((it) => it.active).map((it) => (
                 <li key={it.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <div>
@@ -492,8 +492,24 @@ export default function VendorDashboard() {
                   )}
                 </li>
               ))}
-              {me.items.length === 0 && <li style={{ color: "var(--ash)", paddingTop: 8, fontSize: 14 }}>No items yet — add your first below. It takes 20 seconds.</li>}
+              {me.items.filter((it) => it.active).length === 0 && <li style={{ color: "var(--ash)", paddingTop: 8, fontSize: 14 }}>No items yet — add your first below. It takes 20 seconds.</li>}
             </ul>
+            {me.items.some((it) => !it.active) && (
+              <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", color: "var(--ash)" }}>RETIRED ITEMS</div>
+                <ul style={{ listStyle: "none", marginTop: 4 }}>
+                  {me.items.filter((it) => !it.active).map((it) => (
+                    <li key={it.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, opacity: 0.75 }}>
+                      <span style={{ fontSize: 13.5 }}>
+                        <b>{it.name}</b> <span style={{ color: "var(--ash)", fontSize: 11.5 }}>{it.sku} · ${(it.priceCents / 100).toFixed(2)}</span>
+                      </span>
+                      <button className="btn small ghost" disabled={busy} onClick={() => patchItem(it.id, { active: true })}>♻️ BRING BACK</button>
+                    </li>
+                  ))}
+                </ul>
+                <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 4 }}>Bringing an item back re-activates its barcode — then ➕ RESTOCK it and it&rsquo;s selling again. Old labels still scan.</p>
+              </div>
+            )}
           </div>
 
           <div className="card">

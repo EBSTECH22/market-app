@@ -12,7 +12,7 @@ export async function GET() {
   const [vendor, ledger, items, monthLines] = await Promise.all([
     db.vendor.findUnique({ where: { id: vendorId }, select: { id: true, code: true, businessName: true, contactName: true, email: true, commissionPercent: true, mustChangePassword: true, acceptsPreorders: true, acceptsRequests: true, publicBlurb: true, allowSelfCheckout: true, contracts: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, vendorSignedAt: true } } } }),
     db.ledgerEntry.findMany({ where: { vendorId }, orderBy: { createdAt: "desc" }, take: 30 }),
-    db.item.findMany({ where: { vendorId, active: true }, orderBy: { createdAt: "asc" } }),
+    db.item.findMany({ where: { vendorId }, orderBy: { createdAt: "asc" } }),
     db.ledgerEntry.findMany({ where: { vendorId, createdAt: { gte: centralMonthStart() }, type: { in: ["SALE", "REFUND", "VOID"] } } }),
   ]);
   if (!vendor) return NextResponse.json({ error: "Not found." }, { status: 404 });
