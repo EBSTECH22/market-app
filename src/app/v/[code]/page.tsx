@@ -99,16 +99,34 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
 
   return (
     <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px 70px" }}>
-      <div style={{ textAlign: "center", marginBottom: 6 }}>
-        <img src="/logo.png" alt="Community Harvest" style={{ width: 110, margin: "0 auto 4px", display: "block" }} />
-        {logoId && (
+      <div style={{ marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 104, height: "auto", display: "block", opacity: 0.85 }} />
+        </div>
+        <div style={{ textAlign: "center" }}>
+        {logoId ? (
           /* eslint-disable-next-line @next/next/no-img-element */
-          <img src={`/api/public/photo/${logoId}`} alt="" style={{ height: 70, width: "auto", maxWidth: 200, margin: "0 auto 4px", display: "block" }} />
+          <img src={`/api/public/photo/${logoId}`} alt={vendor.businessName} style={{
+            width: 132, height: 132, borderRadius: "50%", objectFit: "contain", background: "#fff",
+            border: "1px solid var(--border)", boxShadow: "0 4px 14px rgba(0,0,0,0.1)", padding: 14,
+            margin: "0 auto 10px", display: "block",
+          }} />
+        ) : (
+          <div style={{
+            width: 132, height: 132, borderRadius: "50%", background: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
+            color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 44, fontWeight: 800, letterSpacing: "-0.02em",
+            boxShadow: "0 4px 14px rgba(0,0,0,0.12)", margin: "0 auto 10px",
+          }}>
+            {vendor.businessName.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
+          </div>
         )}
         <div className="display" style={{ fontSize: 24 }}>{vendor.businessName.toUpperCase()}</div>
         {avg !== null && <div style={{ fontSize: 13, fontWeight: 700 }}>{stars(Math.round(avg))} {avg} · {reviews.length} review{reviews.length === 1 ? "" : "s"}</div>}
         {vendor.publicBlurb && <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>{vendor.publicBlurb}</p>}
         <div style={{ fontSize: 11, color: "var(--ash)", marginTop: 4 }}>at Community Harvest — Food and Craft Market, Noble OK · <a href="/market">all vendors</a></div>
+        </div>
       </div>
 
       {photos.length > 0 && (
