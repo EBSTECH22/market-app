@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number applicationId?: string | null; };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number };
@@ -1615,6 +1615,7 @@ export default function AdminPage() {
                         setEditV(v.id);
                         setEditF({ businessName: v.businessName, contactName: v.contactName || "", email: v.email, phone: v.phone || "" });
                       }}>✏️ EDIT</button>
+                      {v.applicationId && <a className="btn small ghost" href={`/admin/applications/${v.applicationId}/print`} target="_blank" rel="noopener">📋 APPLICATION</a>}
                     </div>
                   </div>
                   {editV === v.id && (
@@ -1670,6 +1671,11 @@ export default function AdminPage() {
                             <button className="btn small" disabled={busy} onClick={() => setAppForm(appForm?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}>📝 CREATE CONTRACT</button>
                           </>
                         )}
+                        <button className="btn small ghost" disabled={busy} onClick={async () => {
+                          if (!confirm(`Add ${a.businessName} as a vendor now? Their profile builds from this application, the application moves onto their vendor row, and their portal stays locked until a contract is signed.`)) return;
+                          const d = await appAction(a.id, { action: "add_vendor" });
+                          if (d) alert(`${d.vendor.businessName} added as vendor ${d.vendor.code} ✓ — application filed on their profile.`);
+                        }}>👤 ADD AS VENDOR</button>
                         <button className="btn small ghost" disabled={busy} onClick={() => decideApplication(a.id, "decline")}>❌ DECLINE</button>
                       </span>
                     )}

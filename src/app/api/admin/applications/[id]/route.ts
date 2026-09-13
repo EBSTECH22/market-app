@@ -38,6 +38,30 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ application: updated });
   }
 
+  if (action === "add_vendor") {
+    // build the vendor profile straight from the application; portal stays locked until a contract is signed
+    let vendor = await db.vendor.findFirst({ where: { email: { equals: app.email, mode: "insensitive" } } });
+    if (!vendor) {
+      const count = await db.vendor.count();
+      const code = `V${String(count + 1).padStart(2, "0")}`;
+      vendor = await db.vendor.create({
+        data: {
+          code,
+          businessName: app.businessName.trim(),
+          contactName: (app.contactName || "").trim(),
+          email: app.email.toLowerCase().trim(),
+          phone: (app.phone || "").trim(),
+          passwordHash: hashPassword(randomBytes(16).toString("hex")),
+          mustChangePassword: true,
+          commissionPercent: 0,
+          portalLocked: true,
+        },
+      });
+    }
+    await db.vendorApplication.update({ where: { id: app.id }, data: { status: "ACCEPTED", stage: "VENDOR", decidedAt: new Date(), vendorId: vendor.id } });
+    return NextResponse.json({ ok: true, vendor: { id: vendor.id, code: vendor.code, businessName: vendor.businessName } });
+  }
+
   if (action === "create_contract") {
     const boothLabel = String(body.boothLabel || "").trim().slice(0, 40);
     const rentDollars = Number(body.rentDollars);
@@ -73,7 +97,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const token = randomBytes(16).toString("hex");
     await db.contract.update({ where: { id: contract.id }, data: { signToken: token } });
 
-    await db.vendorApplication.update({ where: { id: app.id }, data: { status: "ACCEPTED", stage: "CONTRACT", decidedAt: new Date() } });
+    await db.vendorApplication.update({ where: { id: app.id }, data: { status: "ACCEPTED", stage: "CONTRACT", decidedAt: new Date(), vendorId: vendor.id } });
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
     try { await sendApplicationDecisionEmail(app.email, app.contactName, app.businessName, true, ""); } catch {}

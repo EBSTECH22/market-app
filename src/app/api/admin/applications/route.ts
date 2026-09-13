@@ -6,6 +6,6 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const applications = await db.vendorApplication.findMany({ orderBy: [{ status: "asc" }, { createdAt: "desc" }], take: 200 });
+  const applications = await db.vendorApplication.findMany({ where: { vendorId: "" }, orderBy: [{ status: "asc" }, { createdAt: "desc" }], take: 200 });
   return NextResponse.json({ applications });
 }

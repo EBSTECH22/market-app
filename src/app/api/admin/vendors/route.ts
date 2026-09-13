@@ -14,7 +14,12 @@ export async function GET() {
   });
   const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
   const map = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));
-  return NextResponse.json({ vendors: vendors.map((v) => ({ ...v, balance: map[v.id] || 0 })) });
+  const apps = await db.vendorApplication.findMany({ select: { id: true, vendorId: true, email: true } });
+  const appByVendor: Record<string, string> = {};
+  for (const a of apps) { if (a.vendorId) appByVendor[a.vendorId] = a.id; }
+  const emailMap: Record<string, string> = {};
+  for (const a of apps) { if (!a.vendorId) emailMap[a.email.toLowerCase()] = a.id; }
+  return NextResponse.json({ vendors: vendors.map((v) => ({ ...v, balance: map[v.id] || 0, applicationId: appByVendor[v.id] || emailMap[v.email.toLowerCase()] || null })) });
 }
 
 export async function POST(req: NextRequest) {
