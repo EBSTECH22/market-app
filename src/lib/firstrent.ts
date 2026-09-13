@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { TZ } from "@/lib/time";
-import { sendFirstRentEmail } from "@/lib/email";
+import { sendFirstRentEmail, sendWelcomeEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 
 // Posts the prorated first-month rent when a contract becomes fully executed.
@@ -8,6 +8,14 @@ import { randomBytes } from "crypto";
 export async function postFirstMonthRent(contractId: string) {
   const c = await db.contract.findUnique({ where: { id: contractId }, include: { vendor: true } });
   if (!c || !c.vendorSignedAt || !c.marketSignedAt) return;
+  // portal gate lifts here: contract fully signed -> credentials exist for the first time
+  if (c.vendor.portalLocked) {
+    const tempPassword = randomBytes(4).toString("hex");
+    const { hashPassword } = await import("@/lib/auth");
+    await db.vendor.update({ where: { id: c.vendorId }, data: { portalLocked: false, passwordHash: hashPassword(tempPassword), mustChangePassword: true } });
+    try { await sendWelcomeEmail({ ...c.vendor, portalLocked: false }, tempPassword); } catch {}
+  }
+
   const marker = `[first ${c.id.slice(0, 8)}]`;
   const already = await db.ledgerEntry.findFirst({ where: { vendorId: c.vendorId, type: "RENT", note: { contains: marker } } });
   if (already) return;

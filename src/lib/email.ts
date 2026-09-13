@@ -31,7 +31,7 @@ function shell(inner: string) {
       ${inner}
     </div>
     <div style="max-width:480px;margin:14px auto 0;text-align:center;font-size:11px;color:#9ca3af;">
-      ${name} \u00b7 Main St, Noble, Oklahoma \ud83c\udf3e
+      ${name} \u00b7 510 N Main St, Noble, OK 73068 \ud83c\udf3e
     </div>
   </div>`;
 }
@@ -391,4 +391,14 @@ export async function sendRentLinkEmail(to: string, businessName: string, booth:
     <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">You&rsquo;re all paid up \u2705</h2>
     <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — nothing is due for booth ${booth} right now. If you&rsquo;d like automatic settlement anyway, save a card in your portal under \ud83d\udcb5 MONEY.</p>`;
   await send(to, `Rent payment link — booth ${booth} \u00b7 Community Harvest`, shell(inner));
+}
+
+export async function sendViewingEmail(to: string, contactName: string, businessName: string, when: string) {
+  const inner = `
+    <div style="font-size:34px;line-height:1;">\ud83d\udccd</div>
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:6px 0 8px;letter-spacing:-0.02em;">Your booth viewing is set</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${contactName} — we&rsquo;d love to show ${businessName} around. Here&rsquo;s your viewing time:</p>
+    <div style="display:inline-block;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:14px 22px;font-size:16px;font-weight:800;margin-bottom:14px;">${when}</div>
+    <p style="font-size:13px;color:#374151;">Community Harvest \u2014 <b>510 N Main St, Noble, OK 73068</b>. You&rsquo;ll see the booth spaces, the register setup, and how restocking works. Bring your questions! Need a different time? Just reply to this email.</p>`;
+  await send(to, `Booth viewing \u2014 ${when} \u00b7 Community Harvest`, shell(inner));
 }

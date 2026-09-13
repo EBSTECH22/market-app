@@ -46,7 +46,7 @@ export default function AdminPage() {
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [teamMsg, setTeamMsg] = useState("");
-  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; phoneType?: string; notes: string; createdAt: string }[]>([]);
+  const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; phoneType?: string; notes: string; adminNotes?: string; stage?: string; viewingAt?: string; createdAt: string }[]>([]);
   const [appOpen, setAppOpen] = useState<string | null>(null);
   const [complaints, setComplaints] = useState<{ id: string; status: string; customerName: string; email: string; phone: string; vendor: { code: string; businessName: string } | null; messages: { sender: string; body: string }[] }[]>([]);
   const [punchName, setPunchName] = useState("");
@@ -117,6 +117,18 @@ export default function AdminPage() {
   const [cardConfirm, setCardConfirm] = useState(false);
   const [editV, setEditV] = useState<string | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
+  const [appNotes, setAppNotes] = useState<Record<string, string>>({});
+  const [appForm, setAppForm] = useState<{ id: string; booth: string; rent: string; start: string } | null>(null);
+  const appAction = async (id: string, payload: Record<string, unknown>, refresh = true) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/admin/applications/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(d.error || "Couldn't update."); return null; }
+      if (refresh) loadAll();
+      return d;
+    } finally { setBusy(false); }
+  };
   const [editF, setEditF] = useState({ businessName: "", contactName: "", email: "", phone: "" });
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
@@ -1633,7 +1645,7 @@ export default function AdminPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋</h2>
             <p style={{ fontSize: 12, color: "var(--ash)" }}>
-              Send hopefuls to <b>market.dailybreadbaked.com/apply</b>. Accepting emails them &ldquo;someone will be calling with next steps&rdquo; — then you call and add them under ADD A VENDOR below.
+              Send hopefuls to <b>market.dailybreadbaked.com/apply</b>. The pipeline: review &amp; call (save your notes) → schedule a viewing or skip → create the contract. The vendor&rsquo;s portal stays locked until the contract is fully signed — credentials go out automatically at that moment.
             </p>
             <ul style={{ margin: "8px 0" }}>
               {applications.map((a) => (
@@ -1646,11 +1658,22 @@ export default function AdminPage() {
                     </div>
                     <a className="btn small ghost" href={`/admin/applications/${a.id}/print`} target="_blank" rel="noopener" style={{ marginRight: 5 }}>🖨</a>
                     {a.status === "PENDING" && (
-                      <span style={{ display: "flex", gap: 5 }}>
-                        <button className="btn small" disabled={busy} onClick={() => decideApplication(a.id, "accept")}>✅ ACCEPT</button>
+                      <span style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                        <b style={{ fontSize: 11, alignSelf: "center", color: "var(--ash)" }}>{a.stage === "VIEWING" ? `📍 ${a.viewingAt}` : a.stage || "NEW"}</b>
+                        {(!a.stage || a.stage === "NEW") && <button className="btn small" disabled={busy} onClick={() => appAction(a.id, { action: "mark_called" })}>📞 CALLED</button>}
+                        {(a.stage === "CALLED" || a.stage === "VIEWING") && (
+                          <>
+                            {a.stage === "CALLED" && <button className="btn small ghost" disabled={busy} onClick={() => {
+                              const when = prompt("Viewing date & time (goes in their email exactly as typed):", "Tuesday Sep 22, 10:00 AM");
+                              if (when && when.trim()) appAction(a.id, { action: "schedule_viewing", when: when.trim() });
+                            }}>📅 SCHEDULE VIEWING</button>}
+                            <button className="btn small" disabled={busy} onClick={() => setAppForm(appForm?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}>📝 CREATE CONTRACT</button>
+                          </>
+                        )}
                         <button className="btn small ghost" disabled={busy} onClick={() => decideApplication(a.id, "decline")}>❌ DECLINE</button>
                       </span>
                     )}
+                    {a.status === "ACCEPTED" && a.stage === "CONTRACT" && <b style={{ fontSize: 11, color: "var(--green)" }}>📝 CONTRACT SENT</b>}
                   </div>
                   {appOpen === a.id && (
                     <div style={{ fontSize: 12.5, marginTop: 6, paddingLeft: 8, borderLeft: "2px solid var(--border)", lineHeight: 1.7 }}>
@@ -1666,6 +1689,29 @@ export default function AdminPage() {
                       {a.phoneType && <><b>Phone:</b> {a.phoneType === "IPHONE" ? "iPhone 📱" : a.phoneType === "ANDROID" ? "Android 🤖" : a.phoneType}<br /></>}
                       {a.notes && <><b>Notes:</b> {a.notes}<br /></>}
                       <span style={{ color: "var(--ash)" }}>Applied {new Date(a.createdAt).toLocaleDateString()}</span>
+                      <div style={{ marginTop: 8 }}>
+                        <label style={{ fontSize: 11 }}>📞 Call &amp; review notes (what they want, what you discussed)</label>
+                        <textarea rows={3} value={appNotes[a.id] ?? a.adminNotes ?? ""} onChange={(e) => setAppNotes((n) => ({ ...n, [a.id]: e.target.value }))} />
+                        <button className="btn small ghost" disabled={busy} style={{ marginTop: 4 }} onClick={() => appAction(a.id, { action: "save_notes", notes: appNotes[a.id] ?? a.adminNotes ?? "" })}>SAVE NOTES</button>
+                      </div>
+                    </div>
+                  )}
+                  {appForm?.id === a.id && (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
+                      <b style={{ fontSize: 12.5 }}>📝 CREATE CONTRACT — locked portal opens when they sign</b>
+                      <label>Booth label</label>
+                      <input value={appForm.booth} onChange={(e) => setAppForm((f) => f && ({ ...f, booth: e.target.value }))} placeholder="A3" />
+                      <label>Monthly rent (dollars)</label>
+                      <input type="number" min="1" step="1" value={appForm.rent} onChange={(e) => setAppForm((f) => f && ({ ...f, rent: e.target.value }))} placeholder="96" />
+                      <label>Start date</label>
+                      <input type="date" value={appForm.start} onChange={(e) => setAppForm((f) => f && ({ ...f, start: e.target.value }))} />
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <button className="btn small" disabled={busy} onClick={async () => {
+                          const d = await appAction(a.id, { action: "create_contract", boothLabel: appForm.booth, rentDollars: Number(appForm.rent), startDate: appForm.start });
+                          if (d) { setAppForm(null); alert(`Contract created & signing link emailed ✓ — vendor ${d.vendor.code}, portal locked until signed.`); }
+                        }}>CREATE &amp; SEND FOR SIGNATURE</button>
+                        <button className="btn small ghost" onClick={() => setAppForm(null)}>CANCEL</button>
+                      </div>
                     </div>
                   )}
                 </li>

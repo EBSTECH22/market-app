@@ -10,6 +10,9 @@ export async function POST(req: NextRequest) {
   if (!vendor || !vendor.active || !verifyPassword(password, vendor.passwordHash)) {
     return NextResponse.json({ error: "Wrong email or password." }, { status: 401 });
   }
+  if (vendor.portalLocked) {
+    return NextResponse.json({ error: "Your portal unlocks once your booth contract is fully signed — check your email for the signing link, or ask us at the market." }, { status: 403 });
+  }
 
   const res = NextResponse.json({ ok: true });
   const c = vendorCookie(vendor.id);

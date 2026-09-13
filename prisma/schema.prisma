@@ -21,6 +21,7 @@ model Vendor {
   acceptsRequests   Boolean  @default(false)
   allowSelfCheckout Boolean  @default(true)
   lastRestockAlertAt DateTime?
+  portalLocked     Boolean @default(false)
   stripeCustomerId String  @default("")
   stripePmId       String  @default("")
   cardLast4        String  @default("")
@@ -264,6 +265,9 @@ model VendorApplication {
   status       String    @default("PENDING")
   createdAt    DateTime  @default(now())
   decidedAt    DateTime?
+  adminNotes String @default("")
+  stage      String @default("NEW")
+  viewingAt  String @default("")
 }
 
 model TentDate {

@@ -104,11 +104,11 @@ export default function ContractPacketView({ apiPath }: { apiPath: string }) {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/logo.png" alt="" style={{ width: 84, height: 84, display: "block", margin: "0 auto 6px" }} />
       <h1 style={{ textAlign: "center", fontSize: 20, fontWeight: 900, marginBottom: 2 }}>BOOTH RENTAL AGREEMENT</h1>
-      <p style={{ textAlign: "center", color: "#555", marginBottom: 14 }}>Community Harvest — Food and Craft Market · Noble, Oklahoma</p>
+      <p style={{ textAlign: "center", color: "#555", marginBottom: 14 }}>Community Harvest — Food and Craft Market · 510 N Main St, Noble, OK 73068</p>
 
       <p>
         This Booth Rental Agreement (the &ldquo;Agreement&rdquo;) is entered into as of <b>{fmtDay(c.startDate)}</b> between
-        <b> Community Harvest</b> (&ldquo;Market&rdquo;) and <b>{p.vendor.businessName}</b>
+        <b> Community Harvest</b>, 510 N Main St, Noble, OK 73068 (&ldquo;Market&rdquo;) and <b>{p.vendor.businessName}</b>
         {p.vendor.contactName ? <> ({p.vendor.contactName})</> : null} (&ldquo;Vendor&rdquo;).
       </p>
 
