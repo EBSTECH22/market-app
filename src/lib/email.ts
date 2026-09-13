@@ -361,3 +361,17 @@ export async function sendRentChargedEmail(to: string, businessName: string, due
     <p style="font-size:12px;color:#9ca3af;">Avoid the adjustment anytime by covering rent with sales or paying cash/check at the market. Your full statement is in your portal under \ud83d\udcb5 MONEY.</p>`;
   await send(to, "Rent settled — Community Harvest", shell(inner));
 }
+
+export async function sendFirstRentEmail(to: string, businessName: string, booth: string, monthlyCents: number, proratedCents: number, daysCharged: number, daysInMonth: number, startStr: string, hasCard: boolean) {
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your first month&rsquo;s rent \ud83e\uddfe</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — your contract is fully signed, so here&rsquo;s your first rent, prorated to your start date. It&rsquo;s posted to your vendor balance, not charged to a card.</p>
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Booth ${booth} \u00b7 monthly rent</span><b>$${(monthlyCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Starting ${startStr} \u2192 ${daysCharged} of ${daysInMonth} days</span><b>\u00d7 ${daysCharged}/${daysInMonth}</b></div>
+      <div style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px;font-size:15px;display:flex;justify-content:space-between;"><span><b>First month (prorated)</b></span><b>$${(proratedCents / 100).toFixed(2)}</b></div>
+    </div>
+    <p style="font-size:13px;color:#374151;"><b>To get started, pay it in your portal under \ud83d\udcb5 MONEY — one card payment covers your first month AND saves your card for automatic settlement going forward</b> (3% card-processing adjustment on card payments; cash or check at the market is fee-free). Your sales pay it down automatically — every sale credits your balance first. Whatever&rsquo;s left at settlement you can cover with cash or check (no fee)${hasCard ? ", or it can charge to your card on file (3% processing adjustment on the charged amount)" : ", or save a card on file in your portal for automatic settlement (3% processing adjustment applies only to card-charged amounts)"}. From next month, full rent posts on the 1st automatically.</p>
+    <p style="margin:14px 0 0;"><a href="${baseUrl()}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">See my balance</a></p>`;
+  await send(to, `First month's rent — booth ${booth} \u00b7 Community Harvest`, shell(inner));
+}

@@ -4,6 +4,7 @@ import { isStaff, isAdmin, currentVendorId } from "@/lib/auth";
 import { pushToAdmin } from "@/lib/push";
 import { sendExecutedContractEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
+import { postFirstMonthRent } from "@/lib/firstrent";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +57,7 @@ async function executedCopy(req: NextRequest, contractId: string) {
   const app = await db.vendorApplication.findFirst({ where: { email: { equals: c.vendor.email, mode: "insensitive" } }, orderBy: { createdAt: "desc" } });
   const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
   try { await sendExecutedContractEmail(c.vendor.email, c.vendor.businessName, `${base}/sign/${token}`, app?.phoneType || ""); } catch {}
+  try { await postFirstMonthRent(c.id); } catch {}
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

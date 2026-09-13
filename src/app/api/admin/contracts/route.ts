@@ -36,13 +36,6 @@ export async function POST(req: NextRequest) {
       startDate: start,
     },
   });
-  if (firstMonthCents > 0) {
-    await db.ledgerEntry.create({
-      data: {
-        vendorId, type: "RENT", amountCents: -firstMonthCents,
-        note: `First month rent (prorated), booth ${contract.boothLabel}`,
-      },
-    });
-  }
+  // first month's rent posts automatically when the contract is FULLY EXECUTED (both signatures) — not at creation
   return NextResponse.json({ contract, firstMonthCents });
 }

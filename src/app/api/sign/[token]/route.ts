@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { postFirstMonthRent } from "@/lib/firstrent";
 import { pushToAdmin } from "@/lib/push";
 import { sendExecutedContractEmail } from "@/lib/email";
 
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     const app = await db.vendorApplication.findFirst({ where: { email: { equals: contract.vendor.email, mode: "insensitive" } }, orderBy: { createdAt: "desc" } });
     const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
     try { await sendExecutedContractEmail(contract.vendor.email, contract.vendor.businessName, `${base}/sign/${params.token}`, app?.phoneType || ""); } catch {}
+    try { await postFirstMonthRent(contract.id); } catch {}
   }
   return NextResponse.json({ ok: true });
 }

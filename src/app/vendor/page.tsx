@@ -47,6 +47,16 @@ export default function VendorDashboard() {
   const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0" });
   const [cardMsg, setCardMsg] = useState("");
   useEffect(() => {
+    const rsid = new URLSearchParams(window.location.search).get("rent_session");
+    if (rsid) {
+      fetch(`/api/vendor/rent-checkout?session_id=${encodeURIComponent(rsid)}`).then(async (r) => {
+        const d = await r.json();
+        setCardMsg(r.ok ? `Rent paid \u2713 — and card \u00b7\u00b7\u00b7\u00b7${d.last4} is saved for automatic settlement going forward.` : d.error || "Couldn't confirm the payment.");
+        window.history.replaceState(null, "", "/vendor");
+        load();
+      });
+      return;
+    }
     const sid = new URLSearchParams(window.location.search).get("card_session");
     if (!sid) return;
     fetch(`/api/vendor/card?session_id=${encodeURIComponent(sid)}`).then(async (r) => {
@@ -732,6 +742,23 @@ export default function VendorDashboard() {
             <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} color={me.balance >= 0 ? "var(--green)" : "var(--red)"} />
             <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
           </div>
+          {me.balance < 0 && (
+            <div className="card" style={{ marginBottom: 16, background: "#fef2f2", border: "1px solid #fecaca" }}>
+              <h2 className="display" style={{ fontSize: 16, marginBottom: 4, color: "var(--red)" }}>RENT DUE: ${(Math.abs(me.balance) / 100).toFixed(2)}</h2>
+              <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
+                Pay it by card in one step — <b>the same payment saves your card for automatic settlement</b> going forward (a 3% card-processing adjustment applies to card payments; cash or check at the market is always fee-free). Your sales also pay this down automatically.
+              </p>
+              <button className="btn small" style={{ marginTop: 8 }} disabled={busy} onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await fetch("/api/vendor/rent-checkout", { method: "POST" });
+                  const d = await r.json();
+                  if (!r.ok) { alert(d.error || "Couldn't start."); return; }
+                  window.location.href = d.url;
+                } finally { setBusy(false); }
+              }}>💳 PAY ${((Math.abs(me.balance) * 1.03) / 100).toFixed(2)} &amp; SAVE CARD</button>
+            </div>
+          )}
           <div className="card" style={{ marginBottom: 16 }}>
             <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>💳 CARD ON FILE — AUTOMATIC RENT</h2>
             <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
