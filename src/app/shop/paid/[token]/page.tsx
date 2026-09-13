@@ -72,6 +72,7 @@ export default function PaidScreen() {
         <p style={{ fontSize: 12.5, color: "var(--ash)", marginTop: 10 }}>Show this screen on your way out if asked. Thanks for shopping local! 🌾</p>
         <a className="btn small ghost" style={{ marginTop: 8 }} href="/shop">SHOP MORE</a>
       </div>
+          <p style={{ fontSize: 11, color: "var(--ash)", textAlign: "center", marginTop: 10 }}>All sales final — no refunds or exchanges.</p>
     </main>
   );
 }

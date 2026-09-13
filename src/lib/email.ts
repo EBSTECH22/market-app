@@ -268,7 +268,7 @@ export async function sendSelfCheckoutReceiptEmail(
       <div style="font-size:15px;display:flex;justify-content:space-between;"><span><b>TOTAL</b></span><b>$${(totalCents / 100).toFixed(2)}</b></div>
     </div>
     <p style="font-size:12px;color:#9ca3af;">Community Harvest — Food and Craft Market · Noble, Oklahoma</p>`;
-  await send(to, `Receipt #${number} — Community Harvest`, shell(inner));
+  await send(to, `Receipt #${number} — Community Harvest`, shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendContractSignEmail(to: string, businessName: string, link: string) {
@@ -277,7 +277,7 @@ export async function sendContractSignEmail(to: string, businessName: string, li
     <p style="font-size:14px;color:#374151;">Hi ${businessName} — your Community Harvest booth rental agreement is ready to review and sign. The packet includes your agreement, your application, and the Market Rules.</p>
     <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Review &amp; sign</a></p>
     <p style="font-size:12px;color:#9ca3af;">Sign right on your phone with your finger. This link is private to you — don&rsquo;t forward it. Questions? Just reply to this email.</p>`;
-  await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner));
+  await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendExecutedContractEmail(to: string, businessName: string, link: string, phoneType: string = "") {
@@ -288,7 +288,7 @@ export async function sendExecutedContractEmail(to: string, businessName: string
     <p style="font-size:12px;color:#9ca3af;">Welcome to the vendor family. \ud83c\udf3e</p>
     ${installBlock(phoneType)}
     <p style="font-size:12px;color:#9ca3af;">Full guide for either phone, anytime: <a href="${baseUrl()}/guide">${baseUrl().replace("https://", "")}/guide</a></p>`;
-  await send(to, "Fully signed — your Community Harvest booth contract \u2705", shell(inner));
+  await send(to, "Fully signed — your Community Harvest booth contract \u2705", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendSetupGuideEmail(to: string, businessName: string, phoneType: string = "") {
@@ -299,7 +299,7 @@ export async function sendSetupGuideEmail(to: string, businessName: string, phon
     ${installBlock(phoneType)}
     <p style="margin:16px 0;"><a href="${baseUrl()}/guide" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Open the full guide</a></p>
     <p style="font-size:12px;color:#9ca3af;">Covers everything: products, labels (and which sticker sheets to buy), restocking, pre-orders, your public page, and getting paid. Stuck? Just reply to this email.</p>`;
-  await send(to, "Your vendor setup guide — Community Harvest", shell(inner));
+  await send(to, "Your vendor setup guide — Community Harvest", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendCustomerReceiptEmail(
@@ -324,7 +324,7 @@ export async function sendCustomerReceiptEmail(
       <div style="font-size:14px;color:#15803d;"><b>\u2b50 You have ${points} reward points</b></div>
       <div style="font-size:12px;color:#374151;margin-top:2px;">${points >= 100 ? "You&rsquo;ve earned $5 off — just say so at the register!" : `${toGo} more points and $5 comes off your next visit. You earn 1 point per $2.`}</div>
     </div>`;
-  await send(to, `Receipt #${number} — Community Harvest`, shell(inner));
+  await send(to, `Receipt #${number} — Community Harvest`, shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendFollowConfirmEmail(to: string, businessName: string, code: string, token: string) {
@@ -334,7 +334,7 @@ export async function sendFollowConfirmEmail(to: string, businessName: string, c
     <p style="font-size:14px;color:#6b7280;margin:0 0 16px;">We&rsquo;ll email you when they restock at Community Harvest — at most one heads-up a day, only when there&rsquo;s something on the shelf.</p>
     <a href="${baseUrl()}/v/${code}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">See their booth</a>
     <p style="font-size:11px;color:#9ca3af;margin:16px 0 0;"><a href="${baseUrl()}/u/${token}" style="color:#9ca3af;">Unsubscribe from all alerts</a></p>`;
-  await send(to, `Following ${businessName} — Community Harvest`, shell(inner));
+  await send(to, `Following ${businessName} — Community Harvest`, shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendRestockAlertEmail(to: string, businessName: string, code: string, items: { name: string; priceCents: number }[], token: string) {

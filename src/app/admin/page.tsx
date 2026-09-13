@@ -533,7 +533,7 @@ export default function AdminPage() {
           <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px"><span>TOTAL</span><span>${money(sale.totalCents)}</span></div>
           <div>${sale.paymentMethod}${sale.cardName ? " - " + sale.cardName : ""}</div>
         </div>
-        <div style="margin-top:8px">THANK YOU!<br>homegrown + homemade</div>
+        <div style="margin-top:8px">THANK YOU!<br>homegrown + homemade</div><div style="margin-top:6px;font-size:10px">ALL SALES FINAL — NO REFUNDS OR EXCHANGES</div>
       </div>`;
     const img = printRef.current.querySelector("img");
     if (img && !img.complete) {

@@ -15,7 +15,11 @@ export default function DualPricingSign() {
         <p style={{ fontSize: 16, fontWeight: 800, margin: "10px 0 0" }}>
           Pay with cash and the adjustment comes off — automatically.
         </p>
-        <p style={{ fontSize: 12, color: "#555", marginTop: 14 }}>
+        <div style={{ borderTop: "2px solid #000", margin: "16px 0 0", paddingTop: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: "0.02em" }}>ALL SALES FINAL</div>
+          <p style={{ fontSize: 13, fontWeight: 600, margin: "4px 0 0" }}>No refunds or exchanges.</p>
+        </div>
+        <p style={{ fontSize: 12, color: "#555", marginTop: 12 }}>
           The adjustment appears as its own line on every card receipt. Questions? Our register team is happy to explain.
         </p>
       </div>

@@ -23,6 +23,7 @@ export default function ShopSign() {
         <img src={qr} alt="Scan to shop" style={{ width: 290, maxWidth: "88%", margin: "0 auto", display: "block" }} />
         <div style={{ fontSize: 15, fontWeight: 600, marginTop: 12 }}>Point your camera here — scan your items&rsquo; barcodes and pay by card, right on your phone.</div>
         <div style={{ fontSize: 12, color: "#555", marginTop: 8 }}>Cash or help? Our register up front is always happy to see you. 🌾</div>
+        <div style={{ fontWeight: 800, fontSize: 14, letterSpacing: "0.02em", marginTop: 10, borderTop: "2px solid #000", paddingTop: 8 }}>ALL SALES FINAL — NO REFUNDS OR EXCHANGES</div>
       </div>
     </main>
   );

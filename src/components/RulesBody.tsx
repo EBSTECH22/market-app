@@ -6,7 +6,7 @@ const Rule = ({ n, title, children }: { n: number; title: string; children: Reac
   </div>
 );
 
-export const RULES_UPDATED = "September 12, 2026";
+export const RULES_UPDATED = "September 13, 2026";
 
 export default function RulesBody() {
   return (
@@ -25,6 +25,8 @@ export default function RulesBody() {
       <Rule n={10} title="FAMILY-FRIENDLY FLOOR">Merchandise and signage must be appropriate for a family audience; the Market has final discretion.</Rule>
       <Rule n={11} title="RESTOCK WINDOWS">Restocking happens 7:00–8:00 AM and 6:00–8:00 PM, coordinated by staff — other times need prior approval. Pre-order dropoffs to staff are welcome anytime. Keep portal quantities current.</Rule>
       <Rule n={12} title="BOOTH MOVES">The Market may relocate a vendor to comparable space with 14 days&rsquo; notice.</Rule>
+      <Rule n={13} title="ALL SALES FINAL">All customer purchases are final — no refunds or exchanges. Vendors and their signage may not promise refunds or exchanges on Market register sales.</Rule>
+      <Rule n={14} title="SALE SIGNAGE COMES DOWN FIRST">Before ending a discount or sale remotely in the portal, any physical sale signs at the booth must be removed — come in yourself or ask a Market associate to pull them. The register charges what the app says; signs that advertise a dead sale create disputes at the counter.</Rule>
       <div style={{ fontWeight: 800, fontSize: 14.5, margin: "12px 0 4px" }}>ENFORCEMENT</div>
       <p style={{ fontSize: 13, color: "#374151" }}>Violations receive a friendly written notice with 7 days to fix. Repeat or serious violations are grounds for termination under the vendor agreement. Safety issues get corrected on the spot.</p>
     </div>
