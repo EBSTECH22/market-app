@@ -15,6 +15,10 @@ async function byToken(token: string) {
 export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
   const contract = await byToken(params.token);
   if (!contract) return NextResponse.json({ error: "Not found." }, { status: 404 });
+  if (!contract.viewedAt) {
+    await db.contract.update({ where: { id: contract.id }, data: { viewedAt: new Date() } });
+    try { await pushToAdmin("Contract viewed 👀", `${contract.vendor.businessName} just opened their signing link for booth ${contract.boothLabel}`); } catch {}
+  }
   const application = await db.vendorApplication.findFirst({
     where: { email: { equals: contract.vendor.email, mode: "insensitive" } },
     orderBy: { createdAt: "desc" },

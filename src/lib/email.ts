@@ -278,6 +278,10 @@ export async function sendContractSignEmail(to: string, businessName: string, li
     <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Review &amp; sign</a></p>
     <p style="font-size:12px;color:#9ca3af;">Sign right on your phone with your finger. This link is private to you — don&rsquo;t forward it. Questions? Just reply to this email.</p>`;
   await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
+  const marketCopy = process.env.MARKET_NOTIFY_EMAIL || "";
+  if (marketCopy) {
+    try { await send(marketCopy, `[Market copy] Contract sent to ${businessName}`, shell(`<p style="font-size:14px;color:#374151;">A signing link was just emailed to <b>${businessName}</b> (${to}). Their private link, for your records:</p><p style="font-size:12px;word-break:break-all;"><a href="${link}">${link}</a></p><p style="font-size:12px;color:#9ca3af;">You&rsquo;ll get a push the moment they open it.</p>`)); } catch {}
+  }
 }
 
 export async function sendExecutedContractEmail(to: string, businessName: string, link: string, phoneType: string = "") {
