@@ -8,10 +8,12 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const contracts = await db.contract.findMany({
-    include: { vendor: { select: { businessName: true, code: true } } },
+    include: { vendor: { select: { businessName: true, code: true, cardLast4: true } } },
     orderBy: { createdAt: "desc" },
   });
-  return NextResponse.json({ contracts });
+  const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
+  const balMap = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));
+  return NextResponse.json({ contracts: contracts.map((c) => ({ ...c, vendorBalanceCents: balMap[c.vendorId] || 0 })) });
 }
 
 export async function POST(req: NextRequest) {

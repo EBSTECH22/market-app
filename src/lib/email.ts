@@ -376,3 +376,19 @@ export async function sendFirstRentEmail(to: string, businessName: string, booth
     <p style="margin:14px 0 0;"><a href="${baseUrl()}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">See my balance</a></p>`;
   await send(to, `First month's rent — booth ${booth} \u00b7 Community Harvest`, shell(inner));
 }
+
+export async function sendRentLinkEmail(to: string, businessName: string, booth: string, dueCents: number, feeCents: number, token: string) {
+  const inner = dueCents > 0 ? `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your rent payment link \ud83d\udcb3</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — here&rsquo;s the payment link for booth ${booth}. One card payment covers what&rsquo;s due AND saves your card for automatic settlement going forward.</p>
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Rent due</span><b>$${(dueCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Card-processing adjustment (3%)</span><b>$${(feeCents / 100).toFixed(2)}</b></div>
+      <div style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px;font-size:15px;display:flex;justify-content:space-between;"><span><b>Total</b></span><b>$${((dueCents + feeCents) / 100).toFixed(2)}</b></div>
+    </div>
+    <a href="${baseUrl()}/rent/${token}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:15px;padding:14px 30px;border-radius:10px;text-decoration:none;">\ud83d\udcb3 Pay &amp; set up autopay</a>
+    <p style="font-size:12px;color:#9ca3af;margin:16px 0 0;">Prefer cash or check? Pay at the market — no fee. Secure payment by Stripe.</p>` : `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">You&rsquo;re all paid up \u2705</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — nothing is due for booth ${booth} right now. If you&rsquo;d like automatic settlement anyway, save a card in your portal under \ud83d\udcb5 MONEY.</p>`;
+  await send(to, `Rent payment link — booth ${booth} \u00b7 Community Harvest`, shell(inner));
+}

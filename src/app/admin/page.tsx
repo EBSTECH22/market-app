@@ -6,7 +6,7 @@ type Vendor = { id: string; code: string; businessName: string; contactName: str
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number };
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string } };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number };
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
@@ -1772,6 +1772,18 @@ export default function AdminPage() {
                           setBusy(false);
                         }
                       }}>📖 RESEND GUIDE</button>
+                      {(() => { const settled = (c.vendorBalanceCents ?? 0) >= 0 && !!c.vendor.cardLast4; return (
+                        <button className="btn small ghost" disabled={busy || settled} title={settled ? "Rent covered and card on file — nothing to send" : ""} style={settled ? { opacity: 0.45 } : {}} onClick={async () => {
+                          setBusy(true);
+                          try {
+                            const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_rent_link" }) });
+                            const d = await r.json().catch(() => ({}));
+                            alert(r.ok ? `Rent payment link emailed to ${d.sentTo} \u2713` : d.error || `Couldn't send (${r.status}).`);
+                          } catch (e) {
+                            alert(`Couldn't send — ${e instanceof Error ? e.message : "network error"}`);
+                          } finally { setBusy(false); }
+                        }}>{settled ? "✅ RENT PAID · CARD ON FILE" : "💰 SEND RENT PAYMENT LINK"}</button>
+                      ); })()}
                       {c.status === "ACTIVE" && (
                         <>
                           <button className="btn small ghost" disabled={busy} onClick={() => {

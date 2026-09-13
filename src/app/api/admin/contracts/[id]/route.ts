@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
-import { sendContractSignEmail, sendSetupGuideEmail } from "@/lib/email";
+import { sendContractSignEmail, sendSetupGuideEmail, sendRentLinkEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -27,6 +27,27 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ error: "Email failed to send — check the vendor's email address." }, { status: 500 });
     }
     return NextResponse.json({ ok: true, sentTo: vendor.email });
+  }
+
+  if (action === "send_rent_link") {
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+    if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
+    if (!contract.vendorSignedAt || !contract.marketSignedAt) return NextResponse.json({ error: "Contract must be fully signed first — rent posts on execution." }, { status: 400 });
+    let token = contract.signToken;
+    if (!token) {
+      token = randomBytes(16).toString("hex");
+      await db.contract.update({ where: { id: contract.id }, data: { signToken: token } });
+    }
+    const agg = await db.ledgerEntry.aggregate({ where: { vendorId: vendor.id }, _sum: { amountCents: true } });
+    const balance = agg._sum.amountCents || 0;
+    const dueCents = balance < 0 ? -balance : 0;
+    const feeCents = Math.round((dueCents * 3) / 100);
+    try {
+      await sendRentLinkEmail(vendor.email, vendor.businessName, contract.boothLabel, dueCents, feeCents, token);
+    } catch {
+      return NextResponse.json({ error: "Email failed to send." }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, sentTo: vendor.email, dueCents });
   }
 
   if (action === "send_setup_guide") {
