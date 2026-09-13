@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { postFirstMonthRent } from "@/lib/firstrent";
 import { pushToAdmin } from "@/lib/push";
+import { isStaff } from "@/lib/auth";
 import { sendExecutedContractEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,8 @@ async function byToken(token: string) {
 export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
   const contract = await byToken(params.token);
   if (!contract) return NextResponse.json({ error: "Not found." }, { status: 404 });
-  if (!contract.viewedAt) {
+  if (!contract.viewedAt && !isStaff()) {
+    // staff sessions (your own browser) don't count as the vendor viewing it
     await db.contract.update({ where: { id: contract.id }, data: { viewedAt: new Date() } });
     try { await pushToAdmin("Contract viewed 👀", `${contract.vendor.businessName} just opened their signing link for booth ${contract.boothLabel}`); } catch {}
   }
