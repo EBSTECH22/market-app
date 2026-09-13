@@ -116,6 +116,7 @@ export default function AdminPage() {
   const [cardAdj, setCardAdj] = useState("0");
   const [cardConfirm, setCardConfirm] = useState(false);
   const [editV, setEditV] = useState<string | null>(null);
+  const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
   const [editF, setEditF] = useState({ businessName: "", contactName: "", email: "", phone: "" });
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
@@ -230,6 +231,7 @@ export default function AdminPage() {
   useEffect(() => { if (authed && tab === "reports") loadReport(); }, [authed, tab, loadReport]);
   useEffect(() => {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
+    if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) setSettle((await r.json()).rows); });
   }, [authed, tab]);
   useEffect(() => {
     try { const v = window.localStorage.getItem("nm_autoprint"); if (v !== null) setAutoPrint(v === "1"); } catch {}
@@ -1458,6 +1460,41 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      )}
+
+      {tab === "bank" && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h2 className="display" style={{ fontSize: 18 }}>RENT SETTLEMENT 🧾</h2>
+          <p style={{ fontSize: 12.5, color: "var(--ash)" }}>Vendors whose sales balance doesn&rsquo;t cover rent. CHARGE CARD bills their card on file for the amount due <b>plus a 3% card-processing adjustment on the charged amount only</b> — both itemized on their statement and emailed to them. No card on file? They add one in their portal under MONEY.</p>
+          {!settle && <p style={{ fontSize: 13 }}>Loading…</p>}
+          {settle && settle.filter((r) => r.dueCents > 0).length === 0 && <p className="ok">Everyone&rsquo;s covered — no outstanding rent. 🎉</p>}
+          {settle && settle.filter((r) => r.dueCents > 0).map((r) => (
+            <div key={r.vendorId} style={{ borderTop: "1px solid var(--border)", padding: "10px 0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13.5 }}>
+                <b>{r.boothLabel} · {r.businessName}</b> <span style={{ color: "var(--ash)", fontSize: 12 }}>({r.code})</span><br />
+                <span style={{ fontSize: 12.5 }}>rent {money(r.monthlyRentCents)}/mo · balance <b style={{ color: "var(--red)" }}>{money(r.balanceCents)}</b> → due <b>{money(r.dueCents)}</b> + 3% {money(r.feeCents)} = <b>{money(r.chargeTotalCents)}</b></span>
+              </span>
+              {r.hasCard ? (
+                <button className="btn small" disabled={busy} onClick={async () => {
+                  if (!confirm(`Charge ${r.businessName}'s card ····${r.cardLast4} ${money(r.chargeTotalCents)} (${money(r.dueCents)} rent + ${money(r.feeCents)} processing)?`)) return;
+                  setBusy(true);
+                  try {
+                    const res = await fetch("/api/admin/settlement", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vendorId: r.vendorId }) });
+                    const d = await res.json();
+                    alert(res.ok ? `Charged ${money(d.chargeTotalCents)} ✓ — balance settled, statement updated, vendor emailed.` : d.error || "Charge failed.");
+                    const rr = await fetch("/api/admin/settlement");
+                    if (rr.ok) setSettle((await rr.json()).rows);
+                  } finally { setBusy(false); }
+                }}>💳 CHARGE CARD ····{r.cardLast4}</button>
+              ) : (
+                <span style={{ fontSize: 12, color: "var(--ash)" }}>no card on file</span>
+              )}
+            </div>
+          ))}
+          {settle && settle.some((r) => r.dueCents === 0) && (
+            <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 8 }}>Covered: {settle.filter((r) => r.dueCents === 0).map((r) => r.code).join(", ")}</p>
           )}
         </div>
       )}

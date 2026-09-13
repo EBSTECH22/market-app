@@ -348,3 +348,16 @@ export async function sendRestockAlertEmail(to: string, businessName: string, co
     <p style="font-size:11px;color:#9ca3af;margin:16px 0 0;"><a href="${baseUrl()}/u/${token}" style="color:#9ca3af;">Unsubscribe</a></p>`;
   await send(to, `${businessName} just restocked \ud83c\udf3e`, shell(inner));
 }
+
+export async function sendRentChargedEmail(to: string, businessName: string, dueCents: number, feeCents: number, totalCents: number, last4: string) {
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Rent settled \u2705</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — your sales balance didn&rsquo;t fully cover this period&rsquo;s rent, so the remainder was charged to your card on file, per your vendor agreement.</p>
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Rent balance due</span><b>$${(dueCents / 100).toFixed(2)}</b></div>
+      <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Card-processing adjustment (3%)</span><b>$${(feeCents / 100).toFixed(2)}</b></div>
+      <div style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px;font-size:15px;display:flex;justify-content:space-between;"><span><b>Charged to card \u00b7\u00b7\u00b7\u00b7${last4}</b></span><b>$${(totalCents / 100).toFixed(2)}</b></div>
+    </div>
+    <p style="font-size:12px;color:#9ca3af;">Avoid the adjustment anytime by covering rent with sales or paying cash/check at the market. Your full statement is in your portal under \ud83d\udcb5 MONEY.</p>`;
+  await send(to, "Rent settled — Community Harvest", shell(inner));
+}

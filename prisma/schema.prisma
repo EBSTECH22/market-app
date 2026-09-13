@@ -21,6 +21,9 @@ model Vendor {
   acceptsRequests   Boolean  @default(false)
   allowSelfCheckout Boolean  @default(true)
   lastRestockAlertAt DateTime?
+  stripeCustomerId String  @default("")
+  stripePmId       String  @default("")
+  cardLast4        String  @default("")
   publicBlurb       String   @default("")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())

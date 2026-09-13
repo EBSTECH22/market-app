@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 
@@ -45,6 +45,18 @@ export default function VendorDashboard() {
   const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "settings">("home");
   const [editItem, setEditItem] = useState<string | null>(null);
   const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0" });
+  const [cardMsg, setCardMsg] = useState("");
+  useEffect(() => {
+    const sid = new URLSearchParams(window.location.search).get("card_session");
+    if (!sid) return;
+    fetch(`/api/vendor/card?session_id=${encodeURIComponent(sid)}`).then(async (r) => {
+      const d = await r.json();
+      setCardMsg(r.ok ? `Card ····${d.last4} saved for automatic rent \u2713` : d.error || "Couldn't save the card.");
+      window.history.replaceState(null, "", "/vendor");
+      load();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -719,6 +731,33 @@ export default function VendorDashboard() {
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
             <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} color={me.balance >= 0 ? "var(--green)" : "var(--red)"} />
             <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
+          </div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>💳 CARD ON FILE — AUTOMATIC RENT</h2>
+            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
+              If your sales don&rsquo;t fully cover a month&rsquo;s rent, the remainder can charge to a saved card (a 3% card-processing adjustment applies to the charged amount only — cash, check, or sales balance never pay it). Saving a card authorizes this per your agreement; remove it anytime.
+            </p>
+            {me.vendor.cardLast4 ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+                <b style={{ fontSize: 14 }}>💳 Card ending ····{me.vendor.cardLast4}</b>
+                <button className="btn small ghost" disabled={busy} onClick={async () => {
+                  if (!confirm("Remove your card on file? Unpaid rent would then need cash or check.")) return;
+                  const r = await fetch("/api/vendor/card", { method: "DELETE" });
+                  if (r.ok) { setCardMsg("Card removed \u2713"); load(); }
+                }}>REMOVE</button>
+              </div>
+            ) : (
+              <button className="btn small" style={{ marginTop: 8 }} disabled={busy} onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await fetch("/api/vendor/card", { method: "POST" });
+                  const d = await r.json();
+                  if (!r.ok) { alert(d.error || "Couldn't start."); return; }
+                  window.location.href = d.url;
+                } finally { setBusy(false); }
+              }}>ADD A CARD (SECURE — VIA STRIPE)</button>
+            )}
+            {cardMsg && <p className="ok" style={{ marginTop: 6 }}>{cardMsg}</p>}
           </div>
           <div className="card">
             <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR STATEMENT</h2>
