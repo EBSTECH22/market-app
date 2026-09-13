@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { TZ } from "@/lib/time";
 import { sendFirstRentEmail } from "@/lib/email";
+import { randomBytes } from "crypto";
 
 // Posts the prorated first-month rent when a contract becomes fully executed.
 // Idempotent — checks for the marker note so double-signing paths can't double-charge.
@@ -20,6 +21,11 @@ export async function postFirstMonthRent(contractId: string) {
   const amount = Math.round((c.monthlyRentCents * daysCharged) / daysInMonth);
   if (amount <= 0) return;
 
+  let token = c.signToken;
+  if (!token) {
+    token = randomBytes(16).toString("hex");
+    await db.contract.update({ where: { id: c.id }, data: { signToken: token } });
+  }
   const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ });
   await db.ledgerEntry.create({
     data: {
@@ -28,6 +34,6 @@ export async function postFirstMonthRent(contractId: string) {
     },
   });
   try {
-    await sendFirstRentEmail(c.vendor.email, c.vendor.businessName, c.boothLabel, c.monthlyRentCents, amount, daysCharged, daysInMonth, startStr, !!c.vendor.cardLast4);
+    await sendFirstRentEmail(c.vendor.email, c.vendor.businessName, c.boothLabel, c.monthlyRentCents, amount, daysCharged, daysInMonth, startStr, !!c.vendor.cardLast4, token);
   } catch {}
 }
