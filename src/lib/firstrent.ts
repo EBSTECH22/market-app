@@ -13,7 +13,7 @@ export async function postFirstMonthRent(contractId: string) {
     const tempPassword = randomBytes(4).toString("hex");
     const { hashPassword } = await import("@/lib/auth");
     await db.vendor.update({ where: { id: c.vendorId }, data: { portalLocked: false, passwordHash: hashPassword(tempPassword), mustChangePassword: true } });
-    try { await sendWelcomeEmail({ ...c.vendor, portalLocked: false }, tempPassword); } catch {}
+    try { await sendWelcomeEmail({ email: c.vendor.email, businessName: c.vendor.businessName, code: c.vendor.code }, tempPassword); } catch {}
   }
 
   const marker = `[first ${c.id.slice(0, 8)}]`;
