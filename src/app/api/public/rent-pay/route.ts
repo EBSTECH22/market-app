@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
+import { unlockIfRentPaid } from "@/lib/unlock";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,8 @@ export async function GET(req: NextRequest) {
         },
       });
     }
-    return NextResponse.json({ paid: true, last4, dueCents, feeCents });
+    try { await unlockIfRentPaid(vendor.id); } catch {}
+  return NextResponse.json({ paid: true, last4, dueCents, feeCents });
   }
 
   const agg = await db.ledgerEntry.aggregate({ where: { vendorId: vendor.id }, _sum: { amountCents: true } });

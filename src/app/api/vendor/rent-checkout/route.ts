@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
+import { unlockIfRentPaid } from "@/lib/unlock";
 
 export const dynamic = "force-dynamic";
 
@@ -80,5 +81,6 @@ export async function GET(req: NextRequest) {
       },
     });
   }
+  try { await unlockIfRentPaid(vendorId); } catch {}
   return NextResponse.json({ ok: true, last4, dueCents, feeCents });
 }

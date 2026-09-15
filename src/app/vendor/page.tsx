@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { usePulse } from "@/lib/usePulse";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
@@ -42,10 +43,24 @@ export default function VendorDashboard() {
   const [poAmt, setPoAmt] = useState("");
   const [poDate, setPoDate] = useState("");
   const [poMsg, setPoMsg] = useState("");
-  const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "settings">("home");
+  const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "chat" | "settings">("home");
   const [editItem, setEditItem] = useState<string | null>(null);
   const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0" });
   const [cardMsg, setCardMsg] = useState("");
+  const [chat, setChat] = useState<{ id: string; vendorId: string; name: string; body: string; createdAt: string }[]>([]);
+  const [chatMe, setChatMe] = useState("");
+  const [chatBody, setChatBody] = useState("");
+  const [postBody, setPostBody] = useState("");
+  const [myPosts, setMyPosts] = useState<{ id: string; body: string; photoId: string | null; createdAt: string }[]>([]);
+  const loadChat = useCallback(async () => {
+    const r = await fetch("/api/vendor/chat");
+    if (r.ok) { const d = await r.json(); setChat(d.messages); setChatMe(d.me); }
+  }, []);
+  const loadPosts = useCallback(async () => {
+    const r = await fetch("/api/vendor/posts");
+    if (r.ok) setMyPosts((await r.json()).posts);
+  }, []);
+  useEffect(() => { loadChat(); loadPosts(); }, [loadChat, loadPosts]);
   useEffect(() => {
     const rsid = new URLSearchParams(window.location.search).get("rent_session");
     if (rsid) {
@@ -83,12 +98,8 @@ export default function VendorDashboard() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 15000);
-    const onFocus = () => load();
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
   }, [load]);
+  usePulse(() => { load(); loadChat(); loadPosts(); });
 
   const loadInbox = useCallback(async () => {
     const r = await fetch("/api/vendor/inbox");
@@ -361,7 +372,7 @@ export default function VendorDashboard() {
   const needsReply = inbox.filter((t) => t.status === "OPEN" && t.last && t.last.sender !== "VENDOR").length;
   const floorUnits = me.items.reduce((n, i) => n + (i.active ? i.quantity : 0), 0);
 
-  const Tab = (props: { id: "home" | "items" | "inbox" | "page" | "money" | "settings"; label: string; badge?: number }) => (
+  const Tab = (props: { id: "home" | "items" | "inbox" | "page" | "money" | "chat" | "settings"; label: string; badge?: number }) => (
     <button
       className={`btn small ${vtab === props.id ? "" : "ghost"}`}
       style={{ position: "relative", whiteSpace: "nowrap" }}
@@ -403,6 +414,7 @@ export default function VendorDashboard() {
         <Tab id="inbox" label="📩 INBOX" badge={needsReply} />
         <Tab id="page" label="⭐ MY PAGE" />
         <Tab id="money" label="💵 MONEY" />
+        <Tab id="chat" label="💬 CHAT" />
         <Tab id="settings" label="⚙️ SETTINGS" />
       </div>
 
@@ -680,7 +692,35 @@ export default function VendorDashboard() {
       )}
 
       {vtab === "page" && (
-      <div className="card">
+      <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>📣 POST TO THE MARKET FEED</h2>
+            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>Announcements, new products, what&rsquo;s coming out of the oven — customers see these on the market page instantly.</p>
+            <textarea rows={3} placeholder="Fresh sourdough hitting the shelf at noon! 🍞" value={postBody} onChange={(e) => setPostBody(e.target.value)} />
+            <button className="btn small" style={{ marginTop: 6 }} disabled={busy || !postBody.trim()} onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await fetch("/api/vendor/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: postBody }) });
+                if (r.ok) { setPostBody(""); loadPosts(); }
+                else alert((await r.json()).error || "Couldn't post.");
+              } finally { setBusy(false); }
+            }}>POST 📣</button>
+            {myPosts.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                {myPosts.map((po) => (
+                  <div key={po.id} style={{ borderTop: "1px solid var(--border)", padding: "8px 0", display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontSize: 13 }}>{po.body}<br /><span style={{ fontSize: 11, color: "var(--ash)" }}>{new Date(po.createdAt).toLocaleString()}</span></span>
+                    <button className="btn small ghost" disabled={busy} onClick={async () => {
+                      if (!confirm("Delete this post?")) return;
+                      await fetch("/api/vendor/posts", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: po.id }) });
+                      loadPosts();
+                    }}>🗑</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="card">
         <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR PUBLIC PAGE &amp; TABLE QR</h2>
         <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
           Customers scan your table card to see your goods, review you, and message you. Complaints are always open — that&rsquo;s a market rule — but pre-orders and requests are up to you:
@@ -734,8 +774,8 @@ export default function VendorDashboard() {
         </div>
         {pubMsg && <p className={pubMsg.includes("✓") ? "ok" : "err"}>{pubMsg}</p>}
       </div>
+        </div>
       )}
-
       {vtab === "money" && (
         <div>
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
@@ -802,6 +842,35 @@ export default function VendorDashboard() {
               ))}
               {me.ledger.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13, paddingTop: 6 }}>Sales, rent, and payouts will show here.</li>}
             </ul>
+          </div>
+        </div>
+      )}
+
+      {vtab === "chat" && (
+        <div className="card">
+          <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR CHAT 💬</h2>
+          <p style={{ fontSize: 12, color: "var(--ash)" }}>All market vendors + staff can read this — coordinate menus, cover restocks, plan the weekend.</p>
+          <div style={{ maxHeight: 380, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 12, padding: "8px 10px", margin: "8px 0", background: "#fafafa" }}>
+            {chat.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>No messages yet — say hi! 👋</p>}
+            {chat.map((mg) => (
+              <div key={mg.id} style={{ marginBottom: 8, textAlign: mg.vendorId === chatMe ? "right" : "left" }}>
+                <div style={{ fontSize: 10.5, color: "var(--ash)" }}>{mg.name} · {new Date(mg.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>
+                <div style={{ display: "inline-block", background: mg.vendorId === chatMe ? "#111827" : "#fff", color: mg.vendorId === chatMe ? "#fff" : "inherit", border: "1px solid var(--border)", borderRadius: 12, padding: "6px 10px", fontSize: 13.5, maxWidth: "85%", textAlign: "left" }}>{mg.body}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input placeholder="Message the vendors…" value={chatBody} onChange={(e) => setChatBody(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && chatBody.trim() && (async () => {
+                const b = chatBody; setChatBody("");
+                await fetch("/api/vendor/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: b }) });
+                loadChat();
+              })()} />
+            <button className="btn small" style={{ flex: "0 0 auto" }} disabled={busy || !chatBody.trim()} onClick={async () => {
+              const b = chatBody; setChatBody("");
+              await fetch("/api/vendor/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: b }) });
+              loadChat();
+            }}>SEND</button>
           </div>
         </div>
       )}

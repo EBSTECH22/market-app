@@ -37,6 +37,21 @@ export async function GET(req: NextRequest) {
 
     let amount = c.monthlyRentCents;
     let note = `Monthly booth rent, booth ${c.boothLabel} ${monthTag}`;
+    if (c.paidThrough) {
+      // first full-month payment covered into this month: prorate the remainder, then normal months
+      const ptYm = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" }).format(c.paidThrough);
+      if (c.paidThrough >= monthStartCentral && ptYm === ym) {
+        const dim = new Date(c.paidThrough.getFullYear(), c.paidThrough.getMonth() + 1, 0).getDate();
+        const fromDay = c.paidThrough.getDate();
+        amount = Math.round((c.monthlyRentCents * (dim - fromDay + 1)) / dim);
+        note = `Second month rent, prorated from ${c.paidThrough.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ })} ${monthTag}`;
+        await db.contract.update({ where: { id: c.id }, data: { paidThrough: null } });
+      } else if (c.paidThrough > now) {
+        continue; // still inside the paid first month
+      } else {
+        await db.contract.update({ where: { id: c.id }, data: { paidThrough: null } });
+      }
+    }
     if (c.status === "TERMINATING" && c.endDate) {
       const endsThisMonth =
         new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" }).format(c.endDate) === ym;

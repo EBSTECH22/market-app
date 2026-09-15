@@ -8,14 +8,6 @@ import { randomBytes } from "crypto";
 export async function postFirstMonthRent(contractId: string) {
   const c = await db.contract.findUnique({ where: { id: contractId }, include: { vendor: true } });
   if (!c || !c.vendorSignedAt || !c.marketSignedAt) return;
-  // portal gate lifts here: contract fully signed -> credentials exist for the first time
-  if (c.vendor.portalLocked) {
-    const tempPassword = randomBytes(4).toString("hex");
-    const { hashPassword } = await import("@/lib/auth");
-    await db.vendor.update({ where: { id: c.vendorId }, data: { portalLocked: false, passwordHash: hashPassword(tempPassword), mustChangePassword: true } });
-    try { await sendWelcomeEmail({ email: c.vendor.email, businessName: c.vendor.businessName, code: c.vendor.code }, tempPassword); } catch {}
-  }
-
   const marker = `[first ${c.id.slice(0, 8)}]`;
   const already = await db.ledgerEntry.findFirst({ where: { vendorId: c.vendorId, type: "RENT", note: { contains: marker } } });
   if (already) return;
@@ -25,8 +17,12 @@ export async function postFirstMonthRent(contractId: string) {
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value || 0);
   const y = get("year"), mo = get("month"), d = get("day");
   const daysInMonth = new Date(y, mo, 0).getDate();
+  // policy: first month is FULL rent to get started; the SECOND month prorates back to the calendar
+  const amount = c.monthlyRentCents;
+  const paidThrough = new Date(start);
+  paidThrough.setMonth(paidThrough.getMonth() + 1);
+  await db.contract.update({ where: { id: c.id }, data: { paidThrough } });
   const daysCharged = daysInMonth - d + 1;
-  const amount = Math.round((c.monthlyRentCents * daysCharged) / daysInMonth);
   if (amount <= 0) return;
 
   let token = c.signToken;
@@ -38,10 +34,10 @@ export async function postFirstMonthRent(contractId: string) {
   await db.ledgerEntry.create({
     data: {
       vendorId: c.vendorId, type: "RENT", amountCents: -amount,
-      note: `First month rent, booth ${c.boothLabel} — prorated from ${startStr} (${daysCharged}/${daysInMonth} days) ${marker}`,
+      note: `First month rent (full), booth ${c.boothLabel} — covers ${startStr} through one month ${marker}`,
     },
   });
   try {
-    await sendFirstRentEmail(c.vendor.email, c.vendor.businessName, c.boothLabel, c.monthlyRentCents, amount, daysCharged, daysInMonth, startStr, !!c.vendor.cardLast4, token);
+    await sendFirstRentEmail(c.vendor.email, c.vendor.businessName, c.boothLabel, c.monthlyRentCents, amount, daysInMonth, daysInMonth, startStr, !!c.vendor.cardLast4, token);
   } catch {}
 }

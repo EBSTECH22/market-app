@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePulse } from "@/lib/usePulse";
 
 type V = {
   code: string; businessName: string; publicBlurb: string;
@@ -16,6 +17,7 @@ export default function MarketDirectory() {
   const [q, setQ] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [banner, setBanner] = useState<{ enabled: boolean; title: string; dateLine: string; message: string } | null>(null);
+  const [feed, setFeed] = useState<{ id: string; body: string; photoId: string | null; createdAt: string; vendor: { code: string; businessName: string; logoId: string | null } }[]>([]);
 
   useEffect(() => {
     const loadMarket = () => {
@@ -25,12 +27,12 @@ export default function MarketDirectory() {
       });
     };
     fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
+    const loadFeed = () => fetch("/api/public/feed").then(async (r) => { if (r.ok) setFeed((await r.json()).posts); }).catch(() => {});
+    loadFeed();
     loadMarket();
-    const t = setInterval(loadMarket, 30000);
-    const onFocus = () => loadMarket();
-    window.addEventListener("focus", onFocus);
-    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); };
+    (window as unknown as { __lm?: () => void }).__lm = () => { loadMarket(); loadFeed(); };
   }, []);
+  usePulse(() => (window as unknown as { __lm?: () => void }).__lm?.());
 
   const needle = q.trim().toLowerCase();
   const shown = needle
@@ -77,6 +79,28 @@ export default function MarketDirectory() {
         </div>
       )}
       {loaded && shown.length === 0 && <p style={{ textAlign: "center", color: "var(--ash)" }}>Nothing matches.</p>}
+      {feed.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <h2 className="display" style={{ fontSize: 17, marginBottom: 8 }}>📣 FRESH FROM OUR VENDORS</h2>
+          <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 6 }}>
+            {feed.slice(0, 12).map((po) => (
+              <a key={po.id} href={`/v/${po.vendor.code}`} style={{ flex: "0 0 auto", width: 250, textDecoration: "none", color: "inherit" }}>
+                <div className="card" style={{ height: "100%" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    {po.vendor.logoId
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={`/api/public/photo/${po.vendor.logoId}`} alt="" style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--border)" }} />
+                      : <span style={{ width: 28, height: 28, borderRadius: "50%", background: "#111827", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800 }}>{po.vendor.businessName.slice(0, 1)}</span>}
+                    <b style={{ fontSize: 12.5 }}>{po.vendor.businessName}</b>
+                  </div>
+                  <p style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{po.body}</p>
+                  <div style={{ fontSize: 10.5, color: "var(--ash)", marginTop: 6 }}>{new Date(po.createdAt).toLocaleDateString([], { month: "short", day: "numeric" })} · tap to visit</div>
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
       {shown.map((v) => (
         <a href={`/v/${v.code}`} key={v.code} className="cardlink" style={{ padding: "14px 16px", marginBottom: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

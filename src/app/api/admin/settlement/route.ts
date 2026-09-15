@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
 import { sendRentChargedEmail } from "@/lib/email";
+import { unlockIfRentPaid } from "@/lib/unlock";
 
 export const dynamic = "force-dynamic";
 
@@ -66,5 +67,6 @@ export async function POST(req: NextRequest) {
     },
   });
   try { await sendRentChargedEmail(vendor.email, vendor.businessName, dueCents, feeCents, chargeTotal, vendor.cardLast4); } catch {}
+  try { await unlockIfRentPaid(vendor.id); } catch {}
   return NextResponse.json({ ok: true, dueCents, feeCents, chargeTotalCents: chargeTotal });
 }

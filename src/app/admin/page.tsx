@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePulse } from "@/lib/usePulse";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
@@ -223,14 +224,8 @@ export default function AdminPage() {
     if (t.ok) setTeam((await t.json()).employees || []);
   }, []);
 
-  useEffect(() => {
-    probeRole(); loadDrawer(); loadAll();
-    const t = setInterval(() => { loadDrawer(); loadAll(); }, 15000);
-    const onFocus = () => { loadDrawer(); loadAll(); };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
-  }, [probeRole, loadDrawer, loadAll]);
+  useEffect(() => { probeRole(); loadDrawer(); loadAll(); }, [probeRole, loadDrawer, loadAll]);
+  usePulse(() => { loadDrawer(); loadAll(); });
   useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
   useEffect(() => { if (authed && role === "admin" && tab === "team") loadTeam(); }, [authed, role, tab, loadTeam]);
   useEffect(() => {
@@ -1644,7 +1639,7 @@ export default function AdminPage() {
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋</h2>
+            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋 <a className="btn small" href="/admin/applications" style={{ marginLeft: 8 }}>OPEN APPLICATIONS PAGE →</a></h2>
             <p style={{ fontSize: 12, color: "var(--ash)" }}>
               Send hopefuls to <b>market.dailybreadbaked.com/apply</b>. The pipeline: review &amp; call (save your notes) → schedule a viewing or skip → create the contract. The vendor&rsquo;s portal stays locked until the contract is fully signed — credentials go out automatically at that moment.
             </p>
@@ -1714,7 +1709,14 @@ export default function AdminPage() {
                       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                         <button className="btn small" disabled={busy} onClick={async () => {
                           const d = await appAction(a.id, { action: "create_contract", boothLabel: appForm.booth, rentDollars: Number(appForm.rent), startDate: appForm.start });
-                          if (d) { setAppForm(null); alert(`Contract created & signing link emailed ✓ — vendor ${d.vendor.code}, portal locked until signed.`); }
+                          if (d) {
+                            setAppForm(null);
+                            if (d.emailErrors && d.emailErrors.length > 0) {
+                              alert(`Contract created for vendor ${d.vendor.code}, BUT email failed:\n${d.emailErrors.join("\n")}\n\nTheir signing link (send it yourself):\n${d.signUrl}`);
+                            } else {
+                              alert(`Contract created & signing link emailed ✓ — vendor ${d.vendor.code}, portal locked until signed.`);
+                            }
+                          }
                         }}>CREATE &amp; SEND FOR SIGNATURE</button>
                         <button className="btn small ghost" onClick={() => setAppForm(null)}>CANCEL</button>
                       </div>

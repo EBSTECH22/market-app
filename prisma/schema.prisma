@@ -157,6 +157,7 @@ model Contract {
   marketSignedAt      DateTime?
   signToken           String    @default("")
   viewedAt  DateTime?
+  paidThrough DateTime?
   createdAt        DateTime  @default(now())
 }
 
@@ -347,4 +348,19 @@ model LoyaltyEvent {
   delta      Int
   note       String   @default("")
   createdAt  DateTime @default(now())
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  vendorId  String
+  body      String
+  photoId   String   @default("")
+  createdAt DateTime @default(now())
+}
+
+model VendorChatMsg {
+  id        String   @id @default(cuid())
+  vendorId  String
+  body      String
+  createdAt DateTime @default(now())
 }

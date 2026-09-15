@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Lightbox from "@/components/Lightbox";
+import { usePulse } from "@/lib/usePulse";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; photoId?: string | null };
 type Line = Item & { qty: number };
@@ -34,11 +35,10 @@ export default function SelfCheckout() {
       });
     };
     loadShop();
-    const t = setInterval(loadShop, 30000);
-    const onFocus = () => loadShop();
-    window.addEventListener("focus", onFocus);
-    return () => { clearInterval(t); window.removeEventListener("focus", onFocus); scannerRef.current?.stop().catch(() => {}); };
+    (window as unknown as { __ls?: () => void }).__ls = loadShop;
+    return () => { scannerRef.current?.stop().catch(() => {}); };
   }, []);
+  usePulse(() => (window as unknown as { __ls?: () => void }).__ls?.());
 
   const addItem = useCallback((it: Item) => {
     setMsg("");
