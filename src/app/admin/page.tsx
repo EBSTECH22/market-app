@@ -1639,93 +1639,13 @@ export default function AdminPage() {
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋 <a className="btn small" href="/admin/applications" style={{ marginLeft: 8 }}>OPEN APPLICATIONS PAGE →</a></h2>
+            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋</h2>
             <p style={{ fontSize: 12, color: "var(--ash)" }}>
-              Send hopefuls to <b>market.dailybreadbaked.com/apply</b>. The pipeline: review &amp; call (save your notes) → schedule a viewing or skip → create the contract. The vendor&rsquo;s portal stays locked until the contract is fully signed — credentials go out automatically at that moment.
+              Applications have their own workspace now — review, call notes, viewings, and contracts all happen there. Hopefuls apply at <b>market.dailybreadbaked.com/apply</b>.
             </p>
-            <ul style={{ margin: "8px 0" }}>
-              {applications.map((a) => (
-                <li key={a.id} style={{ padding: "9px 0", borderBottom: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <div style={{ cursor: "pointer" }} onClick={() => setAppOpen(appOpen === a.id ? null : a.id)}>
-                      <b style={{ fontSize: 14 }}>{a.businessName}</b>
-                      <span style={{ fontSize: 12, color: "var(--ash)" }}> · {a.contactName} · {a.category || "uncategorized"}</span>
-                      <b style={{ fontSize: 12 }}> · {a.status}</b>
-                    </div>
-                    <a className="btn small ghost" href={`/admin/applications/${a.id}/print`} target="_blank" rel="noopener" style={{ marginRight: 5 }}>🖨</a>
-                    {a.status === "PENDING" && (
-                      <span style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                        <b style={{ fontSize: 11, alignSelf: "center", color: "var(--ash)" }}>{a.stage === "VIEWING" ? `📍 ${a.viewingAt}` : a.stage || "NEW"}</b>
-                        {(!a.stage || a.stage === "NEW") && <button className="btn small" disabled={busy} onClick={() => appAction(a.id, { action: "mark_called" })}>📞 CALLED</button>}
-                        {(a.stage === "CALLED" || a.stage === "VIEWING") && (
-                          <>
-                            {a.stage === "CALLED" && <button className="btn small ghost" disabled={busy} onClick={() => {
-                              const when = prompt("Viewing date & time (goes in their email exactly as typed):", "Tuesday Sep 22, 10:00 AM");
-                              if (when && when.trim()) appAction(a.id, { action: "schedule_viewing", when: when.trim() });
-                            }}>📅 SCHEDULE VIEWING</button>}
-                            <button className="btn small" disabled={busy} onClick={() => setAppForm(appForm?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}>📝 CREATE CONTRACT</button>
-                          </>
-                        )}
-                        <button className="btn small ghost" disabled={busy} onClick={async () => {
-                          if (!confirm(`Add ${a.businessName} as a vendor now? Their profile builds from this application, the application moves onto their vendor row, and their portal stays locked until a contract is signed.`)) return;
-                          const d = await appAction(a.id, { action: "add_vendor" });
-                          if (d) alert(`${d.vendor.businessName} added as vendor ${d.vendor.code} ✓ — application filed on their profile.`);
-                        }}>👤 ADD AS VENDOR</button>
-                        <button className="btn small ghost" disabled={busy} onClick={() => decideApplication(a.id, "decline")}>❌ DECLINE</button>
-                      </span>
-                    )}
-                    {a.status === "ACCEPTED" && a.stage === "CONTRACT" && <b style={{ fontSize: 11, color: "var(--green)" }}>📝 CONTRACT SENT</b>}
-                  </div>
-                  {appOpen === a.id && (
-                    <div style={{ fontSize: 12.5, marginTop: 6, paddingLeft: 8, borderLeft: "2px solid var(--border)", lineHeight: 1.7 }}>
-                      <b>Contact:</b> {a.email} · {a.phone}<br />
-                      <b>Products:</b> {a.products}<br />
-                      <b>Who makes it:</b> {a.madeByYou}<br />
-                      {a.links && <><b>Links:</b> {a.links}<br /></>}
-                      {a.licenses && <><b>Licensing:</b> {a.licenses}<br /></>}
-                      {a.insurance && <><b>Insurance:</b> {a.insurance}<br /></>}
-                      {a.availability && <><b>Restocking:</b> {a.availability}<br /></>}
-                      {a.boothRequest && <><b>Booth requested:</b> {a.boothRequest}<br /></>}
-                      {a.heardFrom && <><b>Heard via:</b> {a.heardFrom}<br /></>}
-                      {a.phoneType && <><b>Phone:</b> {a.phoneType === "IPHONE" ? "iPhone 📱" : a.phoneType === "ANDROID" ? "Android 🤖" : a.phoneType}<br /></>}
-                      {a.notes && <><b>Notes:</b> {a.notes}<br /></>}
-                      <span style={{ color: "var(--ash)" }}>Applied {new Date(a.createdAt).toLocaleDateString()}</span>
-                      <div style={{ marginTop: 8 }}>
-                        <label style={{ fontSize: 11 }}>📞 Call &amp; review notes (what they want, what you discussed)</label>
-                        <textarea rows={3} value={appNotes[a.id] ?? a.adminNotes ?? ""} onChange={(e) => setAppNotes((n) => ({ ...n, [a.id]: e.target.value }))} />
-                        <button className="btn small ghost" disabled={busy} style={{ marginTop: 4 }} onClick={() => appAction(a.id, { action: "save_notes", notes: appNotes[a.id] ?? a.adminNotes ?? "" })}>SAVE NOTES</button>
-                      </div>
-                    </div>
-                  )}
-                  {appForm?.id === a.id && (
-                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
-                      <b style={{ fontSize: 12.5 }}>📝 CREATE CONTRACT — locked portal opens when they sign</b>
-                      <label>Booth label</label>
-                      <input value={appForm.booth} onChange={(e) => setAppForm((f) => f && ({ ...f, booth: e.target.value }))} placeholder="A3" />
-                      <label>Monthly rent (dollars)</label>
-                      <input type="number" min="1" step="1" value={appForm.rent} onChange={(e) => setAppForm((f) => f && ({ ...f, rent: e.target.value }))} placeholder="96" />
-                      <label>Start date</label>
-                      <input type="date" value={appForm.start} onChange={(e) => setAppForm((f) => f && ({ ...f, start: e.target.value }))} />
-                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                        <button className="btn small" disabled={busy} onClick={async () => {
-                          const d = await appAction(a.id, { action: "create_contract", boothLabel: appForm.booth, rentDollars: Number(appForm.rent), startDate: appForm.start });
-                          if (d) {
-                            setAppForm(null);
-                            if (d.emailErrors && d.emailErrors.length > 0) {
-                              alert(`Contract created for vendor ${d.vendor.code}, BUT email failed:\n${d.emailErrors.join("\n")}\n\nTheir signing link (send it yourself):\n${d.signUrl}`);
-                            } else {
-                              alert(`Contract created & signing link emailed ✓ — vendor ${d.vendor.code}, portal locked until signed.`);
-                            }
-                          }
-                        }}>CREATE &amp; SEND FOR SIGNATURE</button>
-                        <button className="btn small ghost" onClick={() => setAppForm(null)}>CANCEL</button>
-                      </div>
-                    </div>
-                  )}
-                </li>
-              ))}
-              {applications.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>No applications yet — share the link.</li>}
-            </ul>
+            <a className="btn" href="/admin/applications" style={{ marginTop: 8, maxWidth: 340 }}>
+              📋 OPEN APPLICATIONS{applications.filter((a) => a.status === "PENDING").length > 0 ? ` (${applications.filter((a) => a.status === "PENDING").length} PENDING)` : ""} →
+            </a>
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
