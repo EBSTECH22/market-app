@@ -19,7 +19,9 @@ export async function GET() {
   for (const a of apps) { if (a.vendorId) appByVendor[a.vendorId] = a.id; }
   const emailMap: Record<string, string> = {};
   for (const a of apps) { if (!a.vendorId) emailMap[a.email.toLowerCase()] = a.id; }
-  return NextResponse.json({ vendors: vendors.map((v) => ({ ...v, balance: map[v.id] || 0, applicationId: appByVendor[v.id] || emailMap[v.email.toLowerCase()] || null })) });
+  const signed = await db.contract.findMany({ where: { vendorSignedAt: { not: null }, marketSignedAt: { not: null } }, select: { vendorId: true } });
+  const signedSet = new Set(signed.map((c) => c.vendorId));
+  return NextResponse.json({ vendors: vendors.map((v) => ({ ...v, balance: map[v.id] || 0, applicationId: appByVendor[v.id] || emailMap[v.email.toLowerCase()] || null, portalLocked: v.portalLocked, hasSignedContract: signedSet.has(v.id) })) });
 }
 
 export async function POST(req: NextRequest) {

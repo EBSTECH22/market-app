@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePulse } from "@/lib/usePulse";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number };
@@ -1577,11 +1577,16 @@ export default function AdminPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>VENDORS ({vendors.filter((v) => v.active).length} ACTIVE)</h2>
             <ul style={{ listStyle: "none" }}>
-              {vendors.map((v) => (
+              {[...vendors].sort((a, b) => Number(!!b.portalLocked) - Number(!!a.portalLocked)).map((v) => (
                 <li key={v.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)", opacity: v.active ? 1 : 0.5 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div>
                       <span className="display" style={{ fontSize: 15 }}>{v.code} · {v.businessName.toUpperCase()}</span>
+                      {v.portalLocked && (
+                        <span style={{ background: "#fffbeb", color: "#b45309", border: "1px solid #fde68a", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 8px", marginLeft: 6, verticalAlign: "middle" }}>
+                          ⏳ ONBOARDING — {!v.hasSignedContract ? "NEEDS SIGNED CONTRACT" : "NEEDS FIRST RENT PAID"}
+                        </span>
+                      )}
                       <div style={{ fontSize: 11.5, color: "var(--ash)" }}>
                         {v.contactName}{v.contactName && " · "}{v.email}{v.phone && ` · ${v.phone}`}
                         {" · "}{v.commissionPercent}% commission
