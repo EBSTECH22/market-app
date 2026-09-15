@@ -10,7 +10,7 @@ export async function GET() {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const vendors = await db.vendor.findMany({
     orderBy: { code: "asc" },
-    select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true },
+    select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true },
   });
   const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
   const map = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));
