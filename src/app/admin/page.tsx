@@ -119,6 +119,7 @@ export default function AdminPage() {
   const [editV, setEditV] = useState<string | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
   const [appNotes, setAppNotes] = useState<Record<string, string>>({});
+  const [showInactive, setShowInactive] = useState(false);
   const [appForm, setAppForm] = useState<{ id: string; booth: string; rent: string; start: string } | null>(null);
   const appAction = async (id: string, payload: Record<string, unknown>, refresh = true) => {
     setBusy(true);
@@ -1577,7 +1578,7 @@ export default function AdminPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>VENDORS ({vendors.filter((v) => v.active).length} ACTIVE)</h2>
             <ul style={{ listStyle: "none" }}>
-              {[...vendors].sort((a, b) => Number(!!b.portalLocked) - Number(!!a.portalLocked)).map((v) => (
+              {[...vendors].filter((v) => v.active || showInactive).sort((a, b) => Number(!!a.active) - Number(!!b.active) || Number(!!b.portalLocked) - Number(!!a.portalLocked)).map((v) => (
                 <li key={v.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)", opacity: v.active ? 1 : 0.5 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div>
@@ -1640,6 +1641,13 @@ export default function AdminPage() {
                 </li>
               ))}
               {vendors.length === 0 && <li style={{ color: "var(--ash)", fontSize: 14, paddingTop: 8 }}>No vendors yet — add your first below.</li>}
+              {vendors.some((v) => !v.active) && (
+                <li style={{ paddingTop: 10, listStyle: "none" }}>
+                  <button className="btn small ghost" onClick={() => setShowInactive((x) => !x)}>
+                    {showInactive ? "HIDE" : "SHOW"} DEACTIVATED ({vendors.filter((v) => !v.active).length})
+                  </button>
+                </li>
+              )}
             </ul>
           </div>
 
