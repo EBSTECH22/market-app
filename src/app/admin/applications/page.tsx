@@ -571,16 +571,20 @@ export default function ApplicationsPage() {
               </Button>
             )}
 
-            {(a.stage === "CALLED" || a.stage === "VIEWING") && (
-              <Button
-                variant="primary"
-                icon="contract"
-                disabled={busy}
-                onClick={() => setForm(form?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}
-              >
-                Create agreement
-              </Button>
-            )}
+            {/* No stage gate. This used to require CALLED or VIEWING, which hid
+                the button on a brand-new application — so the one thing you
+                most often want to do from an application was invisible until
+                you'd clicked through two other steps first. These cards are all
+                pre-agreement by definition (the NEW phase), so there is nothing
+                here to protect against. */}
+            <Button
+              variant="primary"
+              icon="contract"
+              disabled={busy}
+              onClick={() => setForm(form?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}
+            >
+              Create agreement
+            </Button>
 
             <Button icon="user" disabled={busy} onClick={() => addAsVendor(a)}>
               Add as vendor

@@ -1132,9 +1132,14 @@ export default function AdminPage() {
         body: JSON.stringify({ action, reason }),
       });
       if (!ok) { toast.error(`Couldn't ${action} the application`, String(data.error || "")); return; }
+      /* Don't claim the email went out when the mailer refused it — the decision
+         is saved regardless, and knowing to follow up by phone matters. */
+      const emailed = data.emailed !== false;
       toast.success(
         action === "accept" ? `${businessName} accepted` : `${businessName} declined`,
-        action === "accept" ? "Welcome email sent." : "Decline email sent."
+        emailed
+          ? action === "accept" ? "Welcome email sent." : "Decline email sent."
+          : "Saved — but the email didn't send. Let them know another way."
       );
       const r2 = await fetch("/api/admin/applications");
       if (r2.ok) setApplications((await r2.json()).applications || []);

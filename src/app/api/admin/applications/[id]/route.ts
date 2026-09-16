@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 // PATCH — application pipeline:
 //   { action: "save_notes", notes }            — call/review notes
+//   { action: "accept", reason? }              — welcome email, status -> ACCEPTED
 //   { action: "mark_called" }                  — stage NEW -> CALLED
 //   { action: "schedule_viewing", when }       — emails applicant, stage -> VIEWING
 //   { action: "create_contract", boothLabel, rentDollars, startDate }
@@ -23,6 +24,33 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (action === "save_notes") {
     const updated = await db.vendorApplication.update({ where: { id: app.id }, data: { adminNotes: String(body.notes ?? "").slice(0, 5000) } });
     return NextResponse.json({ application: updated });
+  }
+
+  /* "Yes, you're in — someone will call you."
+     This was dropped when the stage pipeline landed, while the Accept button on
+     /admin kept calling it, so accepting an application failed with "Unknown
+     action" and quietly sent nobody anything.
+
+     It deliberately does NOT touch `stage`. Accepting isn't calling: moving them
+     to CALLED would hide the "Mark as called" button and claim a phone call that
+     never happened. Status says they're in; stage still says what's next. */
+  if (action === "accept") {
+    const updated = await db.vendorApplication.update({
+      where: { id: app.id },
+      data: { status: "ACCEPTED", decidedAt: new Date() },
+    });
+    let emailed = true;
+    try {
+      await sendApplicationDecisionEmail(
+        app.email, app.contactName, app.businessName, true,
+        String(body.reason || "").trim().slice(0, 500)
+      );
+    } catch {
+      // The acceptance is recorded either way — but say so, rather than
+      // reporting success for an email that never left.
+      emailed = false;
+    }
+    return NextResponse.json({ application: updated, emailed });
   }
 
   if (action === "mark_called") {
