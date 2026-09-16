@@ -97,6 +97,253 @@ function deviceFromUA(ua: string | null | undefined): string {
  * Showing "not opened" for the first two told the owner a vendor was
  * ignoring an invoice they'd actually settled weeks ago.
  */
+/* Rows come from /api/admin/rent-ledger — one row per executed agreement, which
+   is the same thing as one invoice sent. */
+type InvoiceRow = {
+  contractId: string; vendorId: string; code: string; businessName: string;
+  email: string; phone: string; boothLabel: string; signToken: string;
+  monthlyRentCents: number; contractStatus: string; executedAt: string | null;
+  chargedCents: number; paidCents: number; paymentCount: number;
+  balanceCents: number; outstandingCents: number;
+  status: "PAID" | "PARTIAL" | "UNPAID";
+  lastPaymentAt: string | null; cardLast4: string;
+  opens: { count: number; lastAt: string | null; tracked: boolean };
+};
+
+type RentLedger = {
+  invoices: InvoiceRow[];
+  neverPaid: InvoiceRow[];
+  totals: {
+    invoicedCents: number; collectedCents: number; outstandingCents: number;
+    unpaidCount: number; neverPaidCount: number;
+  };
+  trackingSince: string;
+};
+
+/**
+ * The invoice ledger: who was sent a bill, who has paid it, who hasn't.
+ *
+ * Two tables rather than one, because they answer different questions.
+ * The first is "who owes money right now" — the working list you chase each
+ * month. The second is "who has never paid a cent", which the first can hide
+ * completely: a vendor invoiced three months ago who has paid nothing sits in
+ * the same row as one who is a week late, and the seasonal freeloader is
+ * precisely the one you don't want to discover in December.
+ */
+function RentLedgerCards({
+  ledger, filter, onFilter, busy, onSendLink,
+}: {
+  ledger: RentLedger | null;
+  filter: "OWING" | "ALL" | "PAID";
+  onFilter: (f: "OWING" | "ALL" | "PAID") => void;
+  busy: boolean;
+  onSendLink: (row: InvoiceRow) => void;
+}) {
+  const t = ledger?.totals;
+  const rows = (ledger?.invoices || []).filter((i) =>
+    filter === "ALL" ? true : filter === "PAID" ? i.outstandingCents === 0 : i.outstandingCents > 0
+  );
+
+  const statusBadge = (i: InvoiceRow) =>
+    i.status === "PAID" ? <Badge tone="success" dot>Paid</Badge>
+    : i.status === "PARTIAL" ? <Badge tone="warn" dot>Part paid</Badge>
+    : <Badge tone="danger" dot>Unpaid</Badge>;
+
+  const columns: Column<InvoiceRow>[] = [
+    {
+      key: "vendor",
+      header: "Vendor",
+      primary: true,
+      sortBy: (i) => i.businessName,
+      cell: (i) => (
+        <span className="stack g-1">
+          <span style={{ fontWeight: 600 }}>{i.businessName}</span>
+          <span className="t-xs t-muted">{i.code} · Booth {i.boothLabel}</span>
+        </span>
+      ),
+    },
+    {
+      key: "invoiced",
+      header: "Rent charged",
+      align: "right",
+      sortBy: (i) => i.chargedCents,
+      cell: (i) => <span className="num">{money(i.chargedCents)}</span>,
+    },
+    {
+      key: "paid",
+      header: "Paid",
+      align: "right",
+      sortBy: (i) => i.paidCents,
+      cell: (i) => (
+        <span className="stack g-1" style={{ alignItems: "flex-end" }}>
+          <span className="num">{money(i.paidCents)}</span>
+          {i.lastPaymentAt ? <span className="t-xs t-muted">{fmtDate(i.lastPaymentAt)}</span> : null}
+        </span>
+      ),
+    },
+    {
+      key: "owed",
+      header: "Still owed",
+      align: "right",
+      sortBy: (i) => i.outstandingCents,
+      cell: (i) => (
+        <span className={`num ${i.outstandingCents > 0 ? "t-danger" : "t-accent"}`}>
+          {money(i.outstandingCents)}
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortBy: (i) => i.status,
+      cell: (i) => (
+        <span className="row wrap g-2">
+          {statusBadge(i)}
+          {/* Three states, not two. "Not opened" about an invoice sent before
+              open-tracking existed would be an accusation we can't support. */}
+          {i.opens.count > 0 ? (
+            <span className="t-xs t-muted">Opened {fmtDate(i.opens.lastAt || "")}</span>
+          ) : !i.opens.tracked ? (
+            <span className="t-xs t-muted">Opens not tracked</span>
+          ) : (
+            <span className="t-xs t-muted">Not opened</span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: "act",
+      header: "",
+      align: "right",
+      cell: (i) => (
+        <span className="row wrap g-2 end">
+          {i.signToken ? (
+            <a className="btn btn-ghost btn-sm" href={`/rent/${i.signToken}`} target="_blank" rel="noopener">
+              <Icon name="receipt" size={14} /> View
+            </a>
+          ) : null}
+          {i.outstandingCents > 0 ? (
+            <Button size="sm" icon="mail" disabled={busy} onClick={() => onSendLink(i)}>
+              Send again
+            </Button>
+          ) : null}
+        </span>
+      ),
+    },
+  ];
+
+  const neverPaidColumns: Column<InvoiceRow>[] = [
+    columns[0],
+    {
+      key: "since",
+      header: "Invoiced",
+      sortBy: (i) => i.executedAt || "",
+      cell: (i) =>
+        i.executedAt ? (
+          <span className="stack g-1">
+            <span>{fmtDate(i.executedAt)}</span>
+            <span className="t-xs t-muted">{relTime(i.executedAt)}</span>
+          </span>
+        ) : <span className="t-muted">Date not recorded</span>,
+    },
+    {
+      key: "owed",
+      header: "Owes",
+      align: "right",
+      sortBy: (i) => i.outstandingCents,
+      cell: (i) => <span className="num t-danger">{money(i.outstandingCents)}</span>,
+    },
+    {
+      key: "reach",
+      header: "Get hold of them",
+      cell: (i) => (
+        <span className="row wrap g-2">
+          {i.phone ? (
+            <a className="btn btn-secondary btn-sm" href={`tel:${i.phone.replace(/\D/g, "")}`}>
+              <Icon name="phone" size={14} /> Call
+            </a>
+          ) : null}
+          {i.phone ? (
+            <a className="btn btn-secondary btn-sm" href={`sms:${i.phone.replace(/\D/g, "")}`}>
+              <Icon name="message" size={14} /> Text
+            </a>
+          ) : null}
+        </span>
+      ),
+    },
+    columns[5],
+  ];
+
+  return (
+    <>
+      <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
+        <Stat feature label="Still owed" value={money(t?.outstandingCents || 0)}
+          sub={t ? `${plural(t.unpaidCount, "vendor")} behind` : "Loading…"} icon="alert" />
+        <Stat label="Collected" value={money(t?.collectedCents || 0)} sub="Rent paid to date" icon="checkCircle" />
+        <Stat label="Rent charged" value={money(t?.invoicedCents || 0)} sub="Across every invoice sent" icon="receipt" />
+        <Stat label="Never paid" value={String(t?.neverPaidCount ?? 0)}
+          sub="Invoiced, nothing received" icon="warning" />
+      </div>
+
+      <Card
+        title="Invoices"
+        subtitle="Everyone whose agreement is signed by both sides — the point at which rent posts and their pay link goes out."
+        actions={
+          <Segmented
+            label="Filter invoices"
+            value={filter}
+            onChange={onFilter}
+            options={[
+              { value: "OWING", label: `Still owing (${(ledger?.invoices || []).filter((i) => i.outstandingCents > 0).length})` },
+              { value: "PAID", label: "Settled" },
+              { value: "ALL", label: "All" },
+            ]}
+          />
+        }
+        flush
+      >
+        <DataTable
+          rows={rows}
+          columns={columns}
+          rowKey={(i) => i.contractId}
+          loading={!ledger}
+          skeletonRows={4}
+          mobileCards
+          defaultSort={{ key: "owed", dir: "desc" }}
+          caption="Rent invoices, what has been paid against them, and what is still outstanding"
+          empty={
+            <EmptyState
+              icon="checkCircle"
+              title={filter === "OWING" ? "Nobody owes you anything" : "No invoices yet"}
+              body={
+                filter === "OWING"
+                  ? "Every invoice you've sent has been paid in full."
+                  : "Invoices appear here once an agreement is signed by both sides — that's when rent posts and the pay link goes out."
+              }
+            />
+          }
+        />
+      </Card>
+
+      {ledger && ledger.neverPaid.length > 0 ? (
+        <Card
+          title="Never paid anything"
+          subtitle="Invoiced, and not a single payment received. Oldest first — these are the ones that go missing for a season."
+        >
+          <DataTable
+            rows={ledger.neverPaid}
+            columns={neverPaidColumns}
+            rowKey={(i) => i.contractId}
+            mobileCards
+            defaultSort={{ key: "since", dir: "asc" }}
+            caption="Vendors who have been invoiced but have never made a payment"
+          />
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
 function InvoiceOpensCell({ v, owes }: { v: Contract["invoiceViews"]; owes: number }) {
   const count = v?.count ?? 0;
 
@@ -470,6 +717,8 @@ export default function AdminPage() {
   const [cardConfirm, setCardConfirm] = useState(false);
   const [editV, setEditV] = useState<string | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
+  const [ledger, setLedger] = useState<RentLedger | null>(null);
+  const [ledgerFilter, setLedgerFilter] = useState<"OWING" | "ALL" | "PAID">("OWING");
   const [showInactive, setShowInactive] = useState(false);
   /* Note: the per-application notes/contract form and its PATCH handler used to
      live here too. That workflow now has its own screen at /admin/applications,
@@ -633,6 +882,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
     if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) setSettle((await r.json()).rows); });
+    if (authed && tab === "bank") fetch("/api/admin/rent-ledger").then(async (r) => { if (r.ok) setLedger(await r.json()); });
   }, [authed, tab]);
   useEffect(() => {
     try { const v = window.localStorage.getItem("nm_autoprint"); if (v !== null) setAutoPrint(v === "1"); } catch {}
@@ -1763,6 +2013,30 @@ export default function AdminPage() {
       toast.success("Reminder sent", `Emailed to ${String(data.sentTo || businessName)}.`);
       await loadOnboarding();
       await loadAll();
+    } finally { setBusy(false); }
+  };
+
+  /* Chase one unpaid invoice from the ledger, without leaving the tab. Re-sends
+     the pay link, which is always built from the CURRENT balance rather than
+     whatever it said when it first went out. */
+  const sendRentLinkFor = async (row: InvoiceRow) => {
+    const yes = await dialog.confirm({
+      title: `Send ${row.businessName} their invoice again?`,
+      body: `They get a pay link for ${money(row.outstandingCents)}, plus the 3% card adjustment. The amount is worked out when they open it, so it stays right even if the balance moves.`,
+      confirmLabel: "Send the invoice",
+      cancelLabel: "Not now",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${row.contractId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send_rent_link" }),
+      });
+      if (!ok) { toast.error("Couldn't send the invoice", String(data.error || "")); return; }
+      toast.success("Invoice sent", `Emailed to ${String(data.sentTo || row.businessName)}.`);
+      const r = await fetch("/api/admin/rent-ledger");
+      if (r.ok) setLedger(await r.json());
     } finally { setBusy(false); }
   };
 
@@ -4237,6 +4511,17 @@ export default function AdminPage() {
 
       {tab === "bank" && (
         <div className="stack g-4">
+          {/* Deliberately OUTSIDE the Stripe checks below. Who owes you rent is
+              a question about your own ledger, not about Stripe — it must still
+              answer when Stripe is misconfigured or refusing to talk. */}
+          <RentLedgerCards
+            ledger={ledger}
+            filter={ledgerFilter}
+            onFilter={setLedgerFilter}
+            busy={busy}
+            onSendLink={(row) => sendRentLinkFor(row)}
+          />
+
           {!bank ? (
             <SkeletonStats count={2} />
           ) : !bank.configured ? (
