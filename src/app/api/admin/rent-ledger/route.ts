@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { runRoute } from "@/lib/handler";
 import { viewTrackingSince } from "@/lib/viewlog";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   return runRoute("admin/rent-ledger GET", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("collections"); if (denied) return denied; }
 
     const contracts = await db.contract.findMany({
       where: { vendorSignedAt: { not: null }, marketSignedAt: { not: null } },

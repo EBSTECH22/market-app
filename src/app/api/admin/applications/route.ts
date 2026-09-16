@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { runRoute } from "@/lib/handler";
 import { deliveryFor, phaseFor, nextStepFor } from "@/lib/agreement";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   return runRoute("admin/applications GET", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
 
     const applications = await db.vendorApplication.findMany({
       orderBy: [{ createdAt: "desc" }],

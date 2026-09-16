@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   await db.employeeDoc.delete({ where: { id: params.id } });
   return NextResponse.json({ ok: true });
 }

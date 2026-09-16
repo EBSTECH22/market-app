@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff } from "@/lib/auth";
+
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
 import { getTaxRates, getCardAdjustPercent } from "@/lib/settings";
@@ -9,10 +9,11 @@ import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
 
 import { pushToVendor } from "@/lib/push";
+import { denyUnless } from "@/lib/perm";
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
 
   const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents } = (await req.json()) as {
     lines: { itemId: string; quantity: number }[];

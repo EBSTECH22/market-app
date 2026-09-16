@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { sendContractSignEmail, sendSetupGuideEmail, sendRentLinkEmail, sendAgreementReminderEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
+import { denyUnless } from "@/lib/perm";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const body = await req.json();
   const { action, monthlyRentDollars, boothLabel } = body as { action?: string; monthlyRentDollars?: number; boothLabel?: string };
 

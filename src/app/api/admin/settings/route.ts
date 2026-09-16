@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAdmin, isStaff } from "@/lib/auth";
+import { denyUnless } from "@/lib/perm";
 import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent } from "@/lib/settings";
 import { db } from "@/lib/db";
 
@@ -17,12 +17,13 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 }
 
 export async function GET() {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // The register and the kiosk read the tax rates from here on every load.
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()) });
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("config"); if (denied) return denied; }
   const body = await req.json();
 
   if (body.banner !== undefined) {

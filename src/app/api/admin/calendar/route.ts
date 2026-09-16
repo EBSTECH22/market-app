@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { runRoute } from "@/lib/handler";
 import { parseViewingText } from "@/lib/parseviewing";
 import { sendViewingEmail } from "@/lib/email";
 import { TZ, centralInputToDate } from "@/lib/time";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +44,7 @@ function toDate(v: unknown): Date | null {
 
 export async function GET(req: NextRequest) {
   return runRoute("admin/calendar GET", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
 
     const url = new URL(req.url);
     const from = toDate(url.searchParams.get("from"));
@@ -82,7 +83,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/calendar POST", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json().catch(() => ({}));
 
     /* -- one-time importer for viewings typed before the calendar existed -- */
@@ -194,7 +195,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   return runRoute("admin/calendar PATCH", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json().catch(() => ({}));
     const id = String(body.id || "").trim();
     if (!id) return bad("Which event?");
@@ -261,7 +262,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   return runRoute("admin/calendar DELETE", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return bad("Which event?");
     const existing = await db.calendarEvent.findUnique({ where: { id } });

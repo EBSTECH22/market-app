@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { centralInputToDate } from "@/lib/time";
 // Shared with the applications pipeline so both screens report identically.
 import { deliveryFor } from "@/lib/agreement";
 import { viewTrackingSince } from "@/lib/viewlog";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const contracts = await db.contract.findMany({
     include: { vendor: { select: { businessName: true, code: true, cardLast4: true } } },
     orderBy: { createdAt: "desc" },
@@ -56,7 +57,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const { vendorId, boothLabel, monthlyRentDollars, startDate } = await req.json();
   const rent = Math.round(Number(monthlyRentDollars) * 100);
   if (!vendorId || !boothLabel?.trim() || !startDate) {

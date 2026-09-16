@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { runRoute } from "@/lib/handler";
 import { sendAgreementReminderEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ type Step = { key: "agreement" | "countersign" | "firstRent"; label: string; don
 
 export async function GET() {
   return runRoute("admin/onboarding GET", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
 
     const vendors = await db.vendor.findMany({
       // active:false covers vendors who backed out — they leave this list.
@@ -132,7 +133,7 @@ export async function GET() {
  */
 export async function POST(req: NextRequest) {
   return runRoute("admin/onboarding POST", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json().catch(() => ({}));
     if (body.action !== "remind_all") {
       return NextResponse.json({ error: "Unknown action." }, { status: 400 });

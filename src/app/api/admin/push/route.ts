@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 // POST { endpoint, keys } — register this device for admin notifications
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const { endpoint, keys } = await req.json();
   if (!endpoint || !keys?.p256dh || !keys?.auth) return NextResponse.json({ error: "Bad subscription." }, { status: 400 });
   await db.pushSub.upsert({
@@ -18,13 +19,13 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const devices = await db.pushSub.count({ where: { vendorId: "ADMIN" } });
   return NextResponse.json({ devices, publicKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "" });
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const { endpoint } = await req.json();
   if (endpoint) await db.pushSub.deleteMany({ where: { endpoint, vendorId: "ADMIN" } });
   return NextResponse.json({ ok: true });

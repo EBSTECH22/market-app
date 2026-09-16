@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("money"); if (denied) return denied; }
   const entries = await db.ledgerEntry.findMany({
     where: { vendorId: params.id },
     orderBy: { createdAt: "desc" },
@@ -16,7 +17,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("money"); if (denied) return denied; }
   const { type, amountDollars, note } = await req.json();
   if (!["RENT", "PAYOUT", "ADJUST"].includes(type)) {
     return NextResponse.json({ error: "Invalid entry type." }, { status: 400 });

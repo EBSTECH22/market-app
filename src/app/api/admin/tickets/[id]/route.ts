@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   const sale = await db.sale.findUnique({ where: { id: params.id }, include: { lines: true } });
   if (!sale) return NextResponse.json({ error: "Not found." }, { status: 404 });
   const refunds = await db.refund.findMany({ where: { saleId: sale.id } });

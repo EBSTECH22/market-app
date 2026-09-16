@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { centralInputToDate } from "@/lib/time";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 // GET ?from=YYYY-MM-DD&to=YYYY-MM-DD — hours, gross, deductions, net per employee
 export async function GET(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const from = req.nextUrl.searchParams.get("from");
   const to = req.nextUrl.searchParams.get("to");
   if (!from || !to) return NextResponse.json({ error: "Pick a from and to date." }, { status: 400 });

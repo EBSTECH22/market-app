@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 // Market oversight: every complaint across all vendors, newest first
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const threads = await db.thread.findMany({
     where: { type: "COMPLAINT" },
     include: { messages: { orderBy: { createdAt: "asc" } } },

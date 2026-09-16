@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff } from "@/lib/auth";
+
 import { runRoute } from "@/lib/handler";
 import { pushToVendor } from "@/lib/push";
 import type { CartLine } from "@/lib/selfcheckout";
 import { normalizeTaxClass } from "@/lib/tax";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,7 @@ function lookupCode(raw: string): string {
 // GET ?code=ABCDE — what's on the ticket, before taking any money
 export async function GET(req: NextRequest) {
   return runRoute("admin/vendor-ticket GET", async () => {
-    if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("ops"); if (denied) return denied; }
     const code = lookupCode(req.nextUrl.searchParams.get("code") || "");
     if (!code) return NextResponse.json({ error: "Enter the code from the vendor's phone." }, { status: 400 });
 
@@ -63,7 +64,7 @@ export async function GET(req: NextRequest) {
 // POST { code, cashTenderedCents } — take the cash and book it
 export async function POST(req: NextRequest) {
   return runRoute("admin/vendor-ticket POST", async () => {
-    if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("ops"); if (denied) return denied; }
     const body = await req.json();
     const code = lookupCode(body.code);
     if (!code) return NextResponse.json({ error: "Enter the code." }, { status: 400 });

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 // GET: full team roster with pay, W-4 elections, deductions, doc list (no file data)
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const employees = await db.employee.findMany({ where: { active: true }, orderBy: { name: "asc" } });
   const deductions = await db.deduction.findMany({ where: { active: true } });
   const docs = await db.employeeDoc.findMany({ select: { id: true, employeeId: true, kind: true, filename: true, createdAt: true }, orderBy: { createdAt: "desc" } });
@@ -21,7 +22,7 @@ export async function GET() {
 
 // PATCH { employeeId, payRateDollars?, w4? }
 export async function PATCH(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const { employeeId, payRateDollars, w4 } = await req.json();
   const data: { payRateCents?: number; w4Json?: string } = {};
   if (payRateDollars !== undefined) {
@@ -36,7 +37,7 @@ export async function PATCH(req: NextRequest) {
 
 // POST — add a recurring per-paycheck deduction { employeeId, name, amountDollars }
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const { employeeId, name, amountDollars } = await req.json();
   const cents = Math.round(Number(amountDollars) * 100);
   if (!name?.trim() || isNaN(cents) || cents <= 0) {
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE ?id= — retire a deduction
 export async function DELETE(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "No id." }, { status: 400 });
   await db.deduction.update({ where: { id }, data: { active: false } });

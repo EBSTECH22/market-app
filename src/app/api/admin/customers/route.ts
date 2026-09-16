@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { isAdmin } from "@/lib/auth";
+
 import { db } from "@/lib/db";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const customers = await db.customer.findMany({ orderBy: { createdAt: "desc" }, include: { follows: true } });
   const sales = await db.sale.groupBy({ by: ["customerId"], where: { customerId: { not: "" }, status: { not: "VOIDED" } }, _count: { _all: true }, _sum: { totalCents: true } });
   const map = Object.fromEntries(sales.map((s) => [s.customerId, s]));

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
-import { isStaff } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   const sku = req.nextUrl.searchParams.get("sku")?.trim().toUpperCase();
   if (!sku) return NextResponse.json({ error: "No code." }, { status: 400 });
 

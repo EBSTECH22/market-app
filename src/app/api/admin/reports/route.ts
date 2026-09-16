@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { TZ, centralDayStart, centralMonthStart, centralInputToDate } from "@/lib/time";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ function centralWeekStart(now = new Date()): Date {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("financials"); if (denied) return denied; }
   const p = req.nextUrl.searchParams;
   const period = p.get("period") || "day";
   const vendorId = p.get("vendor") || "all";

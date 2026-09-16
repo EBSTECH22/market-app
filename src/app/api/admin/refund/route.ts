@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff, currentEmployeeId, isAdmin } from "@/lib/auth";
+import { currentEmployeeId, isAdmin } from "@/lib/auth";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 // POST { saleId, action: "void" } — full void: never happened, restock everything, reverse vendor credits
 // POST { saleId, action: "refund", lines: [{ lineId, quantity }], restock } — partial/full refund with proportional tax
 export async function POST(req: NextRequest) {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("money"); if (denied) return denied; }
   const { saleId, action, lines, restock } = await req.json();
   const sale = await db.sale.findUnique({ where: { id: saleId }, include: { lines: true } });
   if (!sale) return NextResponse.json({ error: "Sale not found." }, { status: 404 });

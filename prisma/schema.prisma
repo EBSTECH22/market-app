@@ -93,6 +93,17 @@ model Employee {
   payRateCents Int     @default(0)
   w4Json      String   @default("{}")
   active      Boolean  @default(true)
+  // OWNER | MANAGER | EMPLOYEE. Everyone who already exists becomes EMPLOYEE,
+  // which is exactly the access they have today — nobody is promoted by a
+  // migration. See lib/perm.ts for what each role can reach.
+  role        String   @default("EMPLOYEE")
+  // Managers and owners sign in with email + password; employees keep the PIN,
+  // which is what the register needs. Empty for PIN-only staff. Uniqueness is
+  // enforced by a partial index (WHERE email <> '') so any number of employees
+  // can have no email at all.
+  email        String  @default("")
+  passwordHash String  @default("")
+  mustChangePassword Boolean @default(false)
   createdAt   DateTime @default(now())
 }
 

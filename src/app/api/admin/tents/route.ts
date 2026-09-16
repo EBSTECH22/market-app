@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { reconcileTents } from "@/lib/tents";
 import { sendTentWeatherCreditEmail } from "@/lib/email";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   await reconcileTents().catch(() => {});
   const pauseRow = await db.setting.findUnique({ where: { key: "tentsPaused" } });
   let pause = { paused: false, message: "" };
@@ -26,7 +27,7 @@ export async function GET() {
 //        { action: "capacity", dateId, capacity } | { action: "checkin", bookingId } |
 //        { action: "weatherDay", dateId } | { action: "cancelBooking", bookingId }
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const b = await req.json();
 
   if (b.action === "pause") {

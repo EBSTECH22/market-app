@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin, isStaff, hashPin } from "@/lib/auth";
+import { hashPin } from "@/lib/auth";
 import { runRoute } from "@/lib/handler";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  /* "ops", not "people": this is the name list the register's time clock fills
+     its dropdown from, so gating it to owners would stop every employee
+     punching in. The select is names only — no pay rates, no PIN hashes. */
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   const employees = await db.employee.findMany({ where: { active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } });
   return NextResponse.json({ employees });
 }
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/employees POST", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("people"); if (denied) return denied; }
     const { name, pin } = await req.json();
     if (!name?.trim() || !/^\d{4,6}$/.test(pin || "")) {
       return NextResponse.json({ error: "Name and a 4-6 digit PIN required." }, { status: 400 });
@@ -29,7 +33,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "No id." }, { status: 400 });
   await db.employee.update({ where: { id }, data: { active: false } });

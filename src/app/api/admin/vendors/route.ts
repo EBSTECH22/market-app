@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin, hashPassword } from "@/lib/auth";
+import { hashPassword } from "@/lib/auth";
 import { sendWelcomeEmail } from "@/lib/email";
 import { runRoute } from "@/lib/handler";
 import { VENDOR_PUBLIC_SELECT, TEMP_PASSWORD_BYTES } from "@/lib/vendor";
 import { randomBytes } from "crypto";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   return runRoute("admin/vendors GET", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const vendors = await db.vendor.findMany({
       orderBy: { code: "asc" },
       select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true },
@@ -30,7 +31,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/vendors POST", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const { businessName, contactName, email, phone, commissionPercent } = await req.json();
     if (!businessName?.trim() || !email?.includes("@")) {
       return NextResponse.json({ error: "Business name and a valid email are required." }, { status: 400 });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -9,7 +10,7 @@ const MAX_BYTES = 5 * 1024 * 1024;
 
 // POST { employeeId, kind, filename, mime, dataB64 }
 export async function POST(req: NextRequest) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("people"); if (denied) return denied; }
   const { employeeId, kind, filename, mime, dataB64 } = await req.json();
   if (!employeeId || !dataB64 || !filename) return NextResponse.json({ error: "Missing file." }, { status: 400 });
   const bytes = Math.floor((dataB64.length * 3) / 4);

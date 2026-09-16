@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
-import { isAdmin, isStaff } from "@/lib/auth";
+import { denyUnless, currentRole, can } from "@/lib/perm";
 import { centralDayStart, centralMonthStart } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const admin = isAdmin();
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
+  /* Takings are financials, not ops: a cashier and a manager both need the
+     floor list, and neither needs to see what the market made today. */
+  const admin = can(await currentRole(), "financials");
 
   const dayStart = centralDayStart();
   const monthStart = centralMonthStart();

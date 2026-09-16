@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin, hashPassword } from "@/lib/auth";
+import { hashPassword } from "@/lib/auth";
 import { sendPasswordResetEmail } from "@/lib/email";
 import { runRoute } from "@/lib/handler";
 import { VENDOR_PUBLIC_SELECT, TEMP_PASSWORD_BYTES } from "@/lib/vendor";
 import { randomBytes } from "crypto";
+import { denyUnless } from "@/lib/perm";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   return runRoute("admin/vendors/[id] PATCH", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json();
     const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean } = {};
     if (typeof body.businessName === "string" && body.businessName.trim()) data.businessName = body.businessName.trim();

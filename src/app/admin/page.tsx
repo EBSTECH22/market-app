@@ -14,6 +14,7 @@ import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
 import { CashTender } from "@/components/register/CashTender";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
+import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/perm";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string };
@@ -414,7 +415,17 @@ const ADMIN_TABS = [
 ] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
 
-const STAFF_TABS: readonly AdminTab[] = ["register", "time", "floor"];
+/* Which capability each tab needs. The same table the API guards use, so the
+   navigation and the server can't drift apart — a tab nobody can use never
+   renders, and a tab that renders always works. */
+const TAB_CAP: Record<AdminTab, Capability> = {
+  register: "ops", time: "ops", floor: "ops",
+  calendar: "market", vendors: "market", onboarding: "market",
+  contracts: "market", customers: "market", tents: "market",
+  reports: "financials", bank: "financials",
+  team: "people",
+  links: "config", settings: "config",
+};
 
 /* Grouped navigation — twelve peer buttons in one flat row gave no sense of
    what belonged together or what a cashier was allowed to touch. */
@@ -423,12 +434,12 @@ const STAFF_TABS: readonly AdminTab[] = ["register", "time", "floor"];
    /admin/applications, which was reachable ONLY from a small button buried in
    the Vendors tab. If you didn't already know the page existed, you couldn't
    find it — which is exactly what happened. */
-const NAV: { group: string; items: { id: string; label: string; icon: IconName; href?: string; owner?: boolean }[] }[] = [
+const NAV: { group: string; items: { id: string; label: string; icon: IconName; href?: string; cap?: Capability }[] }[] = [
   {
     group: "Daily",
     items: [
       { id: "register", label: "Register", icon: "register" },
-      { id: "kiosk", label: "Kiosk mode", icon: "lock", href: "/register" },
+      { id: "kiosk", label: "Kiosk mode", icon: "lock", href: "/register", cap: "ops" as Capability },
       { id: "time", label: "Time clock", icon: "clock" },
       { id: "calendar", label: "Calendar", icon: "calendar" },
       { id: "floor", label: "Floor stock", icon: "grid" },
@@ -444,7 +455,7 @@ const NAV: { group: string; items: { id: string; label: string; icon: IconName; 
   {
     group: "People",
     items: [
-      { id: "applications", label: "Applications", icon: "inbox", href: "/admin/applications", owner: true },
+      { id: "applications", label: "Applications", icon: "inbox", href: "/admin/applications", cap: "market" as Capability },
       { id: "vendors", label: "Vendors", icon: "store" },
       { id: "onboarding", label: "Onboarding", icon: "user" },
       { id: "contracts", label: "Agreements", icon: "contract" },
@@ -632,8 +643,20 @@ function EmailAction({ email, name }: { email: string; name?: string }) {
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
   const [role, setRole] = useState<"admin" | "staff" | null>(null);
+  /* The real role and what it can reach, straight from the server. The nav is
+     built from this rather than from a hardcoded list, so a screen can never
+     offer something the API would refuse. */
+  const [access, setAccess] = useState<Role | null>(null);
+  const [caps, setCaps] = useState<Capability[]>([]);
+  const allowed = (c: Capability) => caps.includes(c);
+
+  type AccessRow = { id: string; name: string; email: string; role: Role; roleLabel: string; active: boolean; hasPassword: boolean };
+  const [accessRows, setAccessRows] = useState<AccessRow[] | null>(null);
+  const [accessMe, setAccessMe] = useState<string | null>(null);
   const [staffName, setStaffName] = useState("");
-  const [loginMode, setLoginMode] = useState<"staff" | "admin">("staff");
+  const [loginMode, setLoginMode] = useState<"staff" | "account" | "admin">("staff");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [password, setPassword] = useState("");
   const [loginName, setLoginName] = useState("");
   const [loginPin, setLoginPin] = useState("");
@@ -843,12 +866,59 @@ export default function AdminPage() {
     if (!res.ok) { setAuthed(false); setRole(null); return; }
     const data = await res.json();
     setRole(data.role); setStaffName(data.name || ""); setAuthed(true);
+    /* Fail-safe, not fail-closed, for the owner path: if the capability list is
+       ever missing, an ADMIN_PASSWORD session still gets the full set. The
+       alternative is an owner staring at a sidebar with no tabs in it, locked
+       out of their own market by a serialisation hiccup. The APIs enforce this
+       independently, so a wrong guess here grants nothing. */
+    const nextAccess = (data.access as Role) || (data.role === "admin" ? "OWNER" : null);
+    const nextCaps = (data.capabilities as Capability[] | undefined)
+      ?? (nextAccess === "OWNER" ? (["ops", "market", "collections", "money", "financials", "people", "config"] as Capability[]) : []);
+    setAccess(nextAccess); setCaps(nextCaps);
   }, []);
 
   const loadTime = useCallback(async () => {
     const res = await fetch("/api/staff/time");
     if (res.ok) setTimeData(await res.json());
   }, []);
+
+  const loadAccess = useCallback(async () => {
+    const r = await fetch("/api/admin/team/access");
+    if (!r.ok) return;
+    const d = await r.json();
+    setAccessRows(d.employees || []);
+    setAccessMe(d.me || null);
+  }, []);
+
+  /* One helper for every change on this card — role, email, password, on/off.
+     They share the same guard rails server-side, so they share the same
+     error handling here rather than four near-identical copies. */
+  const changeAccess = async (employeeId: string, patch: Record<string, unknown>, okMsg: string) => {
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/team/access", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId, ...patch }),
+      });
+      if (!ok) { toast.error("Couldn't make that change", String(data.error || "")); return false; }
+      if (data.issuedPassword) {
+        /* Shown once, in a dialog they have to dismiss, with a copy button.
+           It is not stored anywhere readable — a toast that slides away would
+           mean generating another one. */
+        await dialog.alert({
+          title: "New password set",
+          body: <>Give this to <b>{String((data.employee as { name?: string })?.name || "them")}</b>. It won&rsquo;t be shown again, and they&rsquo;ll be asked to change it.</>,
+          copyable: String(data.issuedPassword),
+          confirmLabel: "Done",
+        });
+      } else {
+        toast.success(okMsg, data.warning ? String(data.warning) : undefined);
+      }
+      if (data.warning && data.issuedPassword) toast.error("Heads up", String(data.warning));
+      await loadAccess();
+      return true;
+    } finally { setBusy(false); }
+  };
 
   const loadTeam = useCallback(async () => {
     const t = await fetch("/api/admin/team");
@@ -858,9 +928,9 @@ export default function AdminPage() {
   useEffect(() => { probeRole(); loadDrawer(); loadAll(); }, [probeRole, loadDrawer, loadAll]);
   usePulse(() => { loadDrawer(); loadAll(); });
   useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
-  useEffect(() => { if (authed && role === "admin" && tab === "team") loadTeam(); }, [authed, role, tab, loadTeam]);
+  useEffect(() => { if (authed && allowed("people") && tab === "team") { loadTeam(); loadAccess(); } }, [authed, caps, tab, loadTeam, loadAccess]);
   useEffect(() => {
-    if (authed && role === "admin" && tab === "vendors") {
+    if (authed && allowed("market") && tab === "vendors") {
       fetch("/api/admin/complaints").then(async (r) => { if (r.ok) setComplaints((await r.json()).complaints || []); });
       fetch("/api/admin/applications").then(async (r) => { if (r.ok) setApplications((await r.json()).applications || []); });
     }
@@ -886,7 +956,7 @@ export default function AdminPage() {
       setCustLoading(false);
     }
   }, []);
-  useEffect(() => { if (authed && role === "admin" && tab === "customers") loadCustomers(); }, [authed, role, tab, loadCustomers]);
+  useEffect(() => { if (authed && allowed("market") && tab === "customers") loadCustomers(); }, [authed, caps, tab, loadCustomers]);
   useEffect(() => {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
     if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) setSettle((await r.json()).rows); });
@@ -902,6 +972,10 @@ export default function AdminPage() {
   const login = async () => {
     setLoginError("");
     if (loginMode === "admin" && !password) { setLoginError("Enter the admin password."); return; }
+    if (loginMode === "account" && (!loginEmail.trim() || !loginPassword)) {
+      setLoginError("Enter your email and password.");
+      return;
+    }
     if (loginMode === "staff" && (!loginName.trim() || !loginPin)) {
       setLoginError("Enter both your name and your PIN.");
       return;
@@ -921,6 +995,17 @@ export default function AdminPage() {
             : "That password isn't right.");
           return;
         }
+      } else if (loginMode === "account") {
+        const { ok, status, data } = await safeFetch("/api/staff/password-login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
+        });
+        if (!ok) {
+          setLoginError(status === 429
+            ? String(data.error || "Too many attempts. Wait a minute and try again.")
+            : String(data.error || "Wrong email or password."));
+          return;
+        }
       } else {
         const { ok, status, data } = await safeFetch("/api/staff/login", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -933,7 +1018,7 @@ export default function AdminPage() {
           return;
         }
       }
-      setPassword(""); setLoginPin("");
+      setPassword(""); setLoginPin(""); setLoginPassword("");
       await probeRole(); await loadDrawer(); await loadAll();
     } finally {
       setLoggingIn(false);
@@ -1075,7 +1160,7 @@ export default function AdminPage() {
       setOnbLoading(false);
     }
   }, []);
-  useEffect(() => { if (authed && role === "admin" && tab === "onboarding") loadOnboarding(); }, [authed, role, tab, loadOnboarding]);
+  useEffect(() => { if (authed && allowed("market") && tab === "onboarding") loadOnboarding(); }, [authed, caps, tab, loadOnboarding]);
 
   /* ---------- calendar ------------------------------------------------------
      Viewings, market days and anything else she needs to remember. The month
@@ -1133,7 +1218,7 @@ export default function AdminPage() {
       setCalLoading(false);
     }
   }, [calMonth]);
-  useEffect(() => { if (authed && role === "admin" && tab === "calendar") loadCalendar(); }, [authed, role, tab, loadCalendar]);
+  useEffect(() => { if (authed && allowed("market") && tab === "calendar") loadCalendar(); }, [authed, caps, tab, loadCalendar]);
 
   const openCalCreate = (day?: Date) => {
     const base = day ? new Date(day) : new Date();
@@ -1327,7 +1412,7 @@ export default function AdminPage() {
       if (d.pause) { setTentPaused(!!d.pause.paused); setTentPauseMsg(d.pause.message || ""); }
     }
   }, []);
-  useEffect(() => { if (authed && role === "admin" && tab === "tents") loadTents(); }, [authed, role, tab, loadTents]);
+  useEffect(() => { if (authed && allowed("market") && tab === "tents") loadTents(); }, [authed, caps, tab, loadTents]);
 
   const tentAct = async (
     body: Record<string, unknown>,
@@ -2281,7 +2366,7 @@ export default function AdminPage() {
       setBanEnabled(!!b.enabled); setBanTitle(b.title || ""); setBanDate(b.dateLine || ""); setBanMessage(b.message || "");
     }
   }, []);
-  useEffect(() => { if (authed && role === "admin" && tab === "settings") loadBanner(); }, [authed, role, tab, loadBanner]);
+  useEffect(() => { if (authed && allowed("config") && tab === "settings") loadBanner(); }, [authed, caps, tab, loadBanner]);
 
   const saveBanner = async () => {
     setBanMsg("");
@@ -2444,6 +2529,15 @@ export default function AdminPage() {
               <button
                 type="button"
                 role="tab"
+                aria-selected={loginMode === "account"}
+                style={{ flex: 1 }}
+                onClick={() => { setLoginMode("account"); setLoginError(""); }}
+              >
+                Manager
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={loginMode === "admin"}
                 style={{ flex: 1 }}
                 onClick={() => { setLoginMode("admin"); setLoginError(""); }}
@@ -2456,7 +2550,34 @@ export default function AdminPage() {
               className="stack g-4"
               onSubmit={(e) => { e.preventDefault(); void login(); }}
             >
-              {loginMode === "admin" ? (
+              {loginMode === "account" ? (
+                <>
+                  <Field label="Email" required>
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="email"
+                        inputMode="email"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        value={loginEmail}
+                        onChange={(e) => { setLoginEmail(e.target.value); setLoginError(""); }}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Password" required>
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="password"
+                        autoComplete="current-password"
+                        value={loginPassword}
+                        onChange={(e) => { setLoginPassword(e.target.value); setLoginError(""); }}
+                      />
+                    )}
+                  </Field>
+                </>
+              ) : loginMode === "admin" ? (
                 <Field label="Admin password" required>
                   {(p) => (
                     <Input
@@ -2509,17 +2630,18 @@ export default function AdminPage() {
           </div>
 
           <p className="t-xs t-muted mt-4" style={{ textAlign: "center" }}>
-            Trouble signing in? Ask the market owner to reset your PIN in Settings.
+            Employees sign in with a name and PIN. Owners and office managers use their email and
+            password. Trouble getting in? Ask the owner to reset it on the Team page.
           </p>
         </div>
       </main>
     );
   }
 
-  const visibleTabs = role === "admin" ? ADMIN_TABS : STAFF_TABS;
+  const visibleTabs = ADMIN_TABS.filter((t) => allowed(TAB_CAP[t]));
   const meta = TAB_META[tab];
   /* A cashier deep-linking to #settings shouldn't land on a blank screen. */
-  const allowed = (visibleTabs as readonly string[]).includes(tab);
+  const tabReachable = (visibleTabs as readonly string[]).includes(tab);
 
   const go = (t: AdminTab) => { setTab(t); setReceipt(null); setMoreOpen(false); };
 
@@ -2581,9 +2703,15 @@ export default function AdminPage() {
 
   /* Phones get the five most-used destinations plus a "More" sheet, rather
      than a twelve-button wrap that pushed content below the fold. */
-  const primaryMobile: AdminTab[] = role === "admin"
-    ? ["register", "calendar", "vendors", "reports"]
-    : ["register", "time", "floor"];
+  /* Filtered against what this account can actually open, so a manager's phone
+     bar doesn't offer Reports and an employee's doesn't offer Vendors. */
+  const primaryMobile: AdminTab[] = (
+    allowed("financials")
+      ? (["register", "calendar", "vendors", "reports"] as AdminTab[])
+      : allowed("market")
+        ? (["register", "calendar", "vendors", "time"] as AdminTab[])
+        : (["register", "time", "floor"] as AdminTab[])
+  ).filter((t) => visibleTabs.includes(t));
   const moreMobile = visibleTabs.filter((t) => !primaryMobile.includes(t));
 
   return (
@@ -2598,7 +2726,7 @@ export default function AdminPage() {
           <div style={{ minWidth: 0 }}>
             <div className="t-card truncate">Community Harvest</div>
             <div className="t-xs t-muted truncate">
-              {role === "admin" ? "Owner" : staffName || "Employee"}
+              {staffName ? `${staffName} · ${access ? ROLE_LABEL[access] : ""}` : access ? ROLE_LABEL[access] : ""}
             </div>
           </div>
         </div>
@@ -2610,7 +2738,7 @@ export default function AdminPage() {
                owner's, the kiosk is deliberately not, since a cashier is
                exactly who needs it. */
             const items = group.items.filter((i) =>
-              i.href ? (!i.owner || role === "admin") : (visibleTabs as readonly string[]).includes(i.id)
+              i.href ? (!i.cap || allowed(i.cap)) : (visibleTabs as readonly string[]).includes(i.id)
             );
             if (items.length === 0) return null;
             return (
@@ -2703,7 +2831,7 @@ export default function AdminPage() {
             @media (min-width: 901px) { .topbar-logo { display: none; } }
           `}</style>
 
-          {!allowed ? (
+          {!tabReachable ? (
             <Card>
               <EmptyState
                 icon="lock"
@@ -2779,8 +2907,8 @@ export default function AdminPage() {
               title="No employees on the register yet"
               body="Add yourself in Settings first — a name and a PIN — then come back to open the drawer."
               action={
-                role === "admin"
-                  ? <Button variant="primary" icon="settings" onClick={() => go("settings")}>Go to settings</Button>
+                allowed("people")
+                  ? <Button variant="primary" icon="settings" onClick={() => go("team")}>Add the team</Button>
                   : undefined
               }
             />
@@ -3718,8 +3846,152 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "team" && role === "admin" && (
+      {tab === "team" && allowed("people") && (
         <>
+          <Card
+            className="mb-4"
+            title="Who can get in"
+            subtitle="What each person's account can reach, and how they sign in."
+          >
+            <div className="stack g-4">
+              <div className="stack g-2">
+                {(["OWNER", "MANAGER", "EMPLOYEE"] as Role[]).map((r) => (
+                  <div key={r} className="row g-2" style={{ alignItems: "baseline" }}>
+                    <Badge tone={r === "OWNER" ? "solid" : r === "MANAGER" ? "info" : "neutral"}>{ROLE_LABEL[r]}</Badge>
+                    <span className="t-xs t-muted">{ROLE_BLURB[r]}</span>
+                  </div>
+                ))}
+              </div>
+
+              <DataTable
+                rows={accessRows || []}
+                loading={!accessRows}
+                skeletonRows={3}
+                rowKey={(r) => r.id}
+                mobileCards
+                caption="Staff accounts, their role, and whether they can sign in"
+                columns={[
+                  {
+                    key: "name",
+                    header: "Person",
+                    primary: true,
+                    sortBy: (r) => r.name,
+                    cell: (r) => (
+                      <span className="stack g-1">
+                        <span style={{ fontWeight: 600 }}>
+                          {r.name}{r.id === accessMe ? <span className="t-xs t-muted"> · you</span> : null}
+                        </span>
+                        <span className="t-xs t-muted">{r.email || "No email"}</span>
+                      </span>
+                    ),
+                  },
+                  {
+                    key: "role",
+                    header: "Can reach",
+                    sortBy: (r) => r.role,
+                    cell: (r) => (
+                      <Select
+                        value={r.role}
+                        aria-label={`Role for ${r.name}`}
+                        disabled={busy || r.id === accessMe}
+                        title={r.id === accessMe ? "You can't change your own role." : undefined}
+                        onChange={(e) => void changeAccess(r.id, { role: e.target.value }, `${r.name} is now ${ROLE_LABEL[e.target.value as Role]}`)}
+                      >
+                        {(["OWNER", "MANAGER", "EMPLOYEE"] as Role[]).map((x) => (
+                          <option key={x} value={x}>{ROLE_LABEL[x]}</option>
+                        ))}
+                      </Select>
+                    ),
+                  },
+                  {
+                    key: "signin",
+                    header: "Sign-in",
+                    cell: (r) =>
+                      r.role === "EMPLOYEE" ? (
+                        <span className="t-xs t-muted">Name + PIN</span>
+                      ) : r.email && r.hasPassword ? (
+                        <Badge tone="success" dot>Email + password</Badge>
+                      ) : (
+                        <Badge tone="warn" dot>Can&rsquo;t sign in yet</Badge>
+                      ),
+                  },
+                  {
+                    key: "act",
+                    header: "",
+                    align: "right",
+                    cell: (r) => (
+                      <span className="row wrap g-1 end">
+                        <Button
+                          size="sm" variant="ghost" icon="mail" disabled={busy}
+                          onClick={async () => {
+                            const addr = await dialog.prompt({
+                              title: `Email for ${r.name}`,
+                              body: "They sign in with this. Leave it empty to remove it.",
+                              label: "Email",
+                              defaultValue: r.email,
+                              placeholder: "them@example.com",
+                              confirmLabel: "Save email",
+                            });
+                            if (addr === null) return;
+                            await changeAccess(r.id, { email: addr }, `Email saved for ${r.name}`);
+                          }}
+                        >
+                          Email
+                        </Button>
+                        <Button
+                          size="sm" variant="secondary" icon="lock" disabled={busy}
+                          onClick={async () => {
+                            const yes = await dialog.confirm({
+                              title: `New password for ${r.name}?`,
+                              body: "A fresh password is generated and shown to you once. Any password they have now stops working immediately.",
+                              confirmLabel: "Generate it",
+                            });
+                            if (!yes) return;
+                            await changeAccess(r.id, { generatePassword: true }, "");
+                          }}
+                        >
+                          {r.hasPassword ? "Reset password" : "Set password"}
+                        </Button>
+                        <Button
+                          size="sm" variant={r.active ? "dangerSoft" : "secondary"}
+                          icon={r.active ? "lock" : "unlock"}
+                          disabled={busy || r.id === accessMe}
+                          onClick={async () => {
+                            const yes = await dialog.confirm({
+                              title: r.active ? `Switch off ${r.name}'s account?` : `Switch ${r.name}'s account back on?`,
+                              body: r.active
+                                ? "They can't sign in until it's switched back on. Their hours, sales and history are kept."
+                                : "They'll be able to sign in again with whatever they had before.",
+                              tone: r.active ? "warn" : undefined,
+                              confirmLabel: r.active ? "Switch it off" : "Switch it on",
+                            });
+                            if (!yes) return;
+                            await changeAccess(r.id, { active: !r.active }, r.active ? `${r.name} switched off` : `${r.name} switched back on`);
+                          }}
+                        >
+                          {r.active ? "Off" : "On"}
+                        </Button>
+                      </span>
+                    ),
+                  },
+                ]}
+                empty={
+                  <EmptyState
+                    icon="users"
+                    title="Nobody on the team yet"
+                    body="Add people below, then come back here to say what their account can reach."
+                  />
+                }
+              />
+
+              <Note tone="info">
+                Changing a role takes effect the next time they load a page — the role is read fresh on
+                every request rather than stored in their sign-in, so switching someone off actually locks
+                them out straight away.
+              </Note>
+            </div>
+          </Card>
+
           <Card
             className="mb-4"
             title="Payroll run"
@@ -5244,7 +5516,7 @@ export default function AdminPage() {
         </>
       )}
 
-      {tab === "onboarding" && role === "admin" && (
+      {tab === "onboarding" && allowed("market") && (
         <>
           {/* Said plainly and up front, because "accepted" and "live" are not
               the same thing and the difference is invisible from this screen. */}
@@ -5552,7 +5824,7 @@ export default function AdminPage() {
         </>
       )}
 
-      {tab === "calendar" && role === "admin" && (
+      {tab === "calendar" && allowed("market") && (
         <>
           {/* The month grid is hand-built, so its geometry lives here rather
               than in globals.css — nothing else in the app renders a calendar.
@@ -6845,7 +7117,7 @@ export default function AdminPage() {
         </>
       )}
 
-      {tab === "tents" && role === "admin" && (
+      {tab === "tents" && allowed("market") && (
         <div>
           <Card
             className="mb-4"
@@ -7093,7 +7365,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "customers" && role === "admin" && (
+      {tab === "customers" && allowed("market") && (
         <CustomersCard
           customers={customers}
           loading={custLoading}
@@ -7102,7 +7374,7 @@ export default function AdminPage() {
         />
       )}
 
-      {tab === "links" && role === "admin" && (
+      {tab === "links" && allowed("config") && (
         (() => {
           type LinkRow = { path: string; body: ReactNode; open?: boolean; qr?: string };
 

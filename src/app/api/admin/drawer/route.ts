@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff, verifyPin, pinUpgrade, currentEmployeeId } from "@/lib/auth";
+import { verifyPin, pinUpgrade, currentEmployeeId } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
   if (!session) return NextResponse.json({ session: null });
   const cash = await db.sale.aggregate({
@@ -27,7 +28,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/drawer POST", async () => {
-    if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("ops"); if (denied) return denied; }
     const { employee, pin, counts, totalCents } = await req.json();
     const who = String(employee || "");
 
@@ -90,7 +91,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   const { counts, countedCents } = await req.json();
   const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
   if (!session) return NextResponse.json({ error: "No open drawer." }, { status: 400 });

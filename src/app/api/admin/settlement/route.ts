@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin } from "@/lib/auth";
+
 import { stripe } from "@/lib/stripe";
 import { sendRentChargedEmail } from "@/lib/email";
 import { unlockIfRentPaid } from "@/lib/unlock";
 import { runRoute } from "@/lib/handler";
 import { TZ } from "@/lib/time";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ const PROCESSING_PERCENT = 3; // card-processing adjustment on card-charged rent
 // GET — settlement view: every active-contract vendor, balance, and what's still owed
 export async function GET() {
   return runRoute("admin/settlement GET", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    { const denied = await denyUnless("financials"); if (denied) return denied; }
     // explicit vendor select — `include: { vendor: true }` would pull
     // passwordHash / stripe ids into memory next to the response builder
     const contracts = await db.contract.findMany({
@@ -42,7 +43,8 @@ export async function GET() {
 // POST { vendorId } — charge the card on file for the outstanding balance + 3%
 export async function POST(req: NextRequest) {
   return runRoute("admin/settlement POST", async () => {
-    if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Charging a card on file is money moving, not just reading the books.
+    { const denied = await denyUnless("money"); if (denied) return denied; }
     if (!stripe) return NextResponse.json({ error: "Stripe isn't configured." }, { status: 500 });
     const { vendorId } = await req.json();
     const vendor = await db.vendor.findUnique({ where: { id: String(vendorId || "") } });

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff } from "@/lib/auth";
+
 import { TZ } from "@/lib/time";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
   const q = (req.nextUrl.searchParams.get("q") || "").trim().toLowerCase();
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 

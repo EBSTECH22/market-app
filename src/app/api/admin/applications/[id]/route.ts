@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isAdmin, hashPassword } from "@/lib/auth";
+import { hashPassword } from "@/lib/auth";
 import { sendApplicationDecisionEmail, sendViewingEmail, sendContractSignEmail } from "@/lib/email";
 import { TZ } from "@/lib/time";
 import { randomBytes } from "crypto";
+import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 //   { action: "reopen" }                       — undo a withdrawal
 //   { action: "decline", reason? }             — any stage
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  { const denied = await denyUnless("market"); if (denied) return denied; }
   const body = await req.json();
   const action = String(body.action || "");
   const app = await db.vendorApplication.findUnique({ where: { id: params.id } });
