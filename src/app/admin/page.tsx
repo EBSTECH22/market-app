@@ -65,7 +65,7 @@ function DeliveryCell({ d }: { d: Delivery | undefined }) {
   );
 }
 
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null } };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean } };
 
 /** One recorded open of a vendor's invoice — /api/admin/contracts/{id}/views. */
 type InvoiceView = { id: string; viewedAt: string; userAgent: string | null };
@@ -87,17 +87,39 @@ function deviceFromUA(ua: string | null | undefined): string {
 /** Has the vendor actually looked at the invoice we sent them? Only worth
     showing once the agreement is executed — before that there's no invoice.
     Admin previews are never logged, so a zero here really means zero. */
-function InvoiceOpensCell({ v }: { v: Contract["invoiceViews"] }) {
+/**
+ * Invoice open status — but only where it means something.
+ *
+ * Three ways "no opens" can be true and only one is worth chasing:
+ *   - they've already paid, so whether they opened it is moot
+ *   - their invoice predates view tracking, so nobody was watching
+ *   - they owe money, we were watching, and they haven't looked
+ * Showing "not opened" for the first two told the owner a vendor was
+ * ignoring an invoice they'd actually settled weeks ago.
+ */
+function InvoiceOpensCell({ v, owes }: { v: Contract["invoiceViews"]; owes: number }) {
   const count = v?.count ?? 0;
-  if (count === 0) return <Badge tone="warn" dot>Invoice not opened</Badge>;
-  return (
-    <div className="stack g-1" style={{ minWidth: 0 }}>
-      <Badge tone="info" icon="eye">Invoice opened {count}&times;</Badge>
-      {/* relTime already reads as a phrase ("yesterday", "2 days ago"), so
-          "Last …" would produce "Last yesterday". */}
-      {v?.lastAt ? <span className="t-xs t-muted truncate">Last opened {relTime(v.lastAt)}</span> : null}
-    </div>
-  );
+
+  if (count > 0) {
+    return (
+      <div className="stack g-1" style={{ minWidth: 0 }}>
+        <Badge tone="info" icon="eye">Invoice opened {count}&times;</Badge>
+        {/* relTime already reads as a phrase ("yesterday", "2 days ago"), so
+            "Last …" would produce "Last yesterday". */}
+        {v?.lastAt ? <span className="t-xs t-muted truncate">Last opened {relTime(v.lastAt)}</span> : null}
+      </div>
+    );
+  }
+
+  if (owes <= 0) return <Badge tone="success" icon="checkCircle">Invoice paid</Badge>;
+  if (v?.tracked === false) {
+    return (
+      <span title="Their invoice was sent before open-tracking existed, so there is nothing recorded either way.">
+        <Badge tone="neutral" dot>Opens not tracked</Badge>
+      </span>
+    );
+  }
+  return <Badge tone="warn" dot>Invoice not opened</Badge>;
 }
 
 /** One reading of an agreement's status, so the table and the detail panel
@@ -6004,7 +6026,7 @@ export default function AdminPage() {
                     <div className="stack g-1" style={{ minWidth: 0 }}>
                       <DeliveryCell d={c.delivery} />
                       {c.vendorSignedAt && c.marketSignedAt ? (
-                        <InvoiceOpensCell v={c.invoiceViews} />
+                        <InvoiceOpensCell v={c.invoiceViews} owes={Math.max(0, -(c.vendorBalanceCents ?? 0))} />
                       ) : null}
                     </div>
                   ),
@@ -6181,7 +6203,13 @@ export default function AdminPage() {
                       )}
                       <p className="t-sm">
                         {iv.count === 0 ? (
-                          <span className="t-muted">They haven&rsquo;t opened it yet.</span>
+                          <span className="t-muted">
+                            {iv.tracked === false
+                              ? "Their invoice was sent before open-tracking existed, so there's nothing recorded either way."
+                              : (c.vendorBalanceCents ?? 0) >= 0
+                                ? "Nothing outstanding — they've paid."
+                                : "They haven\u2019t opened it yet."}
+                          </span>
                         ) : (
                           <>
                             Opened {plural(iv.count, "time")}

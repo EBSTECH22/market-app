@@ -4,6 +4,7 @@ import { isAdmin } from "@/lib/auth";
 import { centralInputToDate } from "@/lib/time";
 // Shared with the applications pipeline so both screens report identically.
 import { deliveryFor } from "@/lib/agreement";
+import { viewTrackingSince } from "@/lib/viewlog";
 
 export const dynamic = "force-dynamic";
 
@@ -29,13 +30,28 @@ export async function GET() {
     views.map((v) => [v.targetId, { count: v._count._all, lastAt: v._max.viewedAt }])
   );
 
+  /* Anything executed before this has no view history because nothing was
+     recording yet — "not opened" would be a lie about those. */
+  const trackingSince = await viewTrackingSince();
+
   return NextResponse.json({
-    contracts: contracts.map((c) => ({
-      ...c,
-      vendorBalanceCents: balMap[c.vendorId] || 0,
-      delivery: deliveryFor(c),
-      invoiceViews: viewMap[c.id] ?? { count: 0, lastAt: null },
-    })),
+    trackingSince,
+    contracts: contracts.map((c) => {
+      const executedAt =
+        c.vendorSignedAt && c.marketSignedAt
+          ? new Date(Math.max(new Date(c.vendorSignedAt).getTime(), new Date(c.marketSignedAt).getTime()))
+          : null;
+      return {
+        ...c,
+        vendorBalanceCents: balMap[c.vendorId] || 0,
+        delivery: deliveryFor(c),
+        invoiceViews: {
+          ...(viewMap[c.id] ?? { count: 0, lastAt: null }),
+          // false when their invoice predates tracking and we saw nothing
+          tracked: !!executedAt && executedAt >= trackingSince,
+        },
+      };
+    }),
   });
 }
 

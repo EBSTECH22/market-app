@@ -66,6 +66,30 @@ export async function logView(opts: {
   return { recorded: true, totalViews: priorCount + 1, firstEver: priorCount === 0 };
 }
 
+/**
+ * When view tracking started, stamped the first time anything asks.
+ *
+ * Without this, an invoice paid before the feature existed reads as
+ * "not opened" — which is false. We weren't watching. Anything executed
+ * before this timestamp simply has no answer, and the UI says so rather
+ * than implying the vendor ignored it.
+ */
+export async function viewTrackingSince(): Promise<Date> {
+  const KEY = "viewTrackingStartedAt";
+  const row = await db.setting.findUnique({ where: { key: KEY } });
+  if (row) {
+    const d = new Date(row.value);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const now = new Date();
+  await db.setting.upsert({
+    where: { key: KEY },
+    create: { key: KEY, value: now.toISOString() },
+    update: {},
+  });
+  return now;
+}
+
 /** Full history for one document, newest first. */
 export async function viewsFor(kind: string, targetId: string, take = 50) {
   return db.viewEvent.findMany({
