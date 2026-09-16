@@ -1,6 +1,13 @@
+import { TZ } from "./time";
+
 /**
  * Shared formatters. Money is stored in cents everywhere; nothing in the UI
  * should ever divide by 100 inline.
+ *
+ * Every date and time renders in the market's timezone (Central), not the
+ * viewer's. Without this, the same booking reads as a different hour on a
+ * phone that has travelled, and a vendor in another timezone sees the wrong
+ * market day entirely.
  */
 
 export const money = (cents: number | null | undefined): string => {
@@ -35,7 +42,7 @@ export const plural = (n: number, one: string, many = `${one}s`): string =>
 
 /* ------------------------------------------------------------------ dates -- */
 
-const DATE_OPTS: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
+const DATE_OPTS: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric", timeZone: TZ };
 
 export const fmtDate = (d: string | Date | null | undefined): string => {
   if (!d) return "—";
@@ -48,14 +55,14 @@ export const fmtDateShort = (d: string | Date | null | undefined): string => {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: TZ });
 };
 
 export const fmtTime = (d: string | Date | null | undefined): string => {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TZ });
 };
 
 export const fmtDateTime = (d: string | Date | null | undefined): string => {
@@ -86,10 +93,22 @@ export const relTime = (d: string | Date | null | undefined): string => {
   return rtf.format(sign * Math.round(months / 12), "year");
 };
 
-/** YYYY-MM-DD in local time — safe for <input type="date"> round-trips. */
-export const isoDate = (d: Date = new Date()): string => {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** YYYY-MM-DD for the market's calendar day — safe for <input type="date">. */
+export const isoDate = (d: Date = new Date()): string =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d);
+
+/** YYYY-MM-DDTHH:mm in Central — what <input type="datetime-local"> expects. */
+export const isoDateTime = (d: Date = new Date()): string => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  // en-CA renders midnight as 24; normalise it.
+  const hh = get("hour") === "24" ? "00" : get("hour");
+  return `${get("year")}-${get("month")}-${get("day")}T${hh}:${get("minute")}`;
 };
 
 /* ------------------------------------------------------------------ misc -- */

@@ -8,9 +8,9 @@ import {
   DataTable, Badge, Card, EmptyState, SkeletonCard, PageHeader,
   useDialog, useToast, type Column, type BadgeTone,
 } from "@/components/ui";
-import { fmtDate, fmtPhone, plural } from "@/lib/format";
+import { fmtDate, fmtPhone, plural, relTime } from "@/lib/format";
 
-type App = { id: string; status: string; stage?: string; viewingAt?: string; adminNotes?: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; boothRequest: string; phoneType?: string; notes: string; createdAt: string };
+type App = { id: string; status: string; stage?: string; viewingAt?: string; adminNotes?: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; boothRequest: string; phoneType?: string; notes: string; createdAt: string; decidedAt?: string | null };
 
 /* Stage is the pipeline position of a still-pending application. */
 const STAGE_BADGE: Record<string, { label: string; tone: BadgeTone }> = {
@@ -24,6 +24,70 @@ const STAGE_BADGE: Record<string, { label: string; tone: BadgeTone }> = {
 
 const stageBadge = (stage?: string) =>
   STAGE_BADGE[stage || "NEW"] ?? { label: stage || "New", tone: "neutral" as BadgeTone };
+
+/* ------------------------------------------------- agreement delivery -- */
+
+type DeliveryState = "DRAFT" | "SENT" | "OPENED" | "SIGNED" | "EXECUTED";
+
+const DAY_MS = 86_400_000;
+/** Matches the threshold /api/admin/contracts uses for its `stale` flag. */
+const STALE_DAYS = 7;
+
+/**
+ * At-a-glance delivery status for an agreement. Always a word plus a dot or an
+ * icon — never colour alone. `stale` gets its own second badge so "sent a while
+ * ago and still nothing back" can't hide inside the calm blue "Sent" badge.
+ */
+function DeliveryBadges({ state, sentAt }: { state: DeliveryState; sentAt?: string | null }) {
+  const days = sentAt ? Math.floor((Date.now() - new Date(sentAt).getTime()) / DAY_MS) : null;
+  const stale = (state === "SENT" || state === "OPENED") && days !== null && days >= STALE_DAYS;
+  return (
+    <>
+      {state === "DRAFT" ? <Badge tone="neutral" dot>Not sent</Badge> : null}
+      {state === "SENT" ? (
+        <Badge tone="info" icon="mail">{sentAt ? `Sent ${relTime(sentAt)}` : "Sent"}</Badge>
+      ) : null}
+      {state === "OPENED" ? <Badge tone="warn" icon="eye">Opened, not signed</Badge> : null}
+      {state === "SIGNED" ? <Badge tone="info" icon="check">Awaiting your signature</Badge> : null}
+      {state === "EXECUTED" ? <Badge tone="success" icon="checkCircle">Fully signed</Badge> : null}
+      {stale && days !== null ? (
+        <Badge tone="danger" icon="warning">Sitting {plural(days, "day")}</Badge>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * What this page can HONESTLY say about an application's agreement.
+ *
+ * /api/admin/applications returns VendorApplication rows only — no Contract —
+ * so there is no viewedAt / vendorSignedAt / marketSignedAt here and OPENED,
+ * SIGNED and EXECUTED can never be derived on this screen; the admin agreements
+ * screen reads /api/admin/contracts, which now serves a ready-made `delivery`
+ * object with all five. DeliveryBadges still renders all five so both screens
+ * speak with one vocabulary.
+ *
+ * SENT is trustworthy where it does appear: the same request that sets stage
+ * CONTRACT creates the contract, emails the signing link and stamps decidedAt,
+ * so decidedAt is the real send time for that path (not a proxy). An agreement
+ * raised from the agreements screen never touches the application's stage, so
+ * it shows nothing here.
+ *
+ * In practice CONTRACT and VENDOR are rare on this screen: /api/admin/appl-
+ * ications lists only rows with `vendorId: ""`, and both of those stages stamp
+ * a vendorId, which drops the row from this list. The branches stay so the
+ * badges are right if that row is ever shown (the old inline "Agreement sent"
+ * badge in the decided table had the same blind spot). Returns null where a
+ * badge would be noise: NEW is too early to ask about an agreement, DONE means
+ * declined.
+ */
+function agreementFor(a: App): { state: DeliveryState; sentAt: string | null } | null {
+  if (a.stage === "CONTRACT") return { state: "SENT", sentAt: a.decidedAt ?? null };
+  if (a.stage === "CALLED" || a.stage === "VIEWING" || a.stage === "VENDOR") {
+    return { state: "DRAFT", sentAt: null };
+  }
+  return null;
+}
 
 const statusTone = (s: string): BadgeTone =>
   s === "ACCEPTED" ? "success" : s === "DECLINED" ? "danger" : "neutral";
@@ -184,12 +248,15 @@ export default function ApplicationsPage() {
       header: "Status",
       align: "right",
       sortBy: (a) => a.status,
-      cell: (a) => (
-        <span className="row g-2 end wrap">
-          <Badge tone={statusTone(a.status)} dot>{statusLabel(a.status)}</Badge>
-          {a.stage === "CONTRACT" ? <Badge tone="info" dot>Agreement sent</Badge> : null}
-        </span>
-      ),
+      cell: (a) => {
+        const del = agreementFor(a);
+        return (
+          <span className="row g-2 end wrap">
+            <Badge tone={statusTone(a.status)} dot>{statusLabel(a.status)}</Badge>
+            {del ? <DeliveryBadges state={del.state} sentAt={del.sentAt} /> : null}
+          </span>
+        );
+      },
     },
   ];
 
@@ -221,6 +288,7 @@ export default function ApplicationsPage() {
         <div className="stack g-4">
           {pending.map((a) => {
             const sb = stageBadge(a.stage);
+            const del = agreementFor(a);
             return (
               <Card
                 key={a.id}
@@ -233,7 +301,9 @@ export default function ApplicationsPage() {
                         <Icon name="calendar" size={12} />{a.viewingAt}
                       </span>
                     ) : null}
-                    <Badge tone={sb.tone} dot>{sb.label}</Badge>
+                    {/* Agreement delivery first — it's the thing that stalls. */}
+                    {del ? <DeliveryBadges state={del.state} sentAt={del.sentAt} /> : null}
+                    {a.stage === "CONTRACT" ? null : <Badge tone={sb.tone} dot>{sb.label}</Badge>}
                   </>
                 }
               >

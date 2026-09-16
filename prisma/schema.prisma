@@ -364,3 +364,31 @@ model VendorChatMsg {
   body      String
   createdAt DateTime @default(now())
 }
+
+/// In-app calendar. Replaces keeping viewings in a separate app.
+/// `kind` is a loose label rather than an enum so new event types don't need a
+/// migration. Links to an application or vendor are plain id strings (not
+/// relations) so deleting one never cascades into wiping calendar history.
+model CalendarEvent {
+  id            String    @id @default(cuid())
+  title         String
+  kind          String    @default("VIEWING")
+  startAt       DateTime
+  endAt         DateTime?
+  allDay        Boolean   @default(false)
+  location      String    @default("")
+  notes         String    @default("")
+  applicationId String    @default("")
+  vendorId      String    @default("")
+  contactName   String    @default("")
+  contactPhone  String    @default("")
+  contactEmail  String    @default("")
+  status        String    @default("SCHEDULED")
+  remindedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([startAt])
+  @@index([applicationId])
+  @@index([vendorId])
+}

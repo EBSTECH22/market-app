@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { usePulse } from "@/lib/usePulse";
 import {
-  Icon, Button, IconButton, LinkButton, Field, Input, Select, MoneyInput, SearchInput,
+  Icon, Button, IconButton, LinkButton, Field, Input, Select, Textarea, MoneyInput, SearchInput,
   Checkbox, ToggleTile, Segmented, Modal, Panel, useDialog, useToast,
   DataTable, DescList, Badge, Card, Stat, EmptyState, Note, Skeleton,
-  SkeletonStats, PageHeader, type Column, type IconName,
+  SkeletonStats, PageHeader, type Column, type IconName, type BadgeTone,
 } from "@/components/ui";
-import { money, fmtDate, fmtDateTime, fmtTime, relTime, isoDate, fmtPhone, plural, dollarsToCents } from "@/lib/format";
+import { money, fmtDate, fmtDateTime, fmtTime, relTime, isoDate, isoDateTime, fmtPhone, plural, dollarsToCents } from "@/lib/format";
+import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
@@ -41,7 +42,7 @@ const DENOMS: [string, string, number][] = [
 
 /* Tabs live in the URL hash so refresh, back/forward and shared links all work. */
 const ADMIN_TABS = [
-  "register", "time", "reports", "bank", "floor", "vendors", "onboarding",
+  "register", "time", "calendar", "reports", "bank", "floor", "vendors", "onboarding",
   "customers", "contracts", "tents", "team", "links", "settings",
 ] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
@@ -56,6 +57,7 @@ const NAV: { group: string; items: { id: AdminTab; label: string; icon: IconName
     items: [
       { id: "register", label: "Register", icon: "register" },
       { id: "time", label: "Time clock", icon: "clock" },
+      { id: "calendar", label: "Calendar", icon: "calendar" },
       { id: "floor", label: "Floor stock", icon: "grid" },
     ],
   },
@@ -89,6 +91,7 @@ const NAV: { group: string; items: { id: AdminTab; label: string; icon: IconName
 const TAB_META: Record<AdminTab, { label: string; icon: IconName; sub: string }> = {
   register: { label: "Register", icon: "register", sub: "Ring up sales, manage the drawer, handle refunds" },
   time: { label: "Time clock", icon: "clock", sub: "Your shifts and hours" },
+  calendar: { label: "Calendar", icon: "calendar", sub: "Viewings, market days, and anything else you need to remember" },
   floor: { label: "Floor stock", icon: "grid", sub: "Everything on the market floor right now" },
   reports: { label: "Reports", icon: "chart", sub: "Sales by period, vendor, and item" },
   bank: { label: "Bank & payouts", icon: "bank", sub: "Stripe balance, payouts, and month-end settlement" },
@@ -101,6 +104,156 @@ const TAB_META: Record<AdminTab, { label: string; icon: IconName; sub: string }>
   links: { label: "Links & QR", icon: "link", sub: "Every public link and code for the market" },
   settings: { label: "Settings", icon: "settings", sub: "Tax, rent, card adjustment, staff PINs, and the banner" },
 };
+
+/* ------------------------------------------------------------ calendar -----
+   The shapes below mirror /api/admin/calendar exactly. Kinds and statuses are
+   loose labels on the server, so the lookup tables here are the single place
+   the UI decides what each one looks like and what it's called in English. */
+
+type EventKind = "VIEWING" | "MARKET_DAY" | "MOVE_IN" | "MEETING" | "REMINDER" | "OTHER";
+type EventStatus = "SCHEDULED" | "CONFIRMED" | "DONE" | "CANCELED" | "NO_SHOW";
+
+type CalEvent = {
+  id: string;
+  title: string;
+  kind: EventKind;
+  startAt: string;
+  endAt: string | null;
+  allDay: boolean;
+  location: string;
+  notes: string;
+  applicationId: string;
+  vendorId: string;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string;
+  status: EventStatus;
+  remindedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/* Every kind carries an icon as well as a colour — a chip on the month grid has
+   to be readable to someone who can't tell the green one from the amber one. */
+const KIND_META: Record<EventKind, {
+  label: string; icon: IconName; tone: BadgeTone; bg: string; fg: string; dot: string;
+}> = {
+  VIEWING:    { label: "Viewing",        icon: "eye",      tone: "info",    bg: "var(--info-soft)",   fg: "var(--info-text)",      dot: "var(--info)" },
+  MARKET_DAY: { label: "Market day",     icon: "store",    tone: "success", bg: "var(--accent-soft)", fg: "var(--accent-text)",    dot: "var(--accent)" },
+  MOVE_IN:    { label: "Move-in",        icon: "box",      tone: "warn",    bg: "var(--warn-soft)",   fg: "var(--warn-text)",      dot: "var(--warn)" },
+  MEETING:    { label: "Meeting",        icon: "users",    tone: "neutral", bg: "var(--bg-sunken)",   fg: "var(--text-secondary)", dot: "var(--text-secondary)" },
+  REMINDER:   { label: "Reminder",       icon: "bell",     tone: "danger",  bg: "var(--danger-soft)", fg: "var(--danger-text)",    dot: "var(--danger)" },
+  OTHER:      { label: "Something else", icon: "calendar", tone: "neutral", bg: "var(--bg-inset)",    fg: "var(--text-muted)",     dot: "var(--text-muted)" },
+};
+const KIND_ORDER: EventKind[] = ["VIEWING", "MARKET_DAY", "MOVE_IN", "MEETING", "REMINDER", "OTHER"];
+
+const STATUS_META: Record<EventStatus, { label: string; tone: BadgeTone; icon: IconName }> = {
+  SCHEDULED: { label: "Scheduled", tone: "neutral", icon: "clock" },
+  CONFIRMED: { label: "Confirmed", tone: "success", icon: "check" },
+  DONE:      { label: "Done",      tone: "info",    icon: "checkCircle" },
+  CANCELED:  { label: "Canceled",  tone: "neutral", icon: "close" },
+  NO_SHOW:   { label: "No-show",   tone: "danger",  icon: "alert" },
+};
+/* The four an operator actually reaches for; SCHEDULED is the starting state. */
+const STATUS_CHOICES: EventStatus[] = ["CONFIRMED", "DONE", "CANCELED", "NO_SHOW"];
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** "YYYY-MM-DDTHH:mm" in MARKET time — what <input type="datetime-local"> emits
+    and what the calendar API parses back. Both halves have to come from the
+    same clock: pairing a Central date with the browser's local hours would
+    shift an event whenever the viewer isn't in Central. Never round-trip
+    through toISOString() either — that shifts by the whole UTC offset. */
+const localInput = (d: Date): string => isoDateTime(d);
+
+/** The Y-M-D of one month-grid square. These are synthetic dates built from
+    local parts to represent a calendar cell, NOT points in time, so they are
+    read back with the same local parts rather than converted to Central. */
+const cellKey = (d: Date): string => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/** The 42 cells of a Sunday-first month grid, leading and trailing days included. */
+const monthGrid = (anchor: Date): Date[] => {
+  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const start = new Date(first);
+  start.setDate(1 - first.getDay());
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return d;
+  });
+};
+
+const longDay = (d: Date) =>
+  d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+/** When an event runs, written the way a person would say it. */
+const eventWhen = (e: CalEvent): string => {
+  const start = new Date(e.startAt);
+  if (e.allDay) return `${fmtDate(start)} · all day`;
+  const end = e.endAt ? new Date(e.endAt) : null;
+  const tail = end && end.toDateString() === start.toDateString()
+    ? `–${fmtTime(end)}`
+    : end ? ` – ${fmtDateTime(end)}` : "";
+  return `${fmtDateTime(start)}${tail}`;
+};
+
+/* --------------------------------------------------------- contact links ---
+   A phone number on a screen someone is holding should be one tap from a call
+   or a text. One component so the vendor panel, onboarding, the calendar, tent
+   bookings and complaints all behave identically. */
+function PhoneActions({ phone, name }: { phone: string; name?: string }) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return <span className="t-muted">No phone on file</span>;
+  const pretty = fmtPhone(phone);
+  const who = name ? ` ${name}` : "";
+  return (
+    <span className="row wrap g-2" style={{ minWidth: 0 }}>
+      <span className="num truncate">{pretty}</span>
+      <LinkButton
+        href={`tel:${digits}`}
+        size="sm"
+        variant="secondary"
+        icon="phone"
+        aria-label={`Call${who} at ${pretty}`}
+      >
+        Call
+      </LinkButton>
+      <LinkButton
+        href={`sms:${digits}`}
+        size="sm"
+        variant="secondary"
+        icon="message"
+        aria-label={`Text${who} at ${pretty}`}
+      >
+        Text
+      </LinkButton>
+    </span>
+  );
+}
+
+/** The same idea for an email address shown beside a phone number. */
+function EmailAction({ email, name }: { email: string; name?: string }) {
+  const addr = String(email || "").trim();
+  if (!addr) return <span className="t-muted">No email on file</span>;
+  const who = name ? ` ${name}` : "";
+  return (
+    <span className="row wrap g-2" style={{ minWidth: 0 }}>
+      <span className="truncate">{addr}</span>
+      <LinkButton
+        href={`mailto:${addr}`}
+        size="sm"
+        variant="secondary"
+        icon="mail"
+        aria-label={`Email${who} at ${addr}`}
+      >
+        Email
+      </LinkButton>
+    </span>
+  );
+}
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
@@ -533,7 +686,239 @@ export default function AdminPage() {
   }, []);
   useEffect(() => { if (authed && role === "admin" && tab === "onboarding") loadOnboarding(); }, [authed, role, tab, loadOnboarding]);
 
-  type TentD = { id: string; date: string; capacity: number; open: boolean; bookings: { id: string; name: string; businessName: string; email: string; phone: string; status: string }[] };
+  /* ---------- calendar ------------------------------------------------------
+     Viewings, market days and anything else she needs to remember. The month
+     grid is built by hand from plain Dates — no date library, no new package. */
+  type CalForm = {
+    id: string | null;
+    title: string;
+    kind: EventKind;
+    startAt: string;   // always "YYYY-MM-DDTHH:mm", sent to the API verbatim
+    endAt: string;
+    allDay: boolean;
+    location: string;
+    notes: string;
+    contactName: string;
+    contactPhone: string;
+    contactEmail: string;
+    notify: boolean;
+  };
+  type LegacyPreview = {
+    dryRun: boolean;
+    importedCount: number;
+    imported: { businessName: string; when: string }[];
+    flagged: { applicationId: string; businessName: string; raw: string; reason: string }[];
+  };
+
+  const [calEvents, setCalEvents] = useState<CalEvent[]>([]);
+  const [calPending, setCalPending] = useState(0);
+  const [calLoading, setCalLoading] = useState(false);
+  const [calErr, setCalErr] = useState("");
+  const [calMonth, setCalMonth] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
+  const [calView, setCalView] = useState<"month" | "list">("month");
+  const [calWhen, setCalWhen] = useState<"upcoming" | "past">("upcoming");
+  const [calOpen, setCalOpen] = useState<string | null>(null);      // event slide-over
+  const [calDayOpen, setCalDayOpen] = useState<string | null>(null); // one day's list
+  const [calForm, setCalForm] = useState<CalForm | null>(null);
+  const [calFormErr, setCalFormErr] = useState("");
+  const [calImport, setCalImport] = useState<LegacyPreview | null>(null);
+  const [calImporting, setCalImporting] = useState(false);
+
+  const loadCalendar = useCallback(async () => {
+    setCalLoading(true); setCalErr("");
+    try {
+      /* A month either side of the one on screen, so the grid's leading and
+         trailing days are filled in and the list has something to show. */
+      const from = isoDate(new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1));
+      const to = isoDate(new Date(calMonth.getFullYear(), calMonth.getMonth() + 2, 0));
+      const r = await fetch(`/api/admin/calendar?from=${from}&to=${to}`);
+      if (!r.ok) { setCalErr("Couldn't load the calendar."); return; }
+      const d = await r.json();
+      setCalEvents(d.events || []);
+      setCalPending(Number(d.pendingImport) || 0);
+    } catch {
+      setCalErr("Couldn't reach the server. Check the connection and try again.");
+    } finally {
+      setCalLoading(false);
+    }
+  }, [calMonth]);
+  useEffect(() => { if (authed && role === "admin" && tab === "calendar") loadCalendar(); }, [authed, role, tab, loadCalendar]);
+
+  const openCalCreate = (day?: Date) => {
+    const base = day ? new Date(day) : new Date();
+    if (day) {
+      base.setHours(10, 0, 0, 0);          // a sensible hour for a day she clicked
+    } else {
+      base.setMinutes(0, 0, 0);
+      base.setHours(base.getHours() + 1);  // the top of the next hour
+    }
+    setCalFormErr("");
+    setCalDayOpen(null);
+    setCalForm({
+      id: null, title: "", kind: "VIEWING", startAt: localInput(base), endAt: "",
+      allDay: false, location: "", notes: "",
+      contactName: "", contactPhone: "", contactEmail: "", notify: false,
+    });
+  };
+
+  const openCalEdit = (e: CalEvent) => {
+    setCalFormErr("");
+    setCalForm({
+      id: e.id,
+      title: e.title,
+      kind: e.kind,
+      startAt: localInput(new Date(e.startAt)),
+      endAt: e.endAt ? localInput(new Date(e.endAt)) : "",
+      allDay: !!e.allDay,
+      location: e.location || "",
+      notes: e.notes || "",
+      contactName: e.contactName || "",
+      contactPhone: e.contactPhone || "",
+      contactEmail: e.contactEmail || "",
+      notify: false,
+    });
+  };
+
+  const saveCalEvent = async () => {
+    const f = calForm;
+    if (!f) return;
+    if (!f.title.trim()) { setCalFormErr("Give the event a title."); return; }
+    if (!f.startAt) { setCalFormErr("Pick a date and time."); return; }
+    /* Both strings are "YYYY-MM-DDTHH:mm", so a plain comparison is a real
+       chronological one — and it catches the mistake before the round trip. */
+    if (f.endAt && f.endAt < f.startAt) { setCalFormErr("The end time is before the start time. Move one of them."); return; }
+    setCalFormErr("");
+    setBusy(true);
+    const payload: Record<string, unknown> = {
+      title: f.title.trim(),
+      kind: f.kind,
+      startAt: f.startAt,                 // sent raw — toISOString() would shift it
+      endAt: f.endAt,
+      allDay: f.allDay,
+      location: f.location.trim(),
+      notes: f.notes.trim(),
+      contactName: f.contactName.trim(),
+      contactPhone: f.contactPhone.trim(),
+      contactEmail: f.contactEmail.trim(),
+    };
+    if (f.id) payload.id = f.id;
+    else if (f.notify) payload.notify = true;
+
+    const { ok, data } = await safeFetch("/api/admin/calendar", {
+      method: f.id ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setBusy(false);
+    if (!ok) { setCalFormErr(String(data.error || "Couldn't save the event.")); return; }
+    setCalForm(null);
+    toast.success(
+      f.id ? "Event updated" : "Event added",
+      f.id ? undefined
+        : f.notify
+          ? (data.emailed
+              ? "They've been emailed the details."
+              : "Saved, but no email went out — only a viewing linked to an application can be emailed from here.")
+          : undefined
+    );
+    await loadCalendar();
+  };
+
+  const setCalEventStatus = async (e: CalEvent, status: EventStatus) => {
+    setBusy(true);
+    const { ok, data } = await safeFetch("/api/admin/calendar", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: e.id, status }),
+    });
+    setBusy(false);
+    if (!ok) { toast.error("Couldn't change the status", String(data.error || "")); return; }
+    toast.success(`Marked ${STATUS_META[status].label.toLowerCase()}`, e.title);
+    await loadCalendar();
+  };
+
+  const deleteCalEvent = async (e: CalEvent) => {
+    const yes = await dialog.confirm({
+      title: `Delete "${e.title}"?`,
+      body: e.applicationId
+        ? "It comes off the calendar and the viewing line on their application is cleared. This can't be undone."
+        : "It comes off the calendar for good. This can't be undone.",
+      confirmLabel: "Delete event",
+      cancelLabel: "Keep it",
+      tone: "danger",
+    });
+    if (!yes) return;
+    setBusy(true);
+    const { ok, data } = await safeFetch(`/api/admin/calendar?id=${encodeURIComponent(e.id)}`, { method: "DELETE" });
+    setBusy(false);
+    if (!ok) { toast.error("Couldn't delete it", String(data.error || "")); return; }
+    setCalOpen(null);
+    toast.success("Event deleted", e.title);
+    await loadCalendar();
+  };
+
+  /* Legacy viewings were typed as free text on the application form. The dry
+     run is shown in full before a single row is written. */
+  const previewLegacyImport = async () => {
+    setCalImporting(true);
+    const { ok, data } = await safeFetch("/api/admin/calendar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "import_legacy", dryRun: true }),
+    });
+    setCalImporting(false);
+    if (!ok) { toast.error("Couldn't check the old viewings", String(data.error || "")); return; }
+    setCalImport({
+      dryRun: true,
+      importedCount: Number(data.importedCount) || 0,
+      imported: (data.imported as LegacyPreview["imported"]) || [],
+      flagged: (data.flagged as LegacyPreview["flagged"]) || [],
+    });
+  };
+
+  const runLegacyImport = async () => {
+    setCalImporting(true);
+    const { ok, data } = await safeFetch("/api/admin/calendar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "import_legacy" }),
+    });
+    setCalImporting(false);
+    if (!ok) { toast.error("The import didn't run", String(data.error || "")); return; }
+    const flagged = (data.flagged as LegacyPreview["flagged"]) || [];
+    const count = Number(data.importedCount) || 0;
+    setCalImport(null);
+    toast.success(
+      count === 0 ? "Nothing left to import" : `Imported ${plural(count, "viewing")}`,
+      flagged.length ? `${plural(flagged.length, "viewing")} couldn't be read.` : undefined
+    );
+    if (flagged.length) {
+      await dialog.alert({
+        title: `${plural(flagged.length, "viewing")} needs setting by hand`,
+        tone: "warn",
+        body: (
+          <div className="stack g-3">
+            <p className="t-sm">
+              Nothing was lost — these are still on the applications. The dates just
+              couldn&rsquo;t be read, so add them to the calendar yourself.
+            </p>
+            <ul className="stack g-3" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {flagged.map((f) => (
+                <li key={f.applicationId} className="stack g-1">
+                  <b>{f.businessName}</b>
+                  <span className="t-sm">They wrote: &ldquo;{f.raw}&rdquo;</span>
+                  <span className="t-xs t-muted">{f.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ),
+      });
+    }
+    await loadCalendar();
+  };
+
+  type TentD ={ id: string; date: string; capacity: number; open: boolean; bookings: { id: string; name: string; businessName: string; email: string; phone: string; status: string }[] };
   const [tentDates, setTentDates] = useState<TentD[]>([]);
   const [tentFrom, setTentFrom] = useState("");
   const [tentTo, setTentTo] = useState("");
@@ -792,7 +1177,7 @@ export default function AdminPage() {
         <img src="/logo.png" alt="Community Harvest" style="width:100%;max-width:260px;display:block;margin:0 auto 2px" />
         <div>Noble, Oklahoma</div>
         <div style="margin:6px 0;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:4px 0">
-          RECEIPT #${sale.number}<br>${new Date(sale.createdAt).toLocaleDateString("en-US")} ${new Date(sale.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}${sale.employee ? "<br>CLERK: " + sale.employee : ""}
+          RECEIPT #${sale.number}<br>${new Date(sale.createdAt).toLocaleDateString("en-US", { timeZone: TZ })} ${new Date(sale.createdAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TZ })}${sale.employee ? "<br>CLERK: " + sale.employee : ""}
         </div>
         <div style="text-align:left">
           ${sale.lines.map((l: { quantity: number; name: string; priceCents: number; basePriceCents?: number }) => `<div style="display:flex;justify-content:space-between"><span>${l.quantity}x ${l.name.slice(0, 26)}</span><span>${money((l.basePriceCents || l.priceCents) * l.quantity)}</span></div>`).join("")}
@@ -1587,10 +1972,45 @@ export default function AdminPage() {
   const onbUnsigned = onboarding.filter((o) => o.contract && !o.contract.vendorSignedAt).length;
   const onbStuck = onboarding.filter((o) => o.daysWaiting > 14).length;
 
+  /* Calendar derivations. One pass buckets events by local day so the month
+     grid and the day sheet read from the same map instead of re-filtering. */
+  const calByDay = new Map<string, CalEvent[]>();
+  for (const e of calEvents) {
+    const k = isoDate(new Date(e.startAt));
+    const bucket = calByDay.get(k);
+    if (bucket) bucket.push(e); else calByDay.set(k, [e]);
+  }
+  for (const bucket of calByDay.values()) {
+    bucket.sort((a, b) =>
+      a.allDay === b.allDay
+        ? new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+        : a.allDay ? -1 : 1
+    );
+  }
+  const calGrid = monthGrid(calMonth);
+  const calTodayKey = isoDate(new Date());
+  const calMonthIndex = calMonth.getMonth();
+  /* Today's events count as upcoming until the market's day is over — not the
+     viewer's, so checking from another timezone doesn't retire today early. */
+  const calCutoff = centralDayStart().getTime();
+  const calListRows = calEvents
+    .filter((e) => (calWhen === "upcoming"
+      ? new Date(e.startAt).getTime() >= calCutoff
+      : new Date(e.startAt).getTime() < calCutoff))
+    .sort((a, b) => {
+      const d = new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+      return calWhen === "upcoming" ? d : -d;
+    });
+  const calSelected = calEvents.find((e) => e.id === calOpen) ?? null;
+  const calMonthPrefix = cellKey(calMonth).slice(0, 7); // "YYYY-MM"
+  const calMonthCount = calEvents.filter(
+    (e) => isoDate(new Date(e.startAt)).startsWith(calMonthPrefix)
+  ).length;
+
   /* Phones get the five most-used destinations plus a "More" sheet, rather
      than a twelve-button wrap that pushed content below the fold. */
   const primaryMobile: AdminTab[] = role === "admin"
-    ? ["register", "vendors", "reports", "contracts"]
+    ? ["register", "calendar", "vendors", "reports"]
     : ["register", "time", "floor"];
   const moreMobile = visibleTabs.filter((t) => !primaryMobile.includes(t));
 
@@ -3768,8 +4188,6 @@ export default function AdminPage() {
                     items={[
                       { label: "Code", value: <span className="mono">{v.code}</span> },
                       { label: "Contact", value: v.contactName || "—" },
-                      { label: "Email", value: v.email },
-                      { label: "Phone", value: v.phone ? fmtPhone(v.phone) : "—" },
                       { label: "Commission", value: `${v.commissionPercent}%` },
                       {
                         label: "Balance",
@@ -3777,6 +4195,14 @@ export default function AdminPage() {
                       },
                     ]}
                   />
+
+                  {/* Left-aligned in its own block rather than squeezed into the
+                      right-hand column of the list — these are buttons, not values. */}
+                  <div className="stack g-2">
+                    <p className="t-label">Get hold of them</p>
+                    <EmailAction email={v.email} name={v.contactName || v.businessName} />
+                    <PhoneActions phone={v.phone} name={v.contactName || v.businessName} />
+                  </div>
 
                   <div className="stack g-2">
                     <p className="t-label">Ledger</p>
@@ -4080,8 +4506,6 @@ export default function AdminPage() {
                   <DescList
                     items={[
                       { label: "Contact", value: a.contactName || "—" },
-                      { label: "Email", value: a.email },
-                      { label: "Phone", value: `${a.phone ? fmtPhone(a.phone) : "—"}${a.phoneType ? ` (${a.phoneType.toLowerCase()})` : ""}` },
                       { label: "Category", value: a.category || "—" },
                       { label: "Booth request", value: a.boothRequest || "—" },
                       { label: "Availability", value: a.availability || "—" },
@@ -4089,6 +4513,15 @@ export default function AdminPage() {
                       { label: "Viewing", value: a.viewingAt || "Not booked" },
                     ]}
                   />
+
+                  <div className="stack g-2">
+                    <p className="t-label">Get hold of them</p>
+                    <EmailAction email={a.email} name={a.contactName || a.businessName} />
+                    <PhoneActions phone={a.phone} name={a.contactName || a.businessName} />
+                    {a.phone && a.phoneType ? (
+                      <span className="t-xs t-muted">That&rsquo;s a {a.phoneType.toLowerCase()} number.</span>
+                    ) : null}
+                  </div>
 
                   <div className="stack g-3">
                     <p className="t-label">What they sell</p>
@@ -4154,9 +4587,15 @@ export default function AdminPage() {
                         {c.status.charAt(0) + c.status.slice(1).toLowerCase()}
                       </Badge>
                     </div>
-                    <p className="t-xs t-muted">
-                      From {c.customerName} · {c.email}{c.phone ? ` · ${fmtPhone(c.phone)}` : ""}
-                    </p>
+                    <div className="stack g-2">
+                      <p className="t-xs t-muted">From {c.customerName}</p>
+                      {/* The customer who complained is the one person you most
+                          want to reach, so reaching them is one tap. */}
+                      <div className="row wrap g-3">
+                        <EmailAction email={c.email} name={c.customerName} />
+                        <PhoneActions phone={c.phone} name={c.customerName} />
+                      </div>
+                    </div>
                     {c.messages.map((m, i) => (
                       <p key={i} className="t-sm" style={{ paddingLeft: "var(--sp-3)", borderLeft: "2px solid var(--border)" }}>
                         <b>{m.sender === "CUSTOMER" ? c.customerName : "Vendor"}:</b> {m.body}
@@ -4379,16 +4818,9 @@ export default function AdminPage() {
                     <Badge tone="neutral" dot>Not live to shoppers</Badge>
                   </div>
 
-                  <div className="stack g-1">
-                    <a className="row g-2 t-sm" href={`mailto:${o.email}`} style={{ minHeight: 32 }}>
-                      <Icon name="mail" size={14} />
-                      <span className="truncate">{o.email}</span>
-                    </a>
-                    {o.phone ? (
-                      <a className="row g-2 t-sm" href={`tel:${o.phone}`} style={{ minHeight: 32 }}>
-                        <Icon name="phone" size={14} />{fmtPhone(o.phone)}
-                      </a>
-                    ) : null}
+                  <div className="stack g-2">
+                    <EmailAction email={o.email} name={o.contactName || o.businessName} />
+                    <PhoneActions phone={o.phone} name={o.contactName || o.businessName} />
                     {o.contactName ? (
                       <span className="row g-2 t-sm t-muted" style={{ minHeight: 32 }}>
                         <Icon name="user" size={14} />{o.contactName}
@@ -4497,6 +4929,756 @@ export default function AdminPage() {
               </Panel>
             );
           })()}
+        </>
+      )}
+
+      {tab === "calendar" && role === "admin" && (
+        <>
+          {/* The month grid is hand-built, so its geometry lives here rather
+              than in globals.css — nothing else in the app renders a calendar.
+              Under 700px the chips collapse to dots: seven readable columns
+              won't fit on a phone, but seven tappable ones will. */}
+          <style>{`
+            .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+            .cal-dow {
+              text-align: center; padding: var(--sp-1) 0;
+              font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted);
+            }
+            .cal-cell {
+              position: relative; min-height: 122px; overflow: hidden;
+              border: 1px solid var(--border-subtle); border-radius: var(--r-md);
+              background: var(--surface);
+            }
+            .cal-cell[data-out="true"] { background: var(--bg-sunken); }
+            .cal-cell[data-out="true"] .cal-daynum { color: var(--text-muted); opacity: 0.6; }
+            .cal-cell[data-today="true"] {
+              background: var(--accent-soft);
+              border-color: transparent;
+              box-shadow: inset 0 0 0 2px var(--accent);
+            }
+            .cal-cell[data-today="true"] .cal-daynum { color: var(--accent-text); font-weight: 800; }
+            .cal-add {
+              position: absolute; inset: 0; width: 100%; height: 100%;
+              border: 0; background: none; cursor: pointer; border-radius: inherit;
+            }
+            .cal-add:hover { background: var(--surface-hover); }
+            .cal-cell[data-today="true"] .cal-add:hover { background: transparent; }
+            .cal-add:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+            .cal-body {
+              position: relative; pointer-events: none;
+              display: flex; flex-direction: column; gap: 3px;
+              padding: 4px; height: 100%;
+            }
+            .cal-daynum {
+              padding: 0 2px; font-size: var(--fs-xs); font-weight: 600;
+              color: var(--text-secondary); font-variant-numeric: tabular-nums;
+            }
+            .cal-chips { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+            .cal-chip, .cal-more {
+              pointer-events: auto; cursor: pointer; font-family: inherit;
+              display: flex; align-items: center; gap: 4px;
+              width: 100%; min-width: 0; min-height: 21px;
+              padding: 2px 4px; border: 0; border-radius: var(--r-sm);
+              font-size: var(--fs-xs); line-height: 1.25; text-align: left;
+            }
+            .cal-chip:focus-visible, .cal-more:focus-visible,
+            .cal-dots:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+            .cal-chip[data-off="true"] { text-decoration: line-through; opacity: 0.55; }
+            .cal-chip-time { flex: 0 0 auto; font-variant-numeric: tabular-nums; opacity: 0.85; }
+            .cal-more {
+              background: none; color: var(--text-secondary); font-weight: 600;
+            }
+            .cal-more:hover { background: var(--surface-active); }
+            .cal-dots { display: none; }
+            @media (max-width: 700px) {
+              .cal-grid { gap: 3px; }
+              .cal-cell { min-height: 60px; }
+              .cal-chips { display: none; }
+              .cal-dots {
+                pointer-events: auto; cursor: pointer;
+                display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+                width: 100%; min-height: 28px; padding: 2px;
+                border: 0; background: none; border-radius: var(--r-sm);
+              }
+              .cal-dot { display: block; flex: 0 0 auto; width: 6px; height: 6px; border-radius: var(--r-full); }
+              .cal-dotnum { font-size: var(--fs-xs); font-weight: 700; color: var(--text-secondary); }
+            }
+          `}</style>
+
+          {/* Free-text viewings from before this screen existed. Offered once,
+              at the top, rather than hidden behind a settings page. */}
+          {calPending > 0 ? (
+            <div className="mb-4">
+              <Note
+                tone="warn"
+                title="Some viewings aren't on this calendar yet"
+                action={
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    icon="download"
+                    loading={calImporting}
+                    onClick={previewLegacyImport}
+                  >
+                    Import them
+                  </Button>
+                }
+              >
+                {plural(calPending, "viewing")} {calPending === 1 ? "was" : "were"} typed
+                as free text before this calendar existed.
+              </Note>
+            </div>
+          ) : null}
+
+          {/* When there's nothing on screen the error lives in the empty state,
+              so this only covers a failed refresh over events already shown. */}
+          {calErr && calEvents.length > 0 ? (
+            <div className="mb-4">
+              <Note
+                tone="error"
+                title="This calendar may be out of date"
+                action={<Button size="sm" variant="secondary" icon="refresh" onClick={loadCalendar}>Try again</Button>}
+              >
+                {calErr}
+              </Note>
+            </div>
+          ) : null}
+
+          <Card
+            title={
+              calView === "month"
+                ? calMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })
+                : calWhen === "upcoming" ? "Coming up" : "Already happened"
+            }
+            subtitle={
+              calView === "month"
+                ? `${plural(calMonthCount, "event")} this month`
+                : `Loaded around ${calMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })} — use the arrows for other months.`
+            }
+            actions={
+              <div className="row wrap g-2">
+                <div className="row g-1 shrink0">
+                  <IconButton
+                    icon="chevronLeft"
+                    label="Previous month"
+                    size="sm"
+                    onClick={() => setCalMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => { const n = new Date(); setCalMonth(new Date(n.getFullYear(), n.getMonth(), 1)); }}
+                  >
+                    Today
+                  </Button>
+                  <IconButton
+                    icon="chevronRight"
+                    label="Next month"
+                    size="sm"
+                    onClick={() => setCalMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                  />
+                </div>
+                <Segmented
+                  value={calView}
+                  onChange={setCalView}
+                  options={[{ value: "month", label: "Month" }, { value: "list", label: "List" }]}
+                  label="Calendar view"
+                />
+                <Button size="sm" variant="primary" icon="plus" onClick={() => openCalCreate()}>
+                  Add event
+                </Button>
+              </div>
+            }
+          >
+            {calLoading && calEvents.length === 0 ? (
+              <div className="stack g-3" aria-busy>
+                <span className="sr-only">Loading the calendar</span>
+                <Skeleton height={16} width="35%" />
+                <Skeleton height={240} />
+              </div>
+            ) : calErr && calEvents.length === 0 ? (
+              <EmptyState
+                icon="alert"
+                title="The calendar didn't load"
+                body="Nothing is missing — the server just didn't answer. Try again."
+                action={<Button variant="secondary" icon="refresh" onClick={loadCalendar}>Try again</Button>}
+              />
+            ) : calView === "month" ? (
+              <div className="stack g-3">
+                <div className="cal-grid" aria-hidden>
+                  {WEEKDAYS.map((w) => <div key={w} className="cal-dow">{w}</div>)}
+                </div>
+
+                <div className="cal-grid">
+                  {calGrid.map((d) => {
+                    const key = cellKey(d);
+                    const evs = calByDay.get(key) ?? [];
+                    const isToday = key === calTodayKey;
+                    const outside = d.getMonth() !== calMonthIndex;
+                    const shown = evs.slice(0, 3);
+                    const extra = evs.length - shown.length;
+                    return (
+                      <div
+                        key={key}
+                        className="cal-cell"
+                        data-today={isToday ? "true" : undefined}
+                        data-out={outside ? "true" : undefined}
+                      >
+                        {/* Sits behind the chips and fills the cell, so tapping
+                            anywhere empty starts a new event on that day. */}
+                        <button
+                          type="button"
+                          className="cal-add"
+                          aria-label={`Add an event on ${longDay(d)}`}
+                          onClick={() => openCalCreate(d)}
+                        />
+                        <div className="cal-body">
+                          <span className="cal-daynum">
+                            {isToday ? <span className="sr-only">Today, </span> : null}
+                            {d.getDate()}
+                          </span>
+
+                          <div className="cal-chips">
+                            {shown.map((e) => {
+                              const k = KIND_META[e.kind];
+                              return (
+                                <button
+                                  key={e.id}
+                                  type="button"
+                                  className="cal-chip"
+                                  data-off={e.status === "CANCELED" || e.status === "NO_SHOW" ? "true" : undefined}
+                                  style={{ background: k.bg, color: k.fg }}
+                                  title={`${e.title} — ${eventWhen(e)}`}
+                                  onClick={() => setCalOpen(e.id)}
+                                >
+                                  <Icon name={k.icon} size={12} />
+                                  {!e.allDay ? <span className="cal-chip-time">{fmtTime(e.startAt)}</span> : null}
+                                  <span className="truncate">{e.title}</span>
+                                </button>
+                              );
+                            })}
+                            {extra > 0 ? (
+                              <button type="button" className="cal-more" onClick={() => setCalDayOpen(key)}>
+                                +{extra} more
+                                <span className="sr-only"> on {longDay(d)}</span>
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {/* The phone version of the same information. */}
+                          {evs.length > 0 ? (
+                            <button
+                              type="button"
+                              className="cal-dots"
+                              aria-label={`${plural(evs.length, "event")} on ${longDay(d)}`}
+                              onClick={() => setCalDayOpen(key)}
+                            >
+                              {evs.slice(0, 4).map((e) => (
+                                <span
+                                  key={e.id}
+                                  aria-hidden
+                                  className="cal-dot"
+                                  style={{ background: KIND_META[e.kind].dot }}
+                                />
+                              ))}
+                              <span aria-hidden className="cal-dotnum">{evs.length}</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {calMonthCount === 0 ? (
+                  <p className="t-sm t-muted">
+                    Nothing on the calendar this month. Pick any day to put something in it.
+                  </p>
+                ) : (
+                  <p className="t-xs t-muted">
+                    Pick an empty day to add something; pick an event to open it.
+                  </p>
+                )}
+
+                <div className="row wrap g-3">
+                  {KIND_ORDER.map((k) => (
+                    <span key={k} className="row g-1 t-xs t-muted">
+                      <span
+                        aria-hidden
+                        style={{
+                          display: "block", width: 8, height: 8, flex: "0 0 auto",
+                          borderRadius: "var(--r-full)", background: KIND_META[k].dot,
+                        }}
+                      />
+                      <Icon name={KIND_META[k].icon} size={12} />
+                      {KIND_META[k].label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div>
+                {/* .toolbar carries its own bottom margin, so no stack gap here. */}
+                <div className="toolbar">
+                  <Segmented
+                    value={calWhen}
+                    onChange={setCalWhen}
+                    options={[{ value: "upcoming", label: "Upcoming" }, { value: "past", label: "Past" }]}
+                    label="Which events to show"
+                  />
+                  <span className="t-xs t-muted">
+                    {plural(calListRows.length, "event")} in the months loaded
+                  </span>
+                </div>
+
+                <DataTable
+                  rows={calListRows}
+                  columns={[
+                    {
+                      key: "when",
+                      header: "When",
+                      primary: true,
+                      sortBy: (e) => new Date(e.startAt).getTime(),
+                      cell: (e) => {
+                        const start = new Date(e.startAt);
+                        const end = e.endAt ? new Date(e.endAt) : null;
+                        return (
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <b className="truncate">
+                              {start.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: TZ })}
+                            </b>
+                            <span className="t-xs t-muted num">
+                              {e.allDay
+                                ? "All day"
+                                : `${fmtTime(start)}${end && end.toDateString() === start.toDateString() ? `–${fmtTime(end)}` : ""}`}
+                            </span>
+                          </div>
+                        );
+                      },
+                    },
+                    {
+                      key: "event",
+                      header: "Event",
+                      sortBy: (e) => e.title,
+                      cell: (e) => (
+                        <div className="stack g-1" style={{ minWidth: 0 }}>
+                          <span className="truncate">{e.title}</span>
+                          {e.location || e.contactName ? (
+                            <span className="t-xs t-muted truncate">
+                              {[e.location, e.contactName].filter(Boolean).join(" · ")}
+                            </span>
+                          ) : null}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: "kind",
+                      header: "Type",
+                      sortBy: (e) => KIND_META[e.kind].label,
+                      cell: (e) => (
+                        <Badge tone={KIND_META[e.kind].tone} icon={KIND_META[e.kind].icon}>
+                          {KIND_META[e.kind].label}
+                        </Badge>
+                      ),
+                    },
+                    {
+                      key: "status",
+                      header: "Status",
+                      sortBy: (e) => STATUS_META[e.status].label,
+                      cell: (e) => (
+                        <Badge tone={STATUS_META[e.status].tone} icon={STATUS_META[e.status].icon}>
+                          {STATUS_META[e.status].label}
+                        </Badge>
+                      ),
+                    },
+                  ]}
+                  rowKey={(e) => e.id}
+                  loading={calLoading && calEvents.length === 0}
+                  skeletonRows={5}
+                  mobileCards
+                  caption={calWhen === "upcoming" ? "Upcoming events, soonest first" : "Past events, most recent first"}
+                  onRowClick={(e) => setCalOpen(e.id)}
+                  empty={
+                    <EmptyState
+                      icon="calendar"
+                      title={calWhen === "upcoming" ? "Nothing coming up" : "Nothing in the past here"}
+                      body={
+                        calWhen === "upcoming"
+                          ? "No viewings, market days or reminders in the months loaded. Add one and it shows up here."
+                          : "Nothing has happened yet in the months loaded. Use the arrows to look further back."
+                      }
+                      action={
+                        calWhen === "upcoming"
+                          ? <Button variant="primary" icon="plus" onClick={() => openCalCreate()}>Add an event</Button>
+                          : undefined
+                      }
+                    />
+                  }
+                />
+              </div>
+            )}
+          </Card>
+
+          {/* One day at a time — opened by "+N more" on a desktop and by the
+              dot row on a phone, so both routes land somewhere thumb-sized. */}
+          {(() => {
+            if (!calDayOpen) return null;
+            const evs = calByDay.get(calDayOpen) ?? [];
+            const day = new Date(`${calDayOpen}T12:00:00`);
+            return (
+              <Modal
+                open
+                onClose={() => setCalDayOpen(null)}
+                title={longDay(day)}
+                description={plural(evs.length, "event")}
+                width="sm"
+                footer={
+                  <>
+                    <Button variant="ghost" onClick={() => setCalDayOpen(null)}>Close</Button>
+                    <Button variant="primary" icon="plus" onClick={() => openCalCreate(day)}>Add an event</Button>
+                  </>
+                }
+              >
+                {evs.length === 0 ? (
+                  <EmptyState
+                    icon="calendar"
+                    title="Nothing on this day"
+                    body="Add something and it appears on the grid straight away."
+                  />
+                ) : (
+                  <div className="stack g-1">
+                    {evs.map((e) => (
+                      <button
+                        key={e.id}
+                        type="button"
+                        className="nav-item"
+                        style={{ minHeight: 52, textAlign: "left" }}
+                        onClick={() => { setCalDayOpen(null); setCalOpen(e.id); }}
+                      >
+                        <Icon name={KIND_META[e.kind].icon} size={16} />
+                        <span className="stack g-1 grow" style={{ minWidth: 0 }}>
+                          <b className="truncate">{e.title}</b>
+                          <span className="t-xs t-muted truncate">
+                            {e.allDay ? "All day" : fmtTime(e.startAt)} · {KIND_META[e.kind].label} · {STATUS_META[e.status].label}
+                          </span>
+                        </span>
+                        <Icon name="chevronRight" size={14} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Modal>
+            );
+          })()}
+
+          {/* Event slide-over — everything about one event, and every action. */}
+          {calSelected ? (() => {
+            const e = calSelected;
+            const k = KIND_META[e.kind];
+            const s = STATUS_META[e.status];
+            return (
+              <Panel
+                open
+                onClose={() => setCalOpen(null)}
+                title={e.title}
+                subtitle={eventWhen(e)}
+                actions={
+                  <IconButton
+                    icon="edit"
+                    label="Edit this event"
+                    size="sm"
+                    onClick={() => { setCalOpen(null); openCalEdit(e); }}
+                  />
+                }
+                footer={
+                  <div className="row between wrap g-2" style={{ width: "100%" }}>
+                    <Button variant="danger" icon="trash" disabled={busy} onClick={() => deleteCalEvent(e)}>
+                      Delete
+                    </Button>
+                    <Button variant="primary" icon="edit" onClick={() => { setCalOpen(null); openCalEdit(e); }}>
+                      Edit
+                    </Button>
+                  </div>
+                }
+              >
+                <div className="stack g-5">
+                  <div className="row wrap g-2">
+                    <Badge tone={k.tone} icon={k.icon}>{k.label}</Badge>
+                    <Badge tone={s.tone} icon={s.icon}>{s.label}</Badge>
+                    {e.allDay ? <Badge tone="neutral" dot>All day</Badge> : null}
+                  </div>
+
+                  <div className="stack g-2">
+                    <p className="t-label">Mark it</p>
+                    <Segmented
+                      value={e.status}
+                      onChange={(v) => setCalEventStatus(e, v)}
+                      options={STATUS_CHOICES.map((st) => ({ value: st, label: STATUS_META[st].label }))}
+                      label="Event status"
+                    />
+                    {e.status === "SCHEDULED" ? (
+                      <p className="t-xs t-muted">Still just scheduled — nothing marked yet.</p>
+                    ) : null}
+                  </div>
+
+                  <DescList
+                    items={[
+                      { label: "When", value: eventWhen(e) },
+                      { label: "Type", value: k.label },
+                      { label: "Where", value: e.location || "Not set" },
+                      { label: "Contact", value: e.contactName || "—" },
+                      { label: "Added", value: fmtDate(e.createdAt) },
+                      ...(e.remindedAt ? [{ label: "Reminder sent", value: fmtDateTime(e.remindedAt) }] : []),
+                    ]}
+                  />
+
+                  <div className="stack g-2">
+                    <p className="t-label">Get hold of them</p>
+                    <PhoneActions phone={e.contactPhone} name={e.contactName || undefined} />
+                    <EmailAction email={e.contactEmail} name={e.contactName || undefined} />
+                  </div>
+
+                  {e.notes ? (
+                    <div className="stack g-2">
+                      <p className="t-label">Notes</p>
+                      <p className="t-sm" style={{ whiteSpace: "pre-wrap" }}>{e.notes}</p>
+                    </div>
+                  ) : null}
+
+                  {e.applicationId ? (
+                    <div className="stack g-2">
+                      <p className="t-label">Where this came from</p>
+                      <p className="t-sm t-muted">
+                        This event is tied to a vendor application — changing the date here
+                        updates the viewing line on it.
+                      </p>
+                      <div>
+                        <LinkButton href="/admin/applications" variant="secondary" icon="inbox">
+                          Open applications
+                        </LinkButton>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </Panel>
+            );
+          })() : null}
+
+          {/* One modal for both adding and editing. */}
+          <Modal
+            open={!!calForm}
+            onClose={() => { setCalForm(null); setCalFormErr(""); }}
+            title={calForm?.id ? "Edit event" : "Add to the calendar"}
+            description={
+              calForm?.id
+                ? "Saved changes show on the grid straight away."
+                : "Viewings, market days, move-ins — anything you'd otherwise write on a sticky note."
+            }
+            width="md"
+            footer={
+              <>
+                <Button variant="ghost" onClick={() => { setCalForm(null); setCalFormErr(""); }}>Cancel</Button>
+                <Button variant="primary" icon="check" loading={busy} onClick={saveCalEvent}>
+                  {calForm?.id ? "Save changes" : "Add event"}
+                </Button>
+              </>
+            }
+          >
+            {calForm ? (
+              <div className="stack g-4">
+                <Field label="What is it?" required>
+                  {(p) => (
+                    <Input
+                      {...p}
+                      value={calForm.title}
+                      placeholder="Viewing — Prairie Rose Candle Co."
+                      onChange={(ev) => setCalForm({ ...calForm, title: ev.target.value })}
+                    />
+                  )}
+                </Field>
+
+                <div className="grid-2">
+                  <Field label="Type">
+                    {(p) => (
+                      <Select
+                        {...p}
+                        value={calForm.kind}
+                        onChange={(ev) => setCalForm({ ...calForm, kind: ev.target.value as EventKind })}
+                      >
+                        {KIND_ORDER.map((k) => (
+                          <option key={k} value={k}>{KIND_META[k].label}</option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                  <Field label="Where" hint="Optional — booth number, address, anything.">
+                    {(p) => (
+                      <Input
+                        {...p}
+                        value={calForm.location}
+                        onChange={(ev) => setCalForm({ ...calForm, location: ev.target.value })}
+                      />
+                    )}
+                  </Field>
+                </div>
+
+                <div className="grid-2">
+                  <Field label="Starts" required>
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="datetime-local"
+                        value={calForm.startAt}
+                        onChange={(ev) => setCalForm({ ...calForm, startAt: ev.target.value })}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Ends" hint="Leave it blank if you don't know yet.">
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="datetime-local"
+                        value={calForm.endAt}
+                        onChange={(ev) => setCalForm({ ...calForm, endAt: ev.target.value })}
+                      />
+                    )}
+                  </Field>
+                </div>
+
+                <Checkbox
+                  checked={calForm.allDay}
+                  onCheckedChange={(v) => setCalForm({ ...calForm, allDay: v })}
+                  label="All day"
+                  hint="Hides the time on the grid — for market days and anything without a set hour."
+                />
+
+                <div className="divider" />
+
+                <div className="stack g-4">
+                  <p className="t-label">Who it&rsquo;s with</p>
+                  <div className="grid-2">
+                    <Field label="Name">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={calForm.contactName}
+                          onChange={(ev) => setCalForm({ ...calForm, contactName: ev.target.value })}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Phone" hint="You can call or text them from the event later.">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          type="tel"
+                          inputMode="tel"
+                          autoComplete="tel"
+                          value={calForm.contactPhone}
+                          onChange={(ev) => setCalForm({ ...calForm, contactPhone: ev.target.value })}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                  <Field label="Email">
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="email"
+                        autoComplete="email"
+                        value={calForm.contactEmail}
+                        onChange={(ev) => setCalForm({ ...calForm, contactEmail: ev.target.value })}
+                      />
+                    )}
+                  </Field>
+                  {!calForm.id && calForm.kind === "VIEWING" && calForm.contactEmail.trim() ? (
+                    <Checkbox
+                      checked={calForm.notify}
+                      onCheckedChange={(v) => setCalForm({ ...calForm, notify: v })}
+                      label="Email them the details"
+                      hint="Sends the date and time to that address when you save. Only works for a viewing that came from an application."
+                    />
+                  ) : null}
+                </div>
+
+                <Field label="Notes" hint="Anything you'll want in front of you on the day.">
+                  {(p) => (
+                    <Textarea
+                      {...p}
+                      rows={3}
+                      value={calForm.notes}
+                      onChange={(ev) => setCalForm({ ...calForm, notes: ev.target.value })}
+                    />
+                  )}
+                </Field>
+
+                {calFormErr ? <Note tone="error">{calFormErr}</Note> : null}
+              </div>
+            ) : null}
+          </Modal>
+
+          {/* Dry run first: she sees every row before anything is written. */}
+          {calImport ? (
+            <Modal
+              open
+              onClose={() => setCalImport(null)}
+              title="Import the old viewings"
+              description="This is a preview — nothing has been written yet."
+              width="md"
+              footer={
+                <>
+                  <Button variant="ghost" onClick={() => setCalImport(null)}>Not now</Button>
+                  <Button
+                    variant="primary"
+                    icon="download"
+                    loading={calImporting}
+                    disabled={calImport.importedCount === 0}
+                    onClick={runLegacyImport}
+                  >
+                    {calImport.importedCount === 0
+                      ? "Nothing to import"
+                      : `Import ${plural(calImport.importedCount, "viewing")}`}
+                  </Button>
+                </>
+              }
+            >
+              <div className="stack g-5">
+                <div className="stack g-2">
+                  <p className="t-label">Will be added ({calImport.imported.length})</p>
+                  {calImport.imported.length === 0 ? (
+                    <p className="t-sm t-muted">
+                      None of the old viewings could be read as a date, so there&rsquo;s nothing to add.
+                    </p>
+                  ) : (
+                    <ul className="stack g-2" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                      {calImport.imported.map((i, idx) => (
+                        <li key={`${i.businessName}-${idx}`} className="row between wrap g-2">
+                          <b className="truncate">{i.businessName}</b>
+                          <span className="t-sm t-muted num">{fmtDateTime(i.when)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {calImport.flagged.length > 0 ? (
+                  <div className="stack g-3">
+                    <Note tone="warn" title={`${plural(calImport.flagged.length, "viewing")} can't be read`}>
+                      These stay on their applications untouched — you&rsquo;ll need to put them
+                      on the calendar by hand.
+                    </Note>
+                    <ul className="stack g-3" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                      {calImport.flagged.map((f) => (
+                        <li key={f.applicationId} className="stack g-1">
+                          <b>{f.businessName}</b>
+                          <span className="t-sm">They wrote: &ldquo;{f.raw}&rdquo;</span>
+                          <span className="t-xs t-muted">{f.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            </Modal>
+          ) : null}
         </>
       )}
 
@@ -5061,8 +6243,11 @@ export default function AdminPage() {
                         >
                           <span className="stack g-1 grow" style={{ minWidth: 0 }}>
                             <b className="truncate">{b.businessName || b.name}</b>
-                            <span className="t-xs t-muted truncate">
-                              {b.name}{b.phone ? ` · ${fmtPhone(b.phone)}` : ""}
+                            <span className="t-xs t-muted truncate">{b.name}</span>
+                            {/* A tent vendor who hasn't turned up is a phone call,
+                                not a note to self. */}
+                            <span className="row wrap g-2 t-sm">
+                              <PhoneActions phone={b.phone} name={b.name} />
                             </span>
                             <span>
                               {b.status === "PAID_DEPOSIT" ? (
