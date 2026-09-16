@@ -6,7 +6,7 @@ const Rule = ({ n, title, children }: { n: number; title: string; children: Reac
   </div>
 );
 
-export const RULES_UPDATED = "September 13, 2026";
+export const RULES_UPDATED = "September 16, 2026";
 
 export default function RulesBody() {
   return (
@@ -27,6 +27,7 @@ export default function RulesBody() {
       <Rule n={12} title="BOOTH MOVES">The Market may relocate a vendor to comparable space with 14 days&rsquo; notice.</Rule>
       <Rule n={13} title="ALL SALES FINAL">All customer purchases are final — no refunds or exchanges. Vendors and their signage may not promise refunds or exchanges on Market register sales.</Rule>
       <Rule n={14} title="SALE SIGNAGE COMES DOWN FIRST">Before ending a discount or sale remotely in the portal, any physical sale signs at the booth must be removed — come in yourself or ask a Market associate to pull them. The register charges what the app says; signs that advertise a dead sale create disputes at the counter.</Rule>
+      <Rule n={15} title="MARKET SYSTEM, MARKET SALES ONLY">The register, self-checkout, and the ring-up in your vendor portal are for goods sold here at Community Harvest. Don&rsquo;t use them to take payment for a sale made somewhere else — another market, a show, an event, or online. Every sale through our system is taxed at Noble&rsquo;s rate and reported by the Market, so an off-site sale is collected and filed wrong no matter how small it is.</Rule>
       <div style={{ fontWeight: 800, fontSize: 14.5, margin: "12px 0 4px" }}>ENFORCEMENT</div>
       <p style={{ fontSize: 13, color: "#374151" }}>Violations receive a friendly written notice with 7 days to fix. Repeat or serious violations are grounds for termination under the vendor agreement. Safety issues get corrected on the spot.</p>
     </div>
