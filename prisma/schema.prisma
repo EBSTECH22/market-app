@@ -65,8 +65,14 @@ model Sale {
   // a sale booked before the register asked), NOT that nothing was handed over.
   cashTenderedCents Int    @default(0)
   changeCents     Int      @default(0)
+  // Set when a vendor rang this at their own booth rather than a cashier at the
+  // register. Empty for every normal sale. `employee` still carries the human
+  // label; this is the id you can actually group and report on.
+  soldByVendorId String    @default("")
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
+
+  @@index([soldByVendorId])
 }
 
 model Employee {
@@ -321,8 +327,18 @@ model SelfCart {
   status          String    @default("PENDING")
   stripeSessionId String    @default("")
   saleId          String    @default("")
+  // Set when a vendor built this cart at their own booth. Reused rather than
+  // given its own table because the paid-cart finalizer, the Stripe webhook and
+  // the receipt email already work on SelfCart — a parallel table would have
+  // meant a second copy of all of it.
+  soldByVendorId  String    @default("")
+  // Short code the customer carries to the register to pay cash. Empty on card
+  // carts, cleared once it's been rung.
+  registerCode    String    @default("")
   createdAt       DateTime  @default(now())
   paidAt          DateTime?
+
+  @@index([registerCode])
 }
 
 model Customer {

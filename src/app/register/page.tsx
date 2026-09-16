@@ -39,6 +39,11 @@ type Receipt = {
   id: string; number: number; employee: string; totalCents: number;
   cashTenderedCents?: number; changeCents?: number; paymentMethod: string;
 };
+type VendorTicket = {
+  cartId: string; code: string; vendorName: string; vendorCode: string;
+  lines: { name: string; sku: string; quantity: number; priceCents: number }[];
+  subtotalCents: number; taxCents: number; totalCents: number;
+};
 
 export default function RegisterKiosk() {
   const toast = useToast();
@@ -66,6 +71,14 @@ export default function RegisterKiosk() {
   const [pay, setPay] = useState<"NONE" | "CASH" | "CARD">("NONE");
   const [cardRef, setCardRef] = useState("");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+
+  /* A ticket a vendor rang up at their own booth and sent here for cash. It
+     never enters the normal cart: re-pricing it against today's prices, or
+     booking it under the cashier's name, are the two things the code exists to
+     prevent. */
+  const [vtCode, setVtCode] = useState("");
+  const [vt, setVt] = useState<VendorTicket | null>(null);
+  const [vtErr, setVtErr] = useState("");
 
   const scanRef = useRef<HTMLInputElement>(null);
   const printRef = useRef<HTMLDivElement>(null);
@@ -324,6 +337,40 @@ export default function RegisterKiosk() {
     } finally { setBusy(false); }
   };
 
+  /* ------------------------------------------------- vendor booth tickets -- */
+
+  const findVendorTicket = async () => {
+    const code = vtCode.trim().toUpperCase();
+    if (!code) return;
+    setBusy(true); setVtErr("");
+    try {
+      const r = await fetch(`/api/admin/vendor-ticket?code=${encodeURIComponent(code)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setVtErr(String(d.error || "Couldn't find that ticket.")); setVt(null); return; }
+      setVt(d as VendorTicket);
+    } catch {
+      setVtErr("No connection — couldn't look that up.");
+    } finally { setBusy(false); }
+  };
+
+  const bookVendorTicket = async (tenderedCents: number) => {
+    if (!vt) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/vendor-ticket", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: vt.code, cashTenderedCents: tenderedCents }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setVtErr(String(d.error || "Couldn't book that ticket.")); return; }
+      setReceipt({ ...(d.sale as Receipt), paymentMethod: "CASH" });
+      setVt(null); setVtCode(""); setVtErr("");
+      void loadDrawer(); void loadFloor();
+    } catch {
+      setVtErr("No connection — the ticket was NOT rung. Try again before taking the money.");
+    } finally { setBusy(false); }
+  };
+
   /* ---------------------------------------------------------------- view -- */
 
   /* #printzone must be a DIRECT child of body: the print stylesheet is
@@ -554,9 +601,75 @@ export default function RegisterKiosk() {
     : [];
   const vendorList = [...new Map(floor.map((i) => [i.vendorCode, i.vendorName])).entries()];
 
+  /* A vendor's booth ticket takes over the screen: it is already priced and
+     already attributed, so mixing it with whatever is in the cart would only
+     create ways to ring the wrong thing. */
+  if (vt) {
+    return shell(
+      <>
+        {header}
+        <Card
+          title={`${vt.vendorName} — booth ticket ${vt.code}`}
+          subtitle="Rung up at their own booth. Take the cash; it books as their sale, not yours."
+          actions={<Button size="sm" variant="ghost" onClick={() => { setVt(null); setVtErr(""); }}>Back</Button>}
+        >
+          <div className="stack g-3">
+            {vt.lines.map((l, idx) => (
+              <div key={`${l.sku}-${idx}`} className="row g-3" style={{ alignItems: "center" }}>
+                <span className="grow truncate">{l.quantity}× {l.name}</span>
+                <span className="num">{money(l.priceCents * l.quantity)}</span>
+              </div>
+            ))}
+            <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
+              <div className="t-body">Subtotal <b className="num">{money(vt.subtotalCents)}</b></div>
+              <div className="t-body">Tax <b className="num">{money(vt.taxCents)}</b></div>
+            </div>
+            {vtErr ? <Note tone="error">{vtErr}</Note> : null}
+          </div>
+        </Card>
+        <CashTender
+          totalCents={vt.totalCents}
+          busy={busy}
+          onCancel={() => { setVt(null); setVtErr(""); }}
+          onConfirm={(tendered) => void bookVendorTicket(tendered)}
+        />
+      </>
+    );
+  }
+
   return shell(
     <>
       {header}
+
+      {pay === "NONE" ? (
+        <Card
+          title="Vendor booth ticket"
+          subtitle="A vendor rang something up at their own booth and sent the customer here to pay cash."
+        >
+          <div className="stack g-2">
+            <div className="row wrap g-2" style={{ alignItems: "flex-end" }}>
+              <Field label="Their code" className="grow">
+                {(p) => (
+                  <Input
+                    {...p}
+                    className="mono"
+                    value={vtCode}
+                    autoComplete="off"
+                    placeholder="K4M7Q"
+                    style={{ height: 56, fontSize: "var(--fs-xl)", letterSpacing: "0.12em", textTransform: "uppercase" }}
+                    onChange={(e) => { setVtCode(e.target.value.toUpperCase()); setVtErr(""); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") void findVendorTicket(); }}
+                  />
+                )}
+              </Field>
+              <Button size="lg" variant="secondary" icon="search" loading={busy} disabled={busy || !vtCode.trim()} onClick={() => void findVendorTicket()}>
+                Find it
+              </Button>
+            </div>
+            {vtErr ? <Note tone="error">{vtErr}</Note> : null}
+          </div>
+        </Card>
+      ) : null}
 
       {pay === "NONE" ? (
         <Card title="Ring up" subtitle="Scan, search, or tap a vendor's line.">

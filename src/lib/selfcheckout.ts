@@ -38,9 +38,16 @@ export async function finalizeSelfCartIfPaid(cartId: string): Promise<boolean> {
         quantity: l.quantity, commissionCents, vendorNetCents: l.priceCents * l.quantity - commissionCents,
       };
     });
+    /* A vendor-rung cart goes through this same finalizer — the only difference
+       is whose name ends up on the ticket. Keeping one path means a vendor sale
+       decrements stock, credits the ledger and emails a receipt exactly like
+       every other sale, with no second implementation to keep in step. */
+    const soldBy = cart.soldByVendorId ? vmap.get(cart.soldByVendorId) : null;
     const sale = await tx.sale.create({
       data: {
-        number, cardName: cart.email.split("@")[0] || "Self-checkout", employee: "SELF-CHECKOUT",
+        number, cardName: cart.email.split("@")[0] || "Self-checkout",
+        employee: soldBy ? `VENDOR: ${soldBy.businessName}` : "SELF-CHECKOUT",
+        soldByVendorId: cart.soldByVendorId || "",
         subtotalCents: cart.subtotalCents, taxCents: cart.taxCents, totalCents: cart.totalCents,
         paymentMethod: "CARD", lines: { create: saleLines },
       },

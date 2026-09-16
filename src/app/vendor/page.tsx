@@ -1021,7 +1021,8 @@ export default function VendorDashboard() {
 
               <Card title="Quick actions">
                 <div className="row wrap g-2">
-                  <Button variant="primary" icon="plus" onClick={() => go("items")}>Add an item</Button>
+                  <LinkButton href="/vendor/sell" variant="primary" icon="register">Ring up a sale</LinkButton>
+                  <Button variant="secondary" icon="plus" onClick={() => go("items")}>Add an item</Button>
                   <LinkButton href="/vendor/labels" variant="secondary" icon="tag">Print labels</LinkButton>
                   <LinkButton href="/vendor/qr" variant="secondary" icon="print">Print table QR</LinkButton>
                   <LinkButton href={`/v/${me.vendor.code}`} variant="secondary" icon="eye" external>View my public page</LinkButton>
