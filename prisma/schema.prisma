@@ -392,3 +392,20 @@ model CalendarEvent {
   @@index([applicationId])
   @@index([vendorId])
 }
+
+/// Every time someone opens a vendor-facing document. Admin views are never
+/// recorded — the office looking at an invoice isn't a signal about the vendor.
+/// `kind` is a loose label so new document types need no migration.
+model ViewEvent {
+  id         String   @id @default(cuid())
+  kind       String   @default("INVOICE")
+  targetId   String
+  vendorId   String   @default("")
+  viewerHash String   @default("")
+  userAgent  String   @default("")
+  viewedAt   DateTime @default(now())
+
+  @@index([kind, targetId])
+  @@index([vendorId])
+  @@index([viewedAt])
+}

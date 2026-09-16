@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { unlockIfRentPaid } from "@/lib/unlock";
+import { isAdmin } from "@/lib/auth";
+import { logView } from "@/lib/viewlog";
+import { pushToAdmin } from "@/lib/push";
+import { money } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +58,29 @@ export async function GET(req: NextRequest) {
   const balance = agg._sum.amountCents || 0;
   const dueCents = balance < 0 ? -balance : 0;
   const feeCents = Math.round((dueCents * PROCESSING_PERCENT) / 100);
+
+  /* Record that the VENDOR opened their invoice. An admin previewing it from
+     the agreements panel is not a signal about the vendor, so their view is
+     neither logged nor pushed — that check is the whole reason this sits here
+     rather than in the page component. */
+  if (!isAdmin()) {
+    try {
+      const v = await logView({
+        kind: "INVOICE",
+        targetId: contract.id,
+        vendorId: vendor.id,
+        headers: req.headers,
+      });
+      if (v.recorded) {
+        await pushToAdmin(
+          v.firstEver ? "Invoice opened for the first time" : "Invoice opened again",
+          `${vendor.businessName} — booth ${contract.boothLabel}${dueCents > 0 ? `, ${money(dueCents)} due` : ", paid up"}` +
+            (v.totalViews > 1 ? ` · ${v.totalViews} views` : "")
+        );
+      }
+    } catch { /* never let view tracking break the invoice */ }
+  }
+
   return NextResponse.json({
     businessName: vendor.businessName, boothLabel: contract.boothLabel,
     dueCents, feeCents, totalCents: dueCents + feeCents, processingPercent: PROCESSING_PERCENT,

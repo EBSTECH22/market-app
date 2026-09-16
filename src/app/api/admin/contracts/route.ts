@@ -15,11 +15,26 @@ export async function GET() {
   });
   const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
   const balMap = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));
+
+  /* How often each vendor has opened their invoice. One grouped query rather
+     than a lookup per row. Admin previews are never logged, so these counts
+     are the vendor's own opens. */
+  const views = await db.viewEvent.groupBy({
+    by: ["targetId"],
+    where: { kind: "INVOICE" },
+    _count: { _all: true },
+    _max: { viewedAt: true },
+  });
+  const viewMap = Object.fromEntries(
+    views.map((v) => [v.targetId, { count: v._count._all, lastAt: v._max.viewedAt }])
+  );
+
   return NextResponse.json({
     contracts: contracts.map((c) => ({
       ...c,
       vendorBalanceCents: balMap[c.vendorId] || 0,
       delivery: deliveryFor(c),
+      invoiceViews: viewMap[c.id] ?? { count: 0, lastAt: null },
     })),
   });
 }

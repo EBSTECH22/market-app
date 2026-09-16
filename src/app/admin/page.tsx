@@ -65,7 +65,41 @@ function DeliveryCell({ d }: { d: Delivery | undefined }) {
   );
 }
 
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; delivery?: Delivery };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null } };
+
+/** One recorded open of a vendor's invoice — /api/admin/contracts/{id}/views. */
+type InvoiceView = { id: string; viewedAt: string; userAgent: string | null };
+
+/** A user-agent string is noise to the person reading this log; the only
+    honest thing it answers is "phone or computer". Everything else stays
+    hidden rather than being paraded as precision we don't have. */
+function deviceFromUA(ua: string | null | undefined): string {
+  const s = (ua || "").toLowerCase();
+  if (s.includes("iphone")) return "iPhone";
+  if (s.includes("ipad")) return "iPad";
+  if (s.includes("android")) return "Android";
+  /* iPadOS reports "Macintosh", so this has to come after the iPad check. */
+  if (s.includes("macintosh") || s.includes("mac os")) return "Mac";
+  if (s.includes("windows")) return "Windows";
+  return "Other";
+}
+
+/** Has the vendor actually looked at the invoice we sent them? Only worth
+    showing once the agreement is executed — before that there's no invoice.
+    Admin previews are never logged, so a zero here really means zero. */
+function InvoiceOpensCell({ v }: { v: Contract["invoiceViews"] }) {
+  const count = v?.count ?? 0;
+  if (count === 0) return <Badge tone="warn" dot>Invoice not opened</Badge>;
+  return (
+    <div className="stack g-1" style={{ minWidth: 0 }}>
+      <Badge tone="info" icon="eye">Invoice opened {count}&times;</Badge>
+      {/* relTime already reads as a phrase ("yesterday", "2 days ago"), so
+          "Last …" would produce "Last yesterday". */}
+      {v?.lastAt ? <span className="t-xs t-muted truncate">Last opened {relTime(v.lastAt)}</span> : null}
+    </div>
+  );
+}
+
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
@@ -404,6 +438,12 @@ export default function AdminPage() {
   const [vendorQ, setVendorQ] = useState("");
   const [vendorOpen, setVendorOpen] = useState<string | null>(null);
   const [contractOpen, setContractOpen] = useState<string | null>(null);
+  /* Invoice open history. Fetched on demand — the agreements list already
+     carries the count, and most agreements never need the detail. */
+  const [invoiceLogFor, setInvoiceLogFor] = useState<string | null>(null);
+  const [invoiceLog, setInvoiceLog] = useState<InvoiceView[] | null>(null);
+  const [invoiceLogLoading, setInvoiceLogLoading] = useState(false);
+  const [invoiceLogErr, setInvoiceLogErr] = useState("");
   const [appQ, setAppQ] = useState("");
   const [appFilter, setAppFilter] = useState<"PENDING" | "ACCEPTED" | "DECLINED">("PENDING");
   const [rateMsg, setRateMsg] = useState("");
@@ -1521,6 +1561,32 @@ export default function AdminPage() {
       if (successMsg) toast.success(successMsg);
       await loadAll();
     } finally { setBusy(false); }
+  };
+
+  /* Every recorded open of one invoice. Opening this doesn't add to the log —
+     admin previews are never recorded server-side — so looking can't change
+     what you're looking at. */
+  const openInvoiceLog = async (contractId: string) => {
+    setInvoiceLogFor(contractId);
+    setInvoiceLog(null);
+    setInvoiceLogErr("");
+    setInvoiceLogLoading(true);
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${contractId}/views`);
+      if (!ok) {
+        setInvoiceLogErr(String(data.error || "The open history couldn't be loaded."));
+        return;
+      }
+      setInvoiceLog(Array.isArray(data.views) ? (data.views as InvoiceView[]) : []);
+    } finally {
+      setInvoiceLogLoading(false);
+    }
+  };
+
+  const closeInvoiceLog = () => {
+    setInvoiceLogFor(null);
+    setInvoiceLog(null);
+    setInvoiceLogErr("");
   };
 
   /* Nudge one vendor who hasn't signed. The email spells out that the booth
@@ -5789,7 +5855,18 @@ export default function AdminPage() {
                     const rank = { DRAFT: 1, SENT: 2, OPENED: 3, SIGNED: 0, EXECUTED: 8 }[d.state];
                     return d.stale ? rank - 0.5 : rank;
                   },
-                  cell: (c) => <DeliveryCell d={c.delivery} />,
+                  /* Delivery first, then — once both names are on it — whether
+                     they've opened the invoice that followed. One column, so
+                     the mobile card doesn't gain a row that's blank for most
+                     agreements. */
+                  cell: (c) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <DeliveryCell d={c.delivery} />
+                      {c.vendorSignedAt && c.marketSignedAt ? (
+                        <InvoiceOpensCell v={c.invoiceViews} />
+                      ) : null}
+                    </div>
+                  ),
                 },
                 {
                   key: "status",
@@ -5826,6 +5903,8 @@ export default function AdminPage() {
             const c = contracts.find((x) => x.id === contractOpen);
             if (!c) return null;
             const settled = (c.vendorBalanceCents ?? 0) >= 0 && !!c.vendor.cardLast4;
+            const executed = !!(c.vendorSignedAt && c.marketSignedAt);
+            const iv = c.invoiceViews ?? { count: 0, lastAt: null };
             const sendMail = async (action: string, what: string) => {
               setBusy(true);
               try {
@@ -5932,6 +6011,49 @@ export default function AdminPage() {
                     ) : null}
                   </div>
 
+                  {/* The invoice only exists once both names are on the
+                      agreement, so this whole section stays out of the way
+                      until there's something to open. */}
+                  {executed ? (
+                    <div className="stack g-2">
+                      <p className="t-label">Invoice</p>
+                      {c.signToken ? (
+                        <>
+                          <div className="row wrap g-2">
+                            <LinkButton external href={`/rent/${c.signToken}`} icon="receipt">
+                              View their invoice
+                            </LinkButton>
+                          </div>
+                          <p className="t-xs t-muted">
+                            Opening it yourself isn&rsquo;t counted and doesn&rsquo;t notify them — only{" "}
+                            {c.vendor.businessName}&rsquo;s own opens are recorded.
+                          </p>
+                        </>
+                      ) : (
+                        <p className="t-xs t-muted">No invoice link yet.</p>
+                      )}
+                      <p className="t-sm">
+                        {iv.count === 0 ? (
+                          <span className="t-muted">They haven&rsquo;t opened it yet.</span>
+                        ) : (
+                          <>
+                            Opened {plural(iv.count, "time")}
+                            {iv.lastAt ? (
+                              <span className="t-muted">
+                                , most recently {relTime(iv.lastAt)} ({fmtDateTime(iv.lastAt)})
+                              </span>
+                            ) : null}
+                          </>
+                        )}
+                      </p>
+                      <div className="row wrap g-2">
+                        <Button size="sm" icon="eye" onClick={() => openInvoiceLog(c.id)}>
+                          See every open
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {/* Terms are editable right up until they sign, locked the
                       moment they do, and fixed for good once both names are on
                       it. Each of those three states gets its own answer here. */}
@@ -6030,6 +6152,57 @@ export default function AdminPage() {
               </Panel>
             );
           })()}
+
+          {/* Every recorded open of one invoice. Device is deliberately coarse
+              — "iPhone" is all the raw user-agent string honestly supports. */}
+          <Modal
+            open={!!invoiceLogFor}
+            onClose={closeInvoiceLog}
+            title="Invoice opens"
+            description="Newest first. Your own previews are never recorded."
+            width="md"
+            footer={<Button variant="ghost" onClick={closeInvoiceLog}>Close</Button>}
+          >
+            {invoiceLogErr ? (
+              <Note tone="error" title="The open history couldn't be loaded">
+                {invoiceLogErr}
+              </Note>
+            ) : (
+              <DataTable
+                rows={invoiceLog ?? []}
+                columns={[
+                  {
+                    key: "when",
+                    header: "Opened",
+                    primary: true,
+                    cell: (v) => (
+                      <div className="stack g-1" style={{ minWidth: 0 }}>
+                        <b className="truncate">{fmtDateTime(v.viewedAt)}</b>
+                        <span className="t-xs t-muted">{relTime(v.viewedAt)}</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "device",
+                    header: "Device",
+                    cell: (v) => deviceFromUA(v.userAgent),
+                  },
+                ]}
+                rowKey={(v) => v.id}
+                loading={invoiceLogLoading}
+                skeletonRows={4}
+                mobileCards
+                caption="Invoice opens, newest first"
+                empty={
+                  <EmptyState
+                    icon="eye"
+                    title="Not opened yet"
+                    body="Nobody has opened this invoice. Your own previews wouldn't show up here anyway."
+                  />
+                }
+              />
+            )}
+          </Modal>
 
           <Card title="New booth agreement" subtitle="The first month prorates from the start date; full rent charges on the 1st after that.">
             <div className="stack g-4 content-narrow">
