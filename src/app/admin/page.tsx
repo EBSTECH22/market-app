@@ -653,6 +653,15 @@ export default function AdminPage() {
   type AccessRow = { id: string; name: string; email: string; role: Role; roleLabel: string; active: boolean; hasPassword: boolean };
   const [accessRows, setAccessRows] = useState<AccessRow[] | null>(null);
   const [accessMe, setAccessMe] = useState<string | null>(null);
+
+  type MyAccount = { id: string; name: string; email: string; role: Role; roleLabel: string; hasPassword: boolean; mustChangePassword: boolean };
+  const [myAccount, setMyAccount] = useState<MyAccount | null>(null);
+  const [sharedPasswordSession, setSharedPasswordSession] = useState(false);
+  const [meOpen, setMeOpen] = useState(false);
+  const [meEmail, setMeEmail] = useState("");
+  const [meCurrent, setMeCurrent] = useState("");
+  const [meNew, setMeNew] = useState("");
+  const [meErr, setMeErr] = useState("");
   const [staffName, setStaffName] = useState("");
   const [loginMode, setLoginMode] = useState<"staff" | "account" | "admin">("staff");
   const [loginEmail, setLoginEmail] = useState("");
@@ -861,6 +870,33 @@ export default function AdminPage() {
     if (res.ok) setReport(await res.json());
   }, [repPeriod, repVendor, repFrom, repTo]);
 
+  const loadMyAccount = useCallback(async () => {
+    const r = await fetch("/api/staff/me");
+    if (!r.ok) return;
+    const d = await r.json();
+    setMyAccount(d.account || null);
+    setSharedPasswordSession(d.reason === "shared-password");
+    if (d.account) setMeEmail(d.account.email || "");
+  }, []);
+
+  const saveMyAccount = async () => {
+    setMeErr("");
+    const patch: Record<string, unknown> = {};
+    if (meEmail.trim() !== (myAccount?.email || "")) patch.email = meEmail.trim();
+    if (meNew) { patch.newPassword = meNew; patch.currentPassword = meCurrent; }
+    if (!Object.keys(patch).length) { setMeErr("Nothing changed."); return; }
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/staff/me", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+      });
+      if (!ok) { setMeErr(String(data.error || "Couldn't save that.")); return; }
+      toast.success("Your account is updated", patch.newPassword ? "Use the new password next time you sign in." : undefined);
+      setMeOpen(false); setMeCurrent(""); setMeNew("");
+      await loadMyAccount();
+    } finally { setBusy(false); }
+  };
+
   const probeRole = useCallback(async () => {
     const res = await fetch("/api/admin/whoami");
     if (!res.ok) { setAuthed(false); setRole(null); return; }
@@ -875,6 +911,7 @@ export default function AdminPage() {
     const nextCaps = (data.capabilities as Capability[] | undefined)
       ?? (nextAccess === "OWNER" ? (["ops", "market", "collections", "money", "financials", "people", "config"] as Capability[]) : []);
     setAccess(nextAccess); setCaps(nextCaps);
+    void loadMyAccount();
   }, []);
 
   const loadTime = useCallback(async () => {
@@ -902,12 +939,16 @@ export default function AdminPage() {
       });
       if (!ok) { toast.error("Couldn't make that change", String(data.error || "")); return false; }
       if (data.issuedPassword) {
+        const mailed = data.emailed === true;
+        const mailNote = data.emailed === false
+          ? " We couldn't email it, so this is the only copy."
+          : mailed ? " It's also been emailed to them." : " Nobody has an email address on file, so this is the only copy.";
         /* Shown once, in a dialog they have to dismiss, with a copy button.
            It is not stored anywhere readable — a toast that slides away would
            mean generating another one. */
         await dialog.alert({
           title: "New password set",
-          body: <>Give this to <b>{String((data.employee as { name?: string })?.name || "them")}</b>. It won&rsquo;t be shown again, and they&rsquo;ll be asked to change it.</>,
+          body: <>Give this to <b>{String((data.employee as { name?: string })?.name || "them")}</b>.{mailNote} It won&rsquo;t be shown again, and they&rsquo;ll be asked to change it.</>,
           copyable: String(data.issuedPassword),
           confirmLabel: "Done",
         });
@@ -2533,7 +2574,7 @@ export default function AdminPage() {
                 style={{ flex: 1 }}
                 onClick={() => { setLoginMode("account"); setLoginError(""); }}
               >
-                Manager
+                Owner or manager
               </button>
               <button
                 type="button"
@@ -2542,7 +2583,7 @@ export default function AdminPage() {
                 style={{ flex: 1 }}
                 onClick={() => { setLoginMode("admin"); setLoginError(""); }}
               >
-                Owner
+                Admin password
               </button>
             </div>
 
@@ -2578,7 +2619,7 @@ export default function AdminPage() {
                   </Field>
                 </>
               ) : loginMode === "admin" ? (
-                <Field label="Admin password" required>
+                <Field label="Admin password" hint="The shared password from your Vercel settings. Use your own owner account instead where you can." required>
                   {(p) => (
                     <Input
                       {...p}
@@ -2791,6 +2832,14 @@ export default function AdminPage() {
               <span className="t-sm truncate" style={{ fontWeight: 600 }}>{drawer.employee}</span>
               <span className="num t-sm">{money(drawer.openTotalCents + drawer.cashSalesCents)}</span>
             </div>
+          ) : null}
+          {/* Everyone with a real account can change their own email and
+              password without going through the team roster — a manager can't
+              reach that page, and an owner shouldn't have to. */}
+          {myAccount ? (
+            <Button size="sm" variant="ghost" icon="user" onClick={() => { setMeOpen(true); setMeErr(""); }} block>
+              My account
+            </Button>
           ) : null}
           <Button size="sm" variant="ghost" icon="logout" onClick={staffLogout} block>
             Sign out
@@ -3854,6 +3903,18 @@ export default function AdminPage() {
             subtitle="What each person's account can reach, and how they sign in."
           >
             <div className="stack g-4">
+              {/* The shared password isn't a person, so there's no row for it
+                  here and nothing to edit under My account. Say what to do
+                  about that rather than leaving it to be discovered. */}
+              {sharedPasswordSession ? (
+                <Note tone="warn" title="You're signed in with the shared admin password">
+                  That password isn&rsquo;t an account — it has no email, no personal password, and nothing
+                  to change under My account. Add yourself to the team below (name and PIN), then set your
+                  role here to <b>Owner</b> and give yourself an email and a password. After that you sign
+                  in as yourself, and the shared password goes back to being the spare key.
+                </Note>
+              ) : null}
+
               <div className="stack g-2">
                 {(["OWNER", "MANAGER", "EMPLOYEE"] as Role[]).map((r) => (
                   <div key={r} className="row g-2" style={{ alignItems: "baseline" }}>
@@ -3985,9 +4046,11 @@ export default function AdminPage() {
               />
 
               <Note tone="info">
-                Changing a role takes effect the next time they load a page — the role is read fresh on
-                every request rather than stored in their sign-in, so switching someone off actually locks
-                them out straight away.
+                Passwords are emailed automatically when you generate one, and shown here once as a backup.
+                There&rsquo;s no way to re-send an existing password — it&rsquo;s hashed the moment it&rsquo;s
+                made and never stored readable — so if someone loses theirs, generate a new one. Role changes
+                take effect on their next page load: the role is read fresh on every request rather than
+                stored in their sign-in, so switching an account off locks it out straight away.
               </Note>
             </div>
           </Card>
@@ -8042,6 +8105,70 @@ export default function AdminPage() {
             {termsErr ? <Note tone="error">{termsErr}</Note> : null}
           </div>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={meOpen}
+        onClose={() => setMeOpen(false)}
+        title="My account"
+        description={myAccount ? `${myAccount.name} · ${myAccount.roleLabel}` : undefined}
+        footer={
+          <div className="row wrap g-2">
+            <Button variant="primary" icon="check" loading={busy} onClick={() => void saveMyAccount()}>Save</Button>
+            <Button variant="ghost" onClick={() => setMeOpen(false)}>Cancel</Button>
+          </div>
+        }
+      >
+        <div className="stack g-4">
+          {myAccount?.mustChangePassword ? (
+            <Note tone="warn" title="Set your own password">
+              You&rsquo;re still using the one that was generated for you. Anyone who saw that email can
+              sign in as you until you change it.
+            </Note>
+          ) : null}
+
+          <Field label="Email" hint="This is what you sign in with.">
+            {(p) => (
+              <Input
+                {...p}
+                type="email"
+                inputMode="email"
+                autoCapitalize="none"
+                autoComplete="username"
+                value={meEmail}
+                onChange={(e) => { setMeEmail(e.target.value); setMeErr(""); }}
+              />
+            )}
+          </Field>
+
+          {myAccount?.hasPassword ? (
+            <Field label="Current password" hint="Only needed if you're changing your password.">
+              {(p) => (
+                <Input
+                  {...p}
+                  type="password"
+                  autoComplete="current-password"
+                  value={meCurrent}
+                  onChange={(e) => { setMeCurrent(e.target.value); setMeErr(""); }}
+                />
+              )}
+            </Field>
+          ) : null}
+
+          <Field label="New password" hint="At least 8 characters. Leave blank to keep the one you have.">
+            {(p) => (
+              <Input
+                {...p}
+                type="password"
+                autoComplete="new-password"
+                value={meNew}
+                onChange={(e) => { setMeNew(e.target.value); setMeErr(""); }}
+              />
+            )}
+          </Field>
+
+          {meErr ? <Note tone="error">{meErr}</Note> : null}
+        </div>
       </Modal>
 
       <div id="printzone" ref={printRef}></div>

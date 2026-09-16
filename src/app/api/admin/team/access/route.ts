@@ -5,6 +5,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless, currentRole } from "@/lib/perm";
 import { normalizeRole, ROLE_LABEL, type Role } from "@/lib/roles";
 import { randomBytes } from "crypto";
+import { sendStaffAccessEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -170,11 +171,28 @@ export async function PATCH(req: NextRequest) {
 
     const updated = await db.employee.update({ where: { id: emp.id }, data });
 
+    /* Email them the details. The password is in that email because there is
+       nowhere else to get it — it's hashed on generation and never stored
+       readable. It's ALSO returned below and shown on screen once, because
+       email is the part of this that can silently fail, and "the account is
+       made but nobody can sign in" is the worst outcome here. */
+    let emailed: boolean | undefined;
+    if (issuedPassword && updated.email && finalRole !== "EMPLOYEE") {
+      const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+      try {
+        await sendStaffAccessEmail(updated.email, updated.name, ROLE_LABEL[finalRole], issuedPassword, `${base}/admin`);
+        emailed = true;
+      } catch {
+        emailed = false;
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       employee: { id: updated.id, name: updated.name, role: normalizeRole(updated.role), email: updated.email, active: updated.active },
       // Returned exactly once — it is not stored anywhere in readable form.
       issuedPassword: issuedPassword || undefined,
+      emailed,
       warning: needsLogin
         ? `${updated.name} is set to ${ROLE_LABEL[finalRole]} but can't sign in yet — they need an email address and a password.`
         : undefined,

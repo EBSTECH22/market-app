@@ -1,24 +1,111 @@
 const RESEND_URL = "https://api.resend.com/emails";
 const FROM = process.env.EMAIL_FROM || "Community Harvest <orders@dailybreadbaked.com>";
 
+/** Where vendor replies land. Falls back to the From address. */
+function replyTo(): string {
+  return process.env.EMAIL_REPLY_TO || FROM;
+}
+
 function baseUrl() {
   return process.env.NEXT_PUBLIC_BASE_URL || "https://market.dailybreadbaked.com";
 }
 
-async function send(to: string, subject: string, html: string) {
+/**
+ * Plain-text version of an HTML email.
+ *
+ * Sending HTML with no text alternative is one of the oldest spam signals
+ * there is — real mail clients produce multipart messages, bulk blasters often
+ * don't. It also means the email still makes sense when a client blocks images
+ * or strips styling, which is what most corporate filters do.
+ *
+ * Derived from the HTML rather than written per template, so the two can never
+ * drift apart as the templates change.
+ */
+function htmlToText(html: string): string {
+  return html
+    // links become "text (url)" so nothing is lost without markup
+    .replace(/<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, label) => {
+      const text = String(label).replace(/<[^>]+>/g, "").trim();
+      return text && !String(href).includes(text) ? `${text} (${href})` : String(href);
+    })
+    .replace(/<img\s[^>]*alt=["']([^"']*)["'][^>]*>/gi, "$1")
+    .replace(/<img\b[^>]*>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    // table cells would otherwise run together as "BoothA3"
+    .replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, ": ")
+    .replace(/<\/(p|div|tr|h[1-6]|li)>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "- ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&rsquo;|&#8217;/g, "\u2019")
+    .replace(/&ldquo;/g, "\u201c")
+    .replace(/&rdquo;/g, "\u201d")
+    .replace(/&mdash;/g, "\u2014")
+    .replace(/&times;/g, "x")
+    .replace(/&[a-z]+;/gi, "")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter((line, i, arr) => line !== "" || arr[i - 1] !== "")
+    .join("\n")
+    .trim();
+}
+
+/**
+ * @param opts.listUnsubscribeUrl set ONLY for mail someone can opt out of.
+ *   Never on an agreement or an invoice — those aren't a subscription, and
+ *   offering to unsubscribe from them would be both wrong and confusing.
+ */
+async function send(
+  to: string,
+  subject: string,
+  html: string,
+  opts?: { listUnsubscribeUrl?: string }
+): Promise<boolean> {
   if (!process.env.RESEND_API_KEY) {
     console.warn("RESEND_API_KEY not set — email skipped:", subject);
-    return;
+    return false;
   }
-  const res = await fetch(RESEND_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ from: FROM, to, subject, html }),
-  });
-  if (!res.ok) console.error("Resend error", res.status, await res.text());
+
+  const headers: Record<string, string> = {};
+  if (opts?.listUnsubscribeUrl) {
+    headers["List-Unsubscribe"] = `<${opts.listUnsubscribeUrl}>`;
+    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  }
+
+  try {
+    const res = await fetch(RESEND_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: FROM,
+        to,
+        subject,
+        html,
+        // Multipart: filters mark HTML-only mail down, and this is what shows
+        // when images are blocked.
+        text: htmlToText(html),
+        reply_to: replyTo(),
+        ...(Object.keys(headers).length ? { headers } : {}),
+      }),
+    });
+    if (!res.ok) {
+      // Recipient and subject included so a failure is findable in the logs
+      // rather than being an anonymous "Resend error".
+      console.error(`[email] FAILED to ${to} — "${subject}" — ${res.status} ${await res.text()}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[email] threw sending to ${to} — "${subject}":`, err);
+    return false;
+  }
 }
 
 function shell(inner: string) {
@@ -465,4 +552,40 @@ export async function sendViewingEmail(to: string, contactName: string, business
     <div style="display:inline-block;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:14px 22px;font-size:16px;font-weight:800;margin-bottom:14px;">${when}</div>
     <p style="font-size:13px;color:#374151;">Community Harvest \u2014 <b>510 N Main St, Noble, OK 73068</b>. You&rsquo;ll see the booth spaces, the register setup, and how restocking works. Bring your questions! Need a different time? Just reply to this email.</p>`;
   await send(to, `Booth viewing \u2014 ${when} \u00b7 Community Harvest`, shell(inner));
+}
+
+/**
+ * Their sign-in details for the market system.
+ *
+ * Sent when an owner or manager account is created or its password is reset.
+ * The password is included because there is nowhere else to get it — it is
+ * hashed the moment it's generated and never stored in readable form, so if
+ * this email doesn't arrive, the only fix is to generate another one.
+ *
+ * `tempPassword` is omitted when only the role or email changed, so the same
+ * template covers "here's your account" and "your access changed" without
+ * mailing a password nobody asked to have reissued.
+ */
+export async function sendStaffAccessEmail(
+  to: string,
+  name: string,
+  roleLabel: string,
+  tempPassword: string,
+  loginUrl: string
+) {
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your Community Harvest sign-in</h2>
+    <p style="font-size:14px;color:#374151;">Hi ${name} — your account for the market system is ready. You're set up as <b>${roleLabel}</b>.</p>
+    <table role="presentation" style="width:100%;text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:4px 14px;margin:14px 0;font-size:13.5px;color:#374151;">
+      <tr><td style="padding:6px 0;">Email</td><td style="padding:6px 0;text-align:right;"><b>${to}</b></td></tr>
+      ${tempPassword
+        ? `<tr><td style="padding:6px 0;">Password</td><td style="padding:6px 0;text-align:right;"><b style="font-family:'IBM Plex Mono',monospace;letter-spacing:0.04em;">${tempPassword}</b></td></tr>`
+        : ""}
+    </table>
+    ${tempPassword
+      ? `<p style="font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;text-align:left;">Change this password once you&rsquo;re in — use the <b>My account</b> button at the bottom of the sidebar. Until you do, anyone who sees this email can sign in as you.</p>`
+      : ""}
+    <p style="margin:18px 0;"><a href="${loginUrl}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Sign in</a></p>
+    <p style="font-size:12px;color:#9ca3af;">Pick <b>Owner or manager</b> on the sign-in screen, not Employee — that tab is for the register PIN.</p>`;
+  await send(to, `Your sign-in for ${process.env.MARKET_NAME || "Community Harvest"}`, shell(inner));
 }
