@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { hashPassword, currentEmployeeId } from "@/lib/auth";
 import { runRoute } from "@/lib/handler";
-import { denyUnless, normalizeRole, currentRole, ROLE_LABEL, type Role } from "@/lib/perm";
+import { denyUnless, currentRole } from "@/lib/perm";
+import { normalizeRole, ROLE_LABEL, type Role } from "@/lib/roles";
 import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";

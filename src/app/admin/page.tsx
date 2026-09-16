@@ -14,7 +14,7 @@ import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
 import { CashTender } from "@/components/register/CashTender";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
-import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/perm";
+import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string };

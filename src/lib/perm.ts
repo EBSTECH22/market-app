@@ -1,81 +1,16 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin, currentEmployeeId } from "@/lib/auth";
+import { type Role, type Capability, can, normalizeRole } from "@/lib/roles";
 
 /**
- * Who can do what.
- *
- * THE POINT OF THIS FILE: hiding a tab is not security. A manager whose browser
- * never renders the Payroll button can still POST to /api/admin/payroll with
- * two lines of JavaScript. So every route is gated by a CAPABILITY here, and
- * the navigation is derived from the same table — the screen and the server can
- * disagree about what's pretty, never about what's allowed.
- *
- * THREE ROLES:
- *   OWNER    — everything. Kalie.
- *   MANAGER  — runs the market day to day: vendors, agreements, applications,
- *              and chasing what's owed. Cannot move money, see the books, touch
- *              payroll, or change settings.
- *   EMPLOYEE — the register, the drawer, their own timeclock. What a cashier
- *              needs and nothing else.
- *
- * Adding a capability is deliberately a bit of work: a new one has to be named
- * here, granted to a role here, and asserted in the route. That friction is the
- * feature — it's what stops a new endpoint quietly shipping wide open.
+ * Session-aware permission checks. SERVER ONLY — this reaches for cookies and
+ * the database, so importing it from a client component pulls `next/headers`
+ * into the browser bundle and fails the build. Client code wants @/lib/roles.
  */
 
-export type Role = "OWNER" | "MANAGER" | "EMPLOYEE";
-
-export const ROLE_LABEL: Record<Role, string> = {
-  OWNER: "Owner",
-  MANAGER: "Office manager",
-  EMPLOYEE: "Employee",
-};
-
-export const ROLE_BLURB: Record<Role, string> = {
-  OWNER: "Everything, including payroll, settings, refunds and the books.",
-  MANAGER: "Vendors, agreements, applications and chasing what's owed — plus the register. No payroll, settings, refunds or financials.",
-  EMPLOYEE: "The register, the drawer and their own time clock.",
-};
-
-export type Capability =
-  /** Register, drawer, tickets, item lookup, time clock, customer lookup. */
-  | "ops"
-  /** Vendors, agreements, applications, onboarding, calendar, complaints, posts, tents, customers. */
-  | "market"
-  /** The invoice ledger and chasing what's owed: reading balances, re-sending pay links. */
-  | "collections"
-  /** Money going OUT: refunds, voids, balance adjustments, charging a card on file. */
-  | "money"
-  /** Reports, Stripe balance, payouts, month-end settlement. */
-  | "financials"
-  /** Employees, roles, wages, W-4s, staff documents, push alerts. */
-  | "people"
-  /** Tax rates, market configuration. */
-  | "config";
-
-const GRANTS: Record<Role, Capability[]> = {
-  OWNER: ["ops", "market", "collections", "money", "financials", "people", "config"],
-  MANAGER: ["ops", "market", "collections"],
-  EMPLOYEE: ["ops"],
-};
-
-export function normalizeRole(raw: unknown): Role {
-  const v = String(raw || "").toUpperCase();
-  if (v === "OWNER") return "OWNER";
-  if (v === "MANAGER") return "MANAGER";
-  // Anything unrecognised is the least privileged role, never the most.
-  return "EMPLOYEE";
-}
-
-export function can(role: Role | null, cap: Capability): boolean {
-  if (!role) return false;
-  return GRANTS[role].includes(cap);
-}
-
-export function capabilitiesFor(role: Role | null): Capability[] {
-  return role ? [...GRANTS[role]] : [];
-}
+export { ROLE_LABEL, ROLE_BLURB, can, capabilitiesFor, normalizeRole } from "@/lib/roles";
+export type { Role, Capability } from "@/lib/roles";
 
 /**
  * The role of whoever is making this request, or null if nobody is.
