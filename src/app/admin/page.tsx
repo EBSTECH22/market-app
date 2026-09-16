@@ -169,7 +169,12 @@ const STAFF_TABS: readonly AdminTab[] = ["register", "time", "floor"];
 
 /* Grouped navigation — twelve peer buttons in one flat row gave no sense of
    what belonged together or what a cashier was allowed to touch. */
-const NAV: { group: string; items: { id: AdminTab; label: string; icon: IconName }[] }[] = [
+/* `href` turns an entry into a link to another screen rather than a tab switch.
+   Applications needed it: the pipeline lives on its own page at
+   /admin/applications, which was reachable ONLY from a small button buried in
+   the Vendors tab. If you didn't already know the page existed, you couldn't
+   find it — which is exactly what happened. */
+const NAV: { group: string; items: { id: string; label: string; icon: IconName; href?: string }[] }[] = [
   {
     group: "Daily",
     items: [
@@ -189,6 +194,7 @@ const NAV: { group: string; items: { id: AdminTab; label: string; icon: IconName
   {
     group: "People",
     items: [
+      { id: "applications", label: "Applications", icon: "inbox", href: "/admin/applications" },
       { id: "vendors", label: "Vendors", icon: "store" },
       { id: "onboarding", label: "Onboarding", icon: "user" },
       { id: "contracts", label: "Agreements", icon: "contract" },
@@ -2228,8 +2234,12 @@ export default function AdminPage() {
      pending work is visible without opening every tab. */
   const pendingApps = applications.filter((a) => a.status === "PENDING").length;
   const openComplaints = complaints.filter((c) => c.status !== "CLOSED").length;
-  const navBadge: Partial<Record<AdminTab, number>> = {
-    vendors: pendingApps + openComplaints,
+  /* Keyed by string, not AdminTab: the Applications entry links to its own
+     page and has no tab id. The pending count moves with it — it was never
+     really about the Vendors tab. */
+  const navBadge: Record<string, number | undefined> = {
+    applications: pendingApps,
+    vendors: openComplaints,
     onboarding: onboarding.length,
   };
 
@@ -2302,27 +2312,42 @@ export default function AdminPage() {
 
         <div className="sidebar-nav">
           {NAV.map((group) => {
-            const items = group.items.filter((i) => (visibleTabs as readonly string[]).includes(i.id));
+            /* Link entries aren't tabs, so they aren't in visibleTabs — they're
+               owner-only by the same rule that hides the People group's tabs
+               from staff. */
+            const items = group.items.filter((i) =>
+              i.href ? role === "admin" : (visibleTabs as readonly string[]).includes(i.id)
+            );
             if (items.length === 0) return null;
             return (
               <div key={group.group}>
                 <div className="nav-group-label">{group.group}</div>
                 <div className="stack" style={{ gap: 2 }}>
-                  {items.map((i) => (
-                    <button
-                      key={i.id}
-                      type="button"
-                      className="nav-item"
-                      aria-current={tab === i.id ? "page" : undefined}
-                      onClick={() => go(i.id)}
-                    >
-                      <Icon name={i.icon} size={16} />
-                      <span className="truncate">{i.label}</span>
-                      {navBadge[i.id] ? (
-                        <span className="nav-item-count">{navBadge[i.id]}</span>
-                      ) : null}
-                    </button>
-                  ))}
+                  {items.map((i) =>
+                    i.href ? (
+                      <a key={i.id} className="nav-item" href={i.href}>
+                        <Icon name={i.icon} size={16} />
+                        <span className="truncate">{i.label}</span>
+                        {navBadge[i.id] ? (
+                          <span className="nav-item-count">{navBadge[i.id]}</span>
+                        ) : null}
+                      </a>
+                    ) : (
+                      <button
+                        key={i.id}
+                        type="button"
+                        className="nav-item"
+                        aria-current={tab === i.id ? "page" : undefined}
+                        onClick={() => go(i.id as AdminTab)}
+                      >
+                        <Icon name={i.icon} size={16} />
+                        <span className="truncate">{i.label}</span>
+                        {navBadge[i.id] ? (
+                          <span className="nav-item-count">{navBadge[i.id]}</span>
+                        ) : null}
+                      </button>
+                    )
+                  )}
                 </div>
               </div>
             );

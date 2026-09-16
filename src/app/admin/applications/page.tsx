@@ -170,12 +170,14 @@ function waitingText(a: App): string {
  *
  * The date comes from the agreement's `endDate`, which the backend stamps at
  * the moment of withdrawal — authoritative, and present whether or not anyone
- * typed a reason. The reason is pulled from the line the backend appends to
- * their application notes, e.g. `[9/16/2026] Backed out: went with another
- * market`; no line simply means no reason was given.
+ * typed a reason. Someone who pulled out before any agreement existed has no
+ * agreement to read, so we fall back to `decidedAt`, which the withdraw action
+ * stamps for exactly this case. The reason is pulled from the line the backend
+ * appends to their application notes, e.g. `[9/16/2026] Backed out: went with
+ * another market`; no line simply means no reason was given.
  */
 function backedOut(a: App): { at: Date | null; reason: string } {
-  const raw = a.agreement?.endDate;
+  const raw = a.agreement?.endDate || a.decidedAt;
   const at = raw ? new Date(raw) : null;
   let reason = "";
   const lines = String(a.adminNotes || "").split("\n");
@@ -305,6 +307,36 @@ export default function ApplicationsPage() {
     // "decline with the standard wording".
     if (reason === null) return;
     await act(a.id, { action: "decline", reason });
+  };
+
+  /* Them withdrawing, not us declining. No email — they already know, and
+     "we've received your decision" from us would land as a rejection. */
+  const withdraw = async (a: App) => {
+    const reason = await dialog.prompt({
+      title: `${a.businessName} backed out?`,
+      body: "For when they tell you the market isn't what they need. Nobody is emailed. They move to the Backed out list, with whatever you write here, so you can answer “whatever happened to them?” later.",
+      label: "Why did they back out?",
+      hint: "Optional, but worth a line — patterns show up over a season.",
+      placeholder: "Decided the booth was too small for her setup",
+      multiline: true,
+      tone: "warn",
+      confirmLabel: "Mark as backed out",
+    });
+    if (reason === null) return;
+    const d = await act(a.id, { action: "withdraw", reason });
+    if (d) toast.success(`${a.businessName} marked as backed out`, "They're in the Backed out list now.");
+  };
+
+  /* Undo. Misclicks happen, and so do people changing their minds back. */
+  const reopen = async (a: App) => {
+    const yes = await dialog.confirm({
+      title: `Put ${a.businessName} back in the pipeline?`,
+      body: "They return to New applications. The note about backing out stays on their record.",
+      confirmLabel: "Reopen",
+    });
+    if (!yes) return;
+    const d = await act(a.id, { action: "reopen" });
+    if (d) toast.success(`${a.businessName} reopened`, "Back in New applications.");
   };
 
   const submitContract = async (a: App) => {
@@ -476,6 +508,16 @@ export default function ApplicationsPage() {
         return <span className="t-muted">No reason recorded</span>;
       },
     },
+    {
+      key: "reopen",
+      header: "",
+      align: "right",
+      cell: (a) => (
+        <Button size="sm" variant="ghost" icon="refresh" disabled={busy} onClick={() => reopen(a)}>
+          Reopen
+        </Button>
+      ),
+    },
   ];
 
   const declinedColumns: Column<App>[] = [
@@ -588,6 +630,14 @@ export default function ApplicationsPage() {
 
             <Button icon="user" disabled={busy} onClick={() => addAsVendor(a)}>
               Add as vendor
+            </Button>
+
+            {/* Two different endings, kept visibly apart. "Decline" is our
+                decision and emails them; "They backed out" is theirs and
+                emails nobody. Filing one under the other loses the reason
+                you'd want months later. */}
+            <Button icon="arrowLeft" disabled={busy} onClick={() => withdraw(a)}>
+              They backed out
             </Button>
 
             <Button variant="dangerSoft" icon="close" disabled={busy} onClick={() => decline(a)}>
@@ -788,19 +838,19 @@ export default function ApplicationsPage() {
 
   /** Kept so you can answer "whatever happened to them?" months later. */
   const renderWithdrawn = () => (
-    <Card title={PHASE_LABEL.WITHDRAWN} subtitle={plural(rows.length, "vendor")} flush>
+    <Card title={PHASE_LABEL.WITHDRAWN} subtitle={plural(rows.length, "person")} flush>
       <DataTable
         rows={rows}
         columns={withdrawnColumns}
         rowKey={(a) => a.id}
         mobileCards
         defaultSort={{ key: "when", dir: "desc" }}
-        caption="Vendors who backed out before they started selling"
+        caption="Applicants and vendors who pulled out before they started selling"
         empty={
           <EmptyState
             icon="checkCircle"
             title="Nobody has backed out"
-            body="Everyone you've signed up is still with you. Anyone you mark as backed out is kept here, with the reason, so the record survives."
+            body="Everyone still with you. Anyone you mark as backed out is kept here, with the reason, so the record survives."
           />
         }
       />

@@ -100,10 +100,17 @@ export function phaseFor(a: {
   /** Status of their most recent agreement, if any. */
   agreementStatus?: string | null;
 }): Phase {
-  // Checked before DECLINED: someone we accepted who then pulled out is a
-  // different thing from someone we turned down, and it's the one the office
-  // wants to see separately.
-  if (a.agreementStatus === "WITHDRAWN") return "WITHDRAWN";
+  /* Checked before DECLINED: someone who pulled out is a different thing from
+     someone we turned down, and it's the one the office wants to see
+     separately.
+
+     TWO ways to back out, and both land here. An applicant can decide the
+     market isn't for them before there is any agreement — that's the
+     application's own status. Or a vendor with an agreement can withdraw after
+     signing up — that's the agreement's status. Only the second existed
+     before, so an applicant who changed their mind had nowhere to go but
+     "Declined", which said we rejected them. */
+  if (a.status === "WITHDRAWN" || a.agreementStatus === "WITHDRAWN") return "WITHDRAWN";
   if (a.status === "DECLINED") return "DECLINED";
   if (a.vendorId && a.vendorPortalLocked === false) return "LIVE";
   if (a.vendorId || a.hasAgreement) return "IN_PROGRESS";

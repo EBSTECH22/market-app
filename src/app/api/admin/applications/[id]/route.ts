@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin, hashPassword } from "@/lib/auth";
 import { sendApplicationDecisionEmail, sendViewingEmail, sendContractSignEmail } from "@/lib/email";
+import { TZ } from "@/lib/time";
 import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,8 @@ export const dynamic = "force-dynamic";
 //   { action: "schedule_viewing", when }       — emails applicant, stage -> VIEWING
 //   { action: "create_contract", boothLabel, rentDollars, startDate }
 //       -> creates LOCKED vendor (no credentials email), creates contract, emails signing link
+//   { action: "withdraw", reason? }            — THEY pulled out; any stage
+//   { action: "reopen" }                       — undo a withdrawal
 //   { action: "decline", reason? }             — any stage
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -132,6 +135,35 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     try { await sendContractSignEmail(vendor.email, vendor.businessName, `${base}/sign/${token}`); } catch {}
 
     return NextResponse.json({ ok: true, vendor: { id: vendor.id, code: vendor.code }, contractId: contract.id });
+  }
+
+  /* They decided the market wasn't for them.
+     Deliberately NOT the same as declining: no email goes out, because nobody
+     needs to be told a decision they made themselves, and it would read as us
+     rejecting them. The reason is appended to the notes in the same
+     `[date] Backed out: …` shape the agreement-withdrawal path uses, so the
+     backed-out list reads both without caring which one happened. */
+  if (action === "withdraw") {
+    const reason = String(body.reason || "").trim().slice(0, 500);
+    const stamp = new Date().toLocaleDateString("en-US", { timeZone: TZ });
+    const line = `[${stamp}] Backed out: ${reason}`;
+    const notes = [String(app.adminNotes || "").trim(), line].filter(Boolean).join("\n").slice(0, 5000);
+    const updated = await db.vendorApplication.update({
+      where: { id: app.id },
+      data: { status: "WITHDRAWN", stage: "DONE", decidedAt: new Date(), adminNotes: notes },
+    });
+    return NextResponse.json({ application: updated });
+  }
+
+  /* Misclicks happen, and "they changed their mind back" happens more often
+     than you'd think. Puts them back in the New list at the stage they'd
+     actually reached — the note stays, because the history is the point. */
+  if (action === "reopen") {
+    const updated = await db.vendorApplication.update({
+      where: { id: app.id },
+      data: { status: "PENDING", stage: app.vendorId ? "VENDOR" : "NEW", decidedAt: null },
+    });
+    return NextResponse.json({ application: updated });
   }
 
   if (action === "decline") {
