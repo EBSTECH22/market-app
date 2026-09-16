@@ -9,7 +9,7 @@ import {
   DataTable, DescList, Badge, Card, Stat, EmptyState, Note, Skeleton,
   SkeletonStats, PageHeader, type Column, type IconName, type BadgeTone,
 } from "@/components/ui";
-import { money, fmtDate, fmtDateTime, fmtTime, relTime, isoDate, isoDateTime, fmtPhone, plural, dollarsToCents } from "@/lib/format";
+import { money, fmtDate, fmtDateShort, fmtDateTime, fmtTime, relTime, isoDate, isoDateTime, fmtPhone, plural, dollarsToCents } from "@/lib/format";
 import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
 
@@ -17,7 +17,55 @@ type Vendor = { id: string; code: string; businessName: string; contactName: str
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number };
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number };
+/** Computed server-side in /api/admin/contracts — see src/lib/agreement.ts. */
+type Delivery = {
+  state: "DRAFT" | "SENT" | "OPENED" | "SIGNED" | "EXECUTED";
+  label: string;
+  sentAt: string | null;
+  viewedAt: string | null;
+  daysSinceSent: number | null;
+  daysSinceOpened: number | null;
+  stale: boolean;
+};
+
+const DELIVERY_TONE: Record<Delivery["state"], BadgeTone> = {
+  DRAFT: "neutral", SENT: "info", OPENED: "warn", SIGNED: "info", EXECUTED: "success",
+};
+const DELIVERY_ICON: Record<Delivery["state"], IconName> = {
+  DRAFT: "clipboard", SENT: "mail", OPENED: "eye", SIGNED: "check", EXECUTED: "checkCircle",
+};
+
+/** Where an agreement is, and when it last moved. The whole point is the
+    second line: "Opened" without a timestamp doesn't tell you whether to
+    chase them today or leave it another day. */
+function DeliveryCell({ d }: { d: Delivery | undefined }) {
+  if (!d) return <Badge tone="neutral" dot>Unknown</Badge>;
+  const when =
+    d.state === "OPENED" && d.viewedAt
+      ? `Opened ${relTime(d.viewedAt)} · ${fmtDateTime(d.viewedAt)}`
+      : (d.state === "SIGNED" || d.state === "EXECUTED") && d.viewedAt
+        ? `Opened ${fmtDateShort(d.viewedAt)}`
+        : d.state === "SENT" && d.sentAt
+          ? `Sent ${relTime(d.sentAt)} · never opened`
+          : d.state === "DRAFT"
+            ? "Not emailed yet"
+            : null;
+  return (
+    <div className="stack g-1" style={{ minWidth: 0 }}>
+      <span className="row g-1 wrap">
+        <Badge tone={DELIVERY_TONE[d.state]} icon={DELIVERY_ICON[d.state]}>{d.label}</Badge>
+        {d.stale ? (
+          <Badge tone="danger" icon="warning">
+            {plural(d.daysSinceSent ?? 0, "day")} out
+          </Badge>
+        ) : null}
+      </span>
+      {when ? <span className="t-xs t-muted truncate">{when}</span> : null}
+    </div>
+  );
+}
+
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; delivery?: Delivery };
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
@@ -4869,7 +4917,18 @@ export default function AdminPage() {
                       { label: "Starts", value: c ? fmtDate(c.startDate) : "—" },
                       { label: "Agreement sent", value: c ? (c.sent ? "Yes" : "Not sent yet") : "No agreement yet" },
                       ...(c && !c.vendorSignedAt
-                        ? [{ label: "Opened by vendor", value: c.viewedAt ? fmtDate(c.viewedAt) : "Not opened yet" }]
+                        ? [{
+                            label: "Opened by vendor",
+                            /* Date AND time — "they opened it" is only useful
+                               if you can see whether that was an hour ago or
+                               three weeks ago. */
+                            value: c.viewedAt ? (
+                              <span>
+                                {fmtDateTime(c.viewedAt)}
+                                <span className="t-muted"> · {relTime(c.viewedAt)}</span>
+                              </span>
+                            ) : "Not opened yet",
+                          }]
                         : []),
                       { label: "They signed", value: c?.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
                       { label: "You signed", value: c?.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
@@ -5720,18 +5779,17 @@ export default function AdminPage() {
                 },
                 {
                   key: "signing",
-                  header: "Signatures",
-                  sortBy: (c) => (c.vendorSignedAt && c.marketSignedAt ? 0 : c.vendorSignedAt || c.marketSignedAt ? 1 : 2),
-                  cell: (c) =>
-                    c.vendorSignedAt && c.marketSignedAt ? (
-                      <Badge tone="success" dot>Fully executed</Badge>
-                    ) : c.vendorSignedAt ? (
-                      <Badge tone="warn" dot>Awaiting your signature</Badge>
-                    ) : c.marketSignedAt ? (
-                      <Badge tone="warn" dot>Awaiting vendor</Badge>
-                    ) : (
-                      <Badge tone="neutral" dot>Unsigned</Badge>
-                    ),
+                  header: "Where it's at",
+                  mobileLabel: "Agreement",
+                  /* Sort by how much attention it needs: stale first, then
+                     furthest from signed. */
+                  sortBy: (c) => {
+                    const d = c.delivery;
+                    if (!d) return 9;
+                    const rank = { DRAFT: 1, SENT: 2, OPENED: 3, SIGNED: 0, EXECUTED: 8 }[d.state];
+                    return d.stale ? rank - 0.5 : rank;
+                  },
+                  cell: (c) => <DeliveryCell d={c.delivery} />,
                 },
                 {
                   key: "status",
@@ -5823,7 +5881,18 @@ export default function AdminPage() {
                       { label: "Vendor signed", value: c.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
                       { label: "Market signed", value: c.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
                       ...(!c.vendorSignedAt
-                        ? [{ label: "Opened by vendor", value: c.viewedAt ? fmtDate(c.viewedAt) : "Not opened yet" }]
+                        ? [{
+                            label: "Opened by vendor",
+                            /* Date AND time — "they opened it" is only useful
+                               if you can see whether that was an hour ago or
+                               three weeks ago. */
+                            value: c.viewedAt ? (
+                              <span>
+                                {fmtDateTime(c.viewedAt)}
+                                <span className="t-muted"> · {relTime(c.viewedAt)}</span>
+                              </span>
+                            ) : "Not opened yet",
+                          }]
                         : []),
                       { label: "Card on file", value: c.vendor.cardLast4 ? `•••• ${c.vendor.cardLast4}` : "None" },
                     ]}
