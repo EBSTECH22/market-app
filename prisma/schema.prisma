@@ -49,8 +49,37 @@ model Item {
   // classified is taxed at the full rate, which is the safe direction to be
   // wrong in.
   taxClass   String   @default("STANDARD")
+  // What kind of thing this is — "Candles", "Baked goods", "Jewelry". Free text
+  // chosen from a suggested list rather than a fixed enum, because a market's
+  // categories are whatever walked in the door this season. Used only to
+  // compare against other vendors selling the same kind of thing.
+  category   String   @default("")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@index([category])
+}
+
+/**
+ * A price or sale-percent change, so "did that discount work" can be answered.
+ *
+ * There is no way to reconstruct this after the fact — an item's row only ever
+ * holds its CURRENT price, so the day a vendor put something on sale is simply
+ * gone unless it's written down when it happens. Which means this starts empty
+ * and only becomes useful after the next price change. Nothing to backfill.
+ */
+model PriceEvent {
+  id            String   @id @default(cuid())
+  itemId        String
+  vendorId      String
+  oldPriceCents Int
+  newPriceCents Int
+  oldSalePercent Int     @default(0)
+  newSalePercent Int     @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([itemId, createdAt])
+  @@index([vendorId])
 }
 
 model Sale {

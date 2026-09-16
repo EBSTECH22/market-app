@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { notifyVendorRestock } from "@/lib/customers";
 import { currentVendorId } from "@/lib/auth";
 import { normalizeTaxClass } from "@/lib/tax";
+import { effectiveCents } from "@/lib/pricetest";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const vendorId = currentVendorId();
@@ -13,7 +14,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const body = await req.json();
   let restock = false;
-  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number; taxClass?: string } = {};
+  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number; taxClass?: string; category?: string } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
   if (body.priceDollars !== undefined) {
     const price = Math.round(Number(body.priceDollars) * 100);
@@ -39,10 +40,31 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     data.salePercent = pct;
   }
   if (body.taxClass !== undefined) data.taxClass = normalizeTaxClass(body.taxClass);
+  if (body.category !== undefined) data.category = String(body.category || "").trim().slice(0, 40);
   if (typeof body.active === "boolean") data.active = body.active;
   if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 
   const updated = await db.item.update({ where: { id: item.id }, data });
+
+  /* Write down what the price WAS, at the moment it changes.
+     The item row only ever holds the current price, so without this the day a
+     vendor put something on sale is simply gone and "did that discount work"
+     can never be answered. Only logged when the price a shopper actually pays
+     moved — renaming an item isn't a price experiment. */
+  const oldEffective = effectiveCents(item.priceCents, item.salePercent);
+  const newEffective = effectiveCents(updated.priceCents, updated.salePercent);
+  if (oldEffective !== newEffective) {
+    try {
+      await db.priceEvent.create({
+        data: {
+          itemId: item.id, vendorId,
+          oldPriceCents: item.priceCents, newPriceCents: updated.priceCents,
+          oldSalePercent: item.salePercent || 0, newSalePercent: updated.salePercent || 0,
+        },
+      });
+    } catch { /* never let bookkeeping stop a vendor changing their own price */ }
+  }
+
   if (restock) notifyVendorRestock(vendorId).catch(() => {});
   return NextResponse.json({ item: updated });
 }

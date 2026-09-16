@@ -11,7 +11,7 @@ import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
 import { subscribeToPush } from "@/lib/pushclient";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
   vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
@@ -40,6 +40,15 @@ const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }
 
 /* Phones get the four most-used destinations plus a "More" sheet — seven
    equal tabs across a phone is unreadable and under the 44px target. */
+/* Suggested, not enforced. A market's categories are whatever walked in the
+   door this season, so vendors can type their own — but a shared list is what
+   makes the comparisons work at all, so the common ones are one tap. */
+const CATEGORY_SUGGESTIONS = [
+  "Baked goods", "Jams & preserves", "Honey", "Produce", "Meat & eggs", "Coffee & tea",
+  "Candles", "Soap & bath", "Jewelry", "Woodwork", "Home decor", "Art & prints",
+  "Clothing", "Pet", "Seasonal", "Other",
+];
+
 const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "insights", "money"];
 const MORE_MOBILE: VendorTab[] = ["page", "chat", "settings"];
 
@@ -170,7 +179,7 @@ export default function VendorDashboard() {
   const [tab, setTab] = useHashTab(VENDOR_TABS, "home");
   const [moreOpen, setMoreOpen] = useState(false);
   const [editItem, setEditItem] = useState<string | null>(null);
-  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0", food: false });
+  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0", food: false, category: "" });
   const [cardMsg, setCardMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [chat, setChat] = useState<{ id: string; vendorId: string; name: string; body: string; createdAt: string }[]>([]);
   const [chatMe, setChatMe] = useState("");
@@ -178,6 +187,19 @@ export default function VendorDashboard() {
   const [chatBusy, setChatBusy] = useState(false);
   const [postBody, setPostBody] = useState("");
   const [notifyFollowers, setNotifyFollowers] = useState(false);
+  const [itemCategory, setItemCategory] = useState("");
+
+  type Benchmarks = {
+    categorised: boolean;
+    windowDays?: number;
+    experiments: { itemId: string; itemName: string; line: string; verdict: string; confident: boolean }[];
+    benchmarks: {
+      category: string; otherVendorLabel: string;
+      marketMedianPriceCents: number; myMedianPriceCents: number;
+      marketMedianUnitsPerWeek: number; myMedianUnitsPerWeek: number; myItemCount: number;
+    }[];
+  };
+  const [bench, setBench] = useState<Benchmarks | null>(null);
 
   type ItemStat = {
     itemId: string; sku: string; name: string; priceCents: number; quantity: number;
@@ -212,6 +234,11 @@ export default function VendorDashboard() {
     const r = await fetch("/api/vendor/posts");
     if (r.ok) setMyPosts((await r.json()).posts);
   }, []);
+  const loadBench = useCallback(async () => {
+    const r = await fetch("/api/vendor/benchmarks");
+    if (r.ok) setBench(await r.json());
+  }, []);
+
   const loadStats = useCallback(async () => {
     const r = await fetch("/api/vendor/stats");
     if (r.ok) setStats(await r.json());
@@ -226,7 +253,7 @@ export default function VendorDashboard() {
 
   /* Loaded on demand rather than up front — both scan a vendor's whole sales
      history, and most visits to the portal are "did anything sell". */
-  useEffect(() => { if (tab === "insights") void loadStats(); }, [tab, loadStats]);
+  useEffect(() => { if (tab === "insights") { void loadStats(); void loadBench(); } }, [tab, loadStats, loadBench]);
   useEffect(() => { if (tab === "money" && !statement) void loadStatement(); }, [tab, statement, loadStatement]);
 
   const load = useCallback(async () => {
@@ -517,7 +544,7 @@ export default function VendorDashboard() {
     const res = await fetch("/api/vendor/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, priceDollars: price, quantity: qty || 0, taxClass: isFood ? "FOOD" : "STANDARD" }),
+      body: JSON.stringify({ name, priceDollars: price, quantity: qty || 0, taxClass: isFood ? "FOOD" : "STANDARD", category: itemCategory }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -526,7 +553,7 @@ export default function VendorDashboard() {
       return;
     }
     toast.success(`${name.trim()} added`, "Print a label for it and it's ready to scan.");
-    setName(""); setPrice(""); setQty(""); setIsFood(false);
+    setName(""); setPrice(""); setQty(""); setIsFood(false); setItemCategory("");
     await load();
   };
 
@@ -1157,7 +1184,7 @@ export default function VendorDashboard() {
                   caption="Your active items, prices, and floor counts"
                   onRowClick={(it) => {
                     setEditItem(it.id);
-                    setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0), food: String(it.taxClass || "STANDARD").toUpperCase() === "FOOD" });
+                    setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0), food: String(it.taxClass || "STANDARD").toUpperCase() === "FOOD", category: it.category || "" });
                   }}
                   empty={
                     <div className="card-body">
@@ -1274,6 +1301,17 @@ export default function VendorDashboard() {
                   {/* Oklahoma dropped the state's 4.5% on food and food
                       ingredients in 2024 but kept the local portion, so this
                       changes the tax the register charges. */}
+                  <Field
+                    label="What kind of thing is it?"
+                    hint="Lets us show you how your prices compare with other vendors selling the same kind of thing. Never shows anyone who."
+                  >
+                    {(p) => (
+                      <Select {...p} value={itemCategory} onChange={(e) => setItemCategory(e.target.value)}>
+                        <option value="">Pick one…</option>
+                        {CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </Select>
+                    )}
+                  </Field>
                   <Checkbox
                     checked={isFood}
                     onCheckedChange={setIsFood}
@@ -1430,6 +1468,79 @@ export default function VendorDashboard() {
                         ))}
                       </div>
                     </Card>
+                  ) : null}
+
+                  {bench && bench.experiments.length > 0 ? (
+                    <Card
+                      title="Did your price changes work?"
+                      subtitle="Before and after, on your own items. Judged on money made, not units — selling twice as many at half price is more work for the same money."
+                    >
+                      <div className="stack g-2">
+                        {bench.experiments.map((e) => (
+                          <div key={e.itemId} className="row g-2" style={{ alignItems: "flex-start" }}>
+                            <Badge
+                              tone={
+                                e.verdict === "WORKED" ? "success"
+                                : e.verdict === "LOST_MONEY" ? "danger"
+                                : e.verdict === "NO_DIFFERENCE" ? "warn" : "neutral"
+                              }
+                              dot
+                            >
+                              {e.verdict === "WORKED" ? "Worked"
+                                : e.verdict === "LOST_MONEY" ? "Cost you"
+                                : e.verdict === "NO_DIFFERENCE" ? "No change" : "Too early"}
+                            </Badge>
+                            <span className="t-sm grow" style={{ minWidth: 0 }}>{e.line}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ) : null}
+
+                  {bench && bench.benchmarks.length > 0 ? (
+                    <Card
+                      title="How you compare"
+                      subtitle="Against other vendors here selling the same kind of thing. Always a median across several vendors — never who."
+                    >
+                      <div className="stack g-3">
+                        {bench.benchmarks.map((b) => {
+                          const dearer = b.myMedianPriceCents > b.marketMedianPriceCents;
+                          const gap = b.marketMedianPriceCents > 0
+                            ? Math.round(((b.myMedianPriceCents - b.marketMedianPriceCents) / b.marketMedianPriceCents) * 100)
+                            : 0;
+                          return (
+                            <div key={b.category} className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
+                              <div className="row g-2" style={{ alignItems: "baseline" }}>
+                                <b>{b.category}</b>
+                                <span className="t-xs t-muted">vs {b.otherVendorLabel}</span>
+                              </div>
+                              <div className="row wrap g-4">
+                                <span className="t-sm">
+                                  Your typical price <b className="num">{money(b.myMedianPriceCents)}</b>
+                                  <span className="t-muted"> · market {money(b.marketMedianPriceCents)}</span>
+                                </span>
+                                <span className="t-sm">
+                                  You sell <b className="num">{b.myMedianUnitsPerWeek}/wk</b>
+                                  <span className="t-muted"> · market {b.marketMedianUnitsPerWeek}/wk</span>
+                                </span>
+                              </div>
+                              {Math.abs(gap) >= 15 ? (
+                                <span className="t-xs t-muted">
+                                  You&rsquo;re about {Math.abs(gap)}% {dearer ? "dearer" : "cheaper"} than the middle of this category.
+                                  {dearer ? " Worth knowing if things are sitting." : " Worth knowing if they're flying out."}
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  ) : bench && !bench.categorised ? (
+                    <Note tone="info" title="Want to see how your prices compare?">
+                      Set a category on your items — jams, candles, woodwork — and we&rsquo;ll show you how your
+                      prices and pace line up against other vendors here selling the same kind of thing. Always a
+                      median across several vendors, never who.
+                    </Note>
                   ) : null}
 
                   {stats.busiestLabel ? (
@@ -2064,6 +2175,7 @@ export default function VendorDashboard() {
                     quantity: editIF.qty,
                     salePercent: editIF.sale,
                     taxClass: editIF.food ? "FOOD" : "STANDARD",
+                    category: editIF.category,
                   });
                   if (ok) { toast.success("Item saved", "Changed the name or price? Print fresh labels so the shelf matches the register."); setEditItem(null); }
                 }}
@@ -2126,6 +2238,15 @@ export default function VendorDashboard() {
                   value={editIF.name}
                   onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))}
                 />
+              )}
+            </Field>
+
+            <Field label="What kind of thing is it?" hint="Used for the anonymous price comparison on What's working.">
+              {(p) => (
+                <Select {...p} value={editIF.category} onChange={(e) => setEditIF((f) => ({ ...f, category: e.target.value }))}>
+                  <option value="">Not set</option>
+                  {CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                </Select>
               )}
             </Field>
 

@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const vendorId = currentVendorId();
   if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
-  const { name, priceDollars, quantity, taxClass } = await req.json();
+  const { name, priceDollars, quantity, taxClass, category } = await req.json();
   const price = Math.round(Number(priceDollars) * 100);
   const qty = Math.max(0, Math.round(Number(quantity) || 0));
   if (!name?.trim()) return NextResponse.json({ error: "Item name required." }, { status: 400 });
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   const sku = `${vendor.code}-${String(count + 1).padStart(4, "0")}`;
 
   const item = await db.item.create({
-    data: { vendorId, sku, name: name.trim(), priceCents: price, quantity: qty, taxClass: normalizeTaxClass(taxClass) },
+    data: { vendorId, sku, name: name.trim(), priceCents: price, quantity: qty, taxClass: normalizeTaxClass(taxClass), category: String(category || "").trim().slice(0, 40) },
   });
   notifyVendorRestock(vendorId).catch(() => {});
   return NextResponse.json({ item });
