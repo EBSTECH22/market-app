@@ -183,11 +183,13 @@ export function Card({
     <section className={`card ${className}`} id={id}>
       {title || actions ? (
         <header className="card-head">
-          <div style={{ minWidth: 0 }}>
-            <h2 className="t-card truncate">{title}</h2>
+          <div className="card-head-text">
+            {/* Wraps rather than truncates — a card heading is the one piece of
+                context telling you what the buttons beside it act on. */}
+            <h2 className="t-card">{title}</h2>
             {subtitle ? <p className="t-xs t-muted" style={{ marginTop: 1 }}>{subtitle}</p> : null}
           </div>
-          {actions ? <div className="row g-2 shrink0 wrap">{actions}</div> : null}
+          {actions ? <div className="card-head-actions">{actions}</div> : null}
         </header>
       ) : null}
       {children != null ? (

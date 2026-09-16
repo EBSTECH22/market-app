@@ -1076,14 +1076,15 @@ export default function VendorDashboard() {
                 subtitle={`${plural(activeItems.length, "item")} selling · ${plural(floorUnits, "unit")} in stock${onSale > 0 ? ` · ${onSale} on sale` : ""}`}
                 actions={
                   <>
-                    <LinkButton href="/vendor/labels" size="sm" variant="secondary" icon="tag">
+                    {/* Distinct icons: these sat side by side both showing a tag. */}
+                    <LinkButton href="/vendor/labels" variant="secondary" icon="print">
                       Print labels
                     </LinkButton>
-                    <Button size="sm" variant="ghost" icon="tag" disabled={busy} onClick={runSaleOnEverything}>
-                      Run a sale on everything
+                    <Button variant="secondary" icon="tag" disabled={busy} onClick={runSaleOnEverything}>
+                      Put everything on sale
                     </Button>
                     {onSale > 0 ? (
-                      <Button size="sm" variant="ghost" disabled={busy} onClick={endAllSales}>
+                      <Button variant="dangerSoft" icon="close" disabled={busy} onClick={endAllSales}>
                         End all sales
                       </Button>
                     ) : null}

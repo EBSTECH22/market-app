@@ -417,6 +417,28 @@ h1, h2, h3, h4 { font-weight: 650; letter-spacing: -0.014em; line-height: 1.25; 
   padding: var(--sp-4) var(--sp-5);
   border-bottom: 1px solid var(--border-subtle);
   min-height: 52px;
+  /* Actions drop to their own line rather than crushing the title. Without
+     this, a card with several buttons truncated its heading to one letter. */
+  flex-wrap: wrap;
+}
+/* The title asks for 200px before the actions are allowed to wrap. */
+.card-head-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.card-head-actions {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+/* On a phone the actions get their own full-width row and split it evenly,
+   so every button is readable and thumb-sized. */
+@media (max-width: 560px) {
+  .card-head { align-items: flex-start; }
+  .card-head-actions { width: 100%; }
+  .card-head-actions > * { flex: 1 1 auto; }
 }
 .card-body   { padding: var(--sp-5); }
 .card-body-flush { padding: 0; }
