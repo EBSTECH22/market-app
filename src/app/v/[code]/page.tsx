@@ -2,18 +2,38 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Lightbox from "@/components/Lightbox";
+import {
+  Badge, Button, Card, EmptyState, Field, Icon, Input, LinkButton, Note,
+  SkeletonCard, Textarea, useToast,
+} from "@/components/ui";
+import { money, plural, relTime } from "@/lib/format";
 
 type Comment = { id: string; name: string; body: string; likes: number; createdAt: string };
 type Review = { id: string; name: string; rating: number; body: string; likes: number; createdAt: string; comments: Comment[] };
 type Vendor = { code: string; businessName: string; publicBlurb: string; acceptsPreorders: boolean; acceptsRequests: boolean };
 type Item = { name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; photoId?: string | null };
 
-const money = (c: number) => `$${(c / 100).toFixed(2)}`;
-const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
 const liked = (id: string) => { try { return window.localStorage.getItem(`ch_like_${id}`) === "1"; } catch { return false; } };
 const markLiked = (id: string) => { try { window.localStorage.setItem(`ch_like_${id}`, "1"); } catch {} };
 
+/** A star rating rendered as icons, with the number spoken for assistive tech. */
+function Stars({ n, size = 14 }: { n: number; size?: number }) {
+  return (
+    <span className="row g-1" role="img" aria-label={`${n} out of 5 stars`}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Icon
+          key={i}
+          name="star"
+          size={size}
+          style={{ color: i <= n ? "var(--warn)" : "var(--border-strong)", fill: i <= n ? "var(--warn)" : "none" }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export default function VendorPublicPage({ params }: { params: { code: string } }) {
+  const toast = useToast();
   const [vendor, setVendor] = useState<Vendor | null>(null);
   const [followOpen, setFollowOpen] = useState(false);
   const [followEmail, setFollowEmail] = useState("");
@@ -31,6 +51,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
   const [rvRating, setRvRating] = useState(5);
   const [rvBody, setRvBody] = useState("");
   const [rvMsg, setRvMsg] = useState("");
+  const [rvBusy, setRvBusy] = useState(false);
   // comment forms (per review)
   const [cmOpen, setCmOpen] = useState<string | null>(null);
   const [cmName, setCmName] = useState("");
@@ -43,6 +64,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
   const [mBody, setMBody] = useState("");
   const [mMsg, setMMsg] = useState("");
   const [mSent, setMSent] = useState(false);
+  const [mBusy, setMBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/public/vendor/${params.code}`);
@@ -55,13 +77,16 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
 
   const postReview = async () => {
     setRvMsg("");
+    setRvBusy(true);
     const res = await fetch(`/api/public/vendor/${params.code}/review`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: rvName, rating: rvRating, body: rvBody, website: "" }),
     });
     const data = await res.json();
+    setRvBusy(false);
     if (!res.ok) { setRvMsg(data.error || "Couldn't post."); return; }
-    setRvName(""); setRvBody(""); setRvRating(5); setRvMsg("Posted. ✓");
+    setRvName(""); setRvBody(""); setRvRating(5); setRvMsg("");
+    toast.success("Review posted", "Thanks for telling other shoppers about this booth.");
     await load();
   };
 
@@ -71,6 +96,7 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
       body: JSON.stringify({ name: cmName, body: cmBody, website: "" }),
     });
     if (res.ok) { setCmOpen(null); setCmName(""); setCmBody(""); await load(); }
+    else toast.error("Couldn't post that reply", "Give it another try in a moment.");
   };
 
   const like = async (kind: "review" | "comment", id: string) => {
@@ -82,16 +108,52 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
 
   const sendMessage = async () => {
     setMMsg("");
+    setMBusy(true);
     const res = await fetch(`/api/public/vendor/${params.code}/thread`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: msgType, name: mName, email: mEmail, phone: mPhone, body: mBody, website: "" }),
     });
     const data = await res.json();
+    setMBusy(false);
     if (!res.ok) { setMMsg(data.error || "Couldn't send."); return; }
     setMSent(true);
   };
 
-  if (missing) return <main style={{ padding: 60, textAlign: "center" }}>Vendor not found.</main>;
+  const share = async () => {
+    if (typeof window === "undefined") return;
+    const url = window.location.href;
+    const title = vendor ? `${vendor.businessName} — Community Harvest` : "Community Harvest";
+    const nav = navigator as Navigator & { share?: (d: { title?: string; text?: string; url?: string }) => Promise<void> };
+    if (typeof nav.share === "function") {
+      try {
+        await nav.share({ title, text: vendor?.publicBlurb || undefined, url });
+        return;
+      } catch (err) {
+        // The user tapping "cancel" in the OS sheet is not a failure.
+        if ((err as { name?: string })?.name === "AbortError") return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied", "Paste it anywhere to send someone straight to this booth.");
+    } catch {
+      toast.error("Couldn't copy the link", url);
+    }
+  };
+
+  if (missing) {
+    return (
+      <main className="public-wrap public-narrow">
+        <EmptyState
+          icon="store"
+          title="Vendor not found"
+          body="That booth code doesn't match anyone at the market — it may have moved on."
+          action={<LinkButton href="/market" variant="primary" icon="store">See all vendors</LinkButton>}
+        />
+      </main>
+    );
+  }
+
   const doFollow = async () => {
     setFollowMsg("");
     const r = await fetch("/api/public/follow", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vendorCode: vendor?.code, email: followEmail }) });
@@ -100,179 +162,371 @@ export default function VendorPublicPage({ params }: { params: { code: string } 
     setFollowDone(true);
   };
 
-  if (!vendor) return (
-    <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px" }}>
-      <div className="skel" style={{ width: 180, height: 26, margin: "0 auto 14px" }} />
-      <div className="skel" style={{ height: 150, marginBottom: 14 }} />
-      <div className="skel" style={{ height: 190, marginBottom: 14 }} />
-      <div className="skel" style={{ height: 240 }} />
-    </main>
-  );
+  if (!vendor) {
+    return (
+      <main className="public-wrap public-narrow">
+        <div className="stack g-4 mt-6" aria-busy>
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={4} />
+          <SkeletonCard lines={4} />
+        </div>
+      </main>
+    );
+  }
 
   const avg = reviews.length ? Math.round((reviews.reduce((n, r) => n + r.rating, 0) / reviews.length) * 10) / 10 : null;
 
   return (
-    <main style={{ maxWidth: 560, margin: "0 auto", padding: "26px 14px 70px" }}>
-      <div style={{ marginBottom: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 104, height: "auto", display: "block", opacity: 0.85 }} />
-        </div>
-        <div style={{ textAlign: "center" }}>
-        {logoId ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img src={`/api/public/photo/${logoId}`} alt={vendor.businessName} style={{
-            width: 132, height: 132, borderRadius: "50%", objectFit: "contain", background: "#fff",
-            border: "1px solid var(--border)", boxShadow: "0 4px 14px rgba(0,0,0,0.1)", padding: 14,
-            margin: "0 auto 10px", display: "block",
-          }} />
-        ) : (
-          <div style={{
-            width: 132, height: 132, borderRadius: "50%", background: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
-            color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 44, fontWeight: 800, letterSpacing: "-0.02em",
-            boxShadow: "0 4px 14px rgba(0,0,0,0.12)", margin: "0 auto 10px",
-          }}>
-            {vendor.businessName.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
+    <>
+      <header className="public-header">
+        <div className="public-header-inner">
+          <a href="/market" aria-label="Community Harvest — all vendors" style={{ display: "flex", alignItems: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/wordmark.png" alt="Community Harvest" style={{ width: 150, maxWidth: "46vw", height: "auto", display: "block" }} />
+          </a>
+          <div className="row g-2 shrink0">
+            <Button variant="secondary" size="sm" icon="link" onClick={share}>Share</Button>
+            <LinkButton href="/market" variant="ghost" size="sm">All vendors</LinkButton>
           </div>
-        )}
-        <div className="display" style={{ fontSize: 24 }}>{vendor.businessName.toUpperCase()}</div>
-        {avg !== null && <div style={{ fontSize: 13, fontWeight: 700 }}>{stars(Math.round(avg))} {avg} · {reviews.length} review{reviews.length === 1 ? "" : "s"}</div>}
-        {vendor.publicBlurb && <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 6 }}>{vendor.publicBlurb}</p>}
-        <div style={{ fontSize: 11, color: "var(--ash)", marginTop: 4 }}>at Community Harvest — Food and Craft Market, Noble OK · <a href="/market">all vendors</a></div>
-        <div style={{ marginTop: 10 }}>
-          {!followOpen && !followDone && (
-            <button className="btn small ghost" onClick={() => setFollowOpen(true)}>🔔 GET RESTOCK ALERTS</button>
-          )}
-          {followOpen && !followDone && (
-            <div style={{ maxWidth: 320, margin: "0 auto" }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <input type="email" placeholder="you@example.com" value={followEmail} onChange={(e) => setFollowEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && doFollow()} />
-                <button className="btn small" style={{ flex: "0 0 auto" }} onClick={doFollow}>🔔 FOLLOW</button>
-              </div>
-              {followMsg && <p className="err" style={{ marginTop: 6 }}>{followMsg}</p>}
-              <p style={{ fontSize: 10.5, color: "var(--ash)", marginTop: 4 }}>One email when they restock, max once a day. Unsubscribe anytime.</p>
-            </div>
-          )}
-          {followDone && <p className="ok" style={{ display: "inline-block" }}>🔔 You're in — we'll email you when {vendor.businessName} restocks ✓</p>}
         </div>
-        </div>
-      </div>
+      </header>
 
-      {photos.length > 0 && (
-        <div style={{ display: "flex", gap: 8, overflowX: "auto", marginBottom: 16, paddingBottom: 4 }}>
-          {photos.map((id) => (
+      <main className="public-wrap public-narrow">
+        <div className="hero">
+          {logoId ? (
             /* eslint-disable-next-line @next/next/no-img-element */
-            <button key={id} onClick={() => setLightbox({ src: `/api/public/photo/${id}`, alt: "Product photo" })} style={{ flex: "0 0 auto", padding: 0, border: "none", background: "none", cursor: "zoom-in" }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${id}`} alt="Product photo" style={{ height: 150, width: "auto", border: "1px solid var(--border)", display: "block" }} />
-            </button>
-          ))}
-        </div>
-      )}
+            <img
+              src={`/api/public/photo/${logoId}`}
+              alt={vendor.businessName}
+              style={{
+                width: 132, height: 132, borderRadius: "var(--r-full)", objectFit: "contain",
+                background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--sh-md)",
+                padding: "var(--sp-3)", margin: "0 auto var(--sp-3)", display: "block",
+              }}
+            />
+          ) : (
+            <div
+              aria-hidden
+              className="center"
+              style={{
+                width: 132, height: 132, borderRadius: "var(--r-full)", background: "var(--n-900)",
+                color: "var(--n-0)", display: "flex", fontSize: "var(--fs-3xl)", fontWeight: 700,
+                letterSpacing: "-0.02em", boxShadow: "var(--sh-md)", margin: "0 auto var(--sp-3)",
+              }}
+            >
+              {vendor.businessName.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
+            </div>
+          )}
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>AT THE MARKET RIGHT NOW</h2>
-        {items.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>Nothing on the floor at the moment — check back or send a request below.</p>}
-        {items.map((i) => (
-          <div key={i.name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)", fontSize: 14 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{i.photoId && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} onClick={() => setLightbox({ src: `/api/public/photo/${i.photoId}`, alt: i.name })} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto", cursor: "zoom-in" }} />
-            )}{i.name}{i.quantity <= 3 ? <b> · only {i.quantity} left</b> : ""}</span>
-            <span>{(i.salePercent || 0) > 0 && <><s style={{ color: "var(--ash)", fontWeight: 400 }}>{money(i.basePriceCents || i.priceCents)}</s>{" "}<span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px", marginRight: 6 }}>{i.salePercent}% OFF</span></>}<b style={(i.salePercent || 0) > 0 ? { color: "var(--red)" } : {}}>{money(i.priceCents)}</b></span>
+          <h1 className="hero-title">{vendor.businessName}</h1>
+
+          {avg !== null && (
+            <div className="row g-2 center mt-2" style={{ justifyContent: "center" }}>
+              <Stars n={Math.round(avg)} size={16} />
+              <span className="t-sm num" style={{ fontWeight: 600 }}>{avg}</span>
+              <span className="t-sm t-muted">· {plural(reviews.length, "review")}</span>
+            </div>
+          )}
+
+          {vendor.publicBlurb && <p className="hero-sub">{vendor.publicBlurb}</p>}
+
+          <p className="t-xs t-muted mt-2">
+            At Community Harvest — Food and Craft Market, Noble OK · <a href="/market">all vendors</a>
+          </p>
+
+          <div className="row g-2 wrap mt-4" style={{ justifyContent: "center" }}>
+            <Button variant="secondary" icon="link" onClick={share}>Share this booth</Button>
+            {!followOpen && !followDone && (
+              <Button variant="secondary" icon="bell" onClick={() => setFollowOpen(true)}>Get restock alerts</Button>
+            )}
           </div>
-        ))}
-      </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>MESSAGE THIS VENDOR</h2>
-        {mSent ? (
-          <p className="ok" style={{ marginTop: 0 }}>Sent. ✓ Check your email — your private conversation link is there, and replies will land in the same place.</p>
-        ) : (
-          <>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {vendor.acceptsPreorders && <button className={`btn small ${msgType === "PREORDER" ? "" : "ghost"}`} onClick={() => setMsgType("PREORDER")}>PRE-ORDER</button>}
-              {vendor.acceptsRequests && <button className={`btn small ${msgType === "REQUEST" ? "" : "ghost"}`} onClick={() => setMsgType("REQUEST")}>REQUEST</button>}
-              <button className={`btn small ${msgType === "COMPLAINT" ? "" : "ghost"}`} onClick={() => setMsgType("COMPLAINT")}>COMPLAINT</button>
+          {followOpen && !followDone && (
+            <div className="stack g-2 mt-3" style={{ maxWidth: 360, margin: "var(--sp-3) auto 0", textAlign: "left" }}>
+              <Field label="Email for restock alerts" hint="One email when they restock, max once a day. Unsubscribe anytime." error={followMsg || undefined}>
+                {(p) => (
+                  <div className="row g-2">
+                    <Input
+                      {...p}
+                      className="grow"
+                      type="email"
+                      inputMode="email"
+                      autoComplete="email"
+                      placeholder="you@example.com"
+                      value={followEmail}
+                      onChange={(e) => { setFollowEmail(e.target.value); setFollowMsg(""); }}
+                      onKeyDown={(e) => e.key === "Enter" && doFollow()}
+                    />
+                    <Button variant="primary" className="shrink0" icon="bell" onClick={doFollow}>Follow</Button>
+                  </div>
+                )}
+              </Field>
             </div>
-            {!vendor.acceptsPreorders && !vendor.acceptsRequests && (
-              <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 6 }}>This vendor isn&rsquo;t taking pre-orders or requests right now; complaints always go through.</p>
-            )}
-            {msgType && (
-              <>
-                <label>Your name</label>
-                <input value={mName} onChange={(e) => setMName(e.target.value)} />
-                <label>Email (the conversation happens here)</label>
-                <input type="email" value={mEmail} onChange={(e) => setMEmail(e.target.value)} />
-                <label>Phone</label>
-                <input type="tel" value={mPhone} onChange={(e) => setMPhone(e.target.value)} />
-                <label>{msgType === "PREORDER" ? "What would you like to order?" : msgType === "REQUEST" ? "What are you looking for?" : "What went wrong?"}</label>
-                <textarea rows={4} value={mBody} onChange={(e) => setMBody(e.target.value)} />
-                <div style={{ marginTop: 12 }}><button className="btn" onClick={sendMessage}>SEND PRIVATELY</button></div>
-                <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 6 }}>Private — only the vendor sees this{msgType === "COMPLAINT" ? " (and the market runs a copy for accountability)" : ""}.</p>
-              </>
-            )}
-            {mMsg && <p className="err">{mMsg}</p>}
-          </>
-        )}
-      </div>
+          )}
 
-      <div className="card">
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>REVIEWS</h2>
-        {reviews.map((r) => (
-          <div key={r.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <b style={{ fontSize: 14 }}>{r.name}</b>
-              <span style={{ fontSize: 13 }}>{stars(r.rating)}</span>
+          {followDone && (
+            <div className="mt-3" style={{ textAlign: "left" }}>
+              <Note tone="success" title="You're in">
+                We&rsquo;ll email you when {vendor.businessName} restocks.
+              </Note>
             </div>
-            <p style={{ fontSize: 13.5, margin: "4px 0" }}>{r.body}</p>
-            <div style={{ display: "flex", gap: 10, fontSize: 12 }}>
-              <button className="btn small ghost" onClick={() => like("review", r.id)} disabled={liked(r.id)}>
-                ♥ {r.likes}{liked(r.id) ? " · liked" : ""}
+          )}
+        </div>
+
+        {photos.length > 0 && (
+          <div className="row g-3 mb-4" style={{ overflowX: "auto", paddingBottom: "var(--sp-1)" }}>
+            {photos.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className="shrink0"
+                aria-label="View a larger product photo"
+                onClick={() => setLightbox({ src: `/api/public/photo/${id}`, alt: `${vendor.businessName} product photo` })}
+                style={{
+                  padding: 0, border: "1px solid var(--border)", borderRadius: "var(--r-lg)",
+                  background: "none", cursor: "zoom-in", lineHeight: 0, overflow: "hidden",
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`/api/public/photo/${id}`} alt="" style={{ height: 150, width: "auto", display: "block" }} />
               </button>
-              <button className="btn small ghost" onClick={() => { setCmOpen(cmOpen === r.id ? null : r.id); setCmName(""); setCmBody(""); }}>
-                💬 REPLY{r.comments.length ? ` (${r.comments.length})` : ""}
-              </button>
-            </div>
-            {r.comments.map((c) => (
-              <div key={c.id} style={{ marginLeft: 16, marginTop: 8, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
-                <b style={{ fontSize: 12.5 }}>{c.name}</b>
-                <p style={{ fontSize: 12.5, margin: "2px 0" }}>{c.body}</p>
-                <button className="btn small ghost" onClick={() => like("comment", c.id)} disabled={liked(c.id)} style={{ fontSize: 11 }}>
-                  ♥ {c.likes}
-                </button>
-              </div>
             ))}
-            {cmOpen === r.id && (
-              <div style={{ marginLeft: 16, marginTop: 8 }}>
-                <label>Your name</label>
-                <input value={cmName} onChange={(e) => setCmName(e.target.value)} />
-                <label>Reply</label>
-                <textarea rows={2} value={cmBody} onChange={(e) => setCmBody(e.target.value)} />
-                <div style={{ marginTop: 8 }}><button className="btn small" onClick={() => postComment(r.id)}>POST REPLY</button></div>
-              </div>
-            )}
           </div>
-        ))}
-        {reviews.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>No reviews yet — be the first.</p>}
+        )}
 
-        <h3 className="display" style={{ fontSize: 14, margin: "16px 0 4px" }}>WRITE A REVIEW</h3>
-        <label>Your name</label>
-        <input value={rvName} onChange={(e) => setRvName(e.target.value)} />
-        <label>Rating</label>
-        <div style={{ display: "flex", gap: 4 }}>
-          {[1, 2, 3, 4, 5].map((n) => (
-            <button key={n} className={`btn small ${rvRating >= n ? "" : "ghost"}`} onClick={() => setRvRating(n)}>★</button>
-          ))}
-        </div>
-        <label>Your review</label>
-        <textarea rows={3} value={rvBody} onChange={(e) => setRvBody(e.target.value)} />
-        <div style={{ marginTop: 12 }}><button className="btn small" onClick={postReview}>POST REVIEW</button></div>
-        {rvMsg && <p className={rvMsg.includes("✓") ? "ok" : "err"}>{rvMsg}</p>}
-      </div>
+        {/* ------------------------------------------------ what's on the floor -- */}
+        <Card title="At the market right now" subtitle={items.length ? plural(items.length, "item") : undefined} className="mb-4">
+          {items.length === 0 ? (
+            <EmptyState
+              icon="box"
+              title="Nothing on the floor at the moment"
+              body="Check back soon, or send a request below and they'll get back to you."
+            />
+          ) : (
+            <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {items.map((i) => {
+                const sale = (i.salePercent || 0) > 0;
+                return (
+                  <li
+                    key={i.name}
+                    className="row between g-3 wrap"
+                    style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border)" }}
+                  >
+                    <span className="row g-3 grow" style={{ minWidth: 140 }}>
+                      {i.photoId && (
+                        <button
+                          type="button"
+                          className="shrink0"
+                          aria-label={`View a larger photo of ${i.name}`}
+                          onClick={() => setLightbox({ src: `/api/public/photo/${i.photoId}`, alt: i.name })}
+                          style={{
+                            padding: 0, border: "1px solid var(--border)", borderRadius: "var(--r-md)",
+                            background: "none", cursor: "zoom-in", lineHeight: 0, overflow: "hidden",
+                          }}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={`/api/public/photo/${i.photoId}`} alt="" style={{ width: 44, height: 44, objectFit: "cover", display: "block" }} />
+                        </button>
+                      )}
+                      <span style={{ minWidth: 0 }}>
+                        <span className="t-body">{i.name}</span>
+                        {i.quantity <= 3 && <span className="t-xs t-warn" style={{ display: "block" }}>Only {i.quantity} left</span>}
+                      </span>
+                    </span>
+                    <span className="row g-2 shrink0">
+                      {sale && (
+                        <>
+                          <s className="t-sm t-muted num">{money(i.basePriceCents || i.priceCents)}</s>
+                          <Badge tone="danger">{i.salePercent}% off</Badge>
+                        </>
+                      )}
+                      <b className={`num ${sale ? "t-danger" : ""}`}>{money(i.priceCents)}</b>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+
+        {/* ------------------------------------------------------------ message -- */}
+        <Card title="Message this vendor" className="mb-4">
+          {mSent ? (
+            <Note tone="success" title="Sent">
+              Check your email — your private conversation link is there, and replies will land in the same place.
+            </Note>
+          ) : (
+            <div className="stack g-4">
+              <div className="row g-2 wrap">
+                {vendor.acceptsPreorders && (
+                  <Button variant={msgType === "PREORDER" ? "primary" : "secondary"} aria-pressed={msgType === "PREORDER"} onClick={() => setMsgType("PREORDER")}>
+                    Pre-order
+                  </Button>
+                )}
+                {vendor.acceptsRequests && (
+                  <Button variant={msgType === "REQUEST" ? "primary" : "secondary"} aria-pressed={msgType === "REQUEST"} onClick={() => setMsgType("REQUEST")}>
+                    Request
+                  </Button>
+                )}
+                <Button variant={msgType === "COMPLAINT" ? "primary" : "secondary"} aria-pressed={msgType === "COMPLAINT"} onClick={() => setMsgType("COMPLAINT")}>
+                  Complaint
+                </Button>
+              </div>
+
+              {!vendor.acceptsPreorders && !vendor.acceptsRequests && (
+                <p className="t-xs t-muted" style={{ margin: 0 }}>
+                  This vendor isn&rsquo;t taking pre-orders or requests right now; complaints always go through.
+                </p>
+              )}
+
+              {msgType && (
+                <div className="stack g-4">
+                  <Field label="Your name">
+                    {(p) => <Input {...p} autoComplete="name" value={mName} onChange={(e) => setMName(e.target.value)} />}
+                  </Field>
+                  <Field label="Email" hint="The conversation happens here.">
+                    {(p) => <Input {...p} type="email" inputMode="email" autoComplete="email" value={mEmail} onChange={(e) => setMEmail(e.target.value)} />}
+                  </Field>
+                  <Field label="Phone">
+                    {(p) => <Input {...p} type="tel" inputMode="tel" autoComplete="tel" value={mPhone} onChange={(e) => setMPhone(e.target.value)} />}
+                  </Field>
+                  <Field
+                    label={msgType === "PREORDER" ? "What would you like to order?" : msgType === "REQUEST" ? "What are you looking for?" : "What went wrong?"}
+                  >
+                    {(p) => <Textarea {...p} rows={4} value={mBody} onChange={(e) => setMBody(e.target.value)} />}
+                  </Field>
+
+                  {mMsg && <Note tone="error">{mMsg}</Note>}
+
+                  <Button variant="primary" size="lg" block loading={mBusy} icon="mail" onClick={sendMessage}>
+                    Send privately
+                  </Button>
+                  <p className="t-xs t-muted" style={{ margin: 0 }}>
+                    Private — only the vendor sees this{msgType === "COMPLAINT" ? " (and the market keeps a copy for accountability)" : ""}.
+                  </p>
+                </div>
+              )}
+
+              {!msgType && mMsg && <Note tone="error">{mMsg}</Note>}
+            </div>
+          )}
+        </Card>
+
+        {/* ------------------------------------------------------------ reviews -- */}
+        <Card title="Reviews" subtitle={avg !== null ? `${avg} average · ${plural(reviews.length, "review")}` : undefined}>
+          {reviews.length === 0 ? (
+            <EmptyState icon="star" title="No reviews yet" body="Be the first to tell other shoppers what you thought." />
+          ) : (
+            <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {reviews.map((r) => (
+                <li key={r.id} style={{ padding: "var(--sp-3) 0", borderBottom: "1px solid var(--border)" }}>
+                  <div className="row between g-2 wrap">
+                    <b className="t-body">{r.name}</b>
+                    <span className="row g-2">
+                      <Stars n={r.rating} />
+                      <span className="t-xs t-muted">{relTime(r.createdAt)}</span>
+                    </span>
+                  </div>
+
+                  <p className="t-body mt-1" style={{ whiteSpace: "pre-wrap" }}>{r.body}</p>
+
+                  <div className="row g-2 mt-2 wrap">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon="star"
+                      onClick={() => like("review", r.id)}
+                      disabled={liked(r.id)}
+                      aria-label={`Like this review (${r.likes} so far)`}
+                    >
+                      {r.likes}{liked(r.id) ? " · liked" : ""}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon="message"
+                      aria-expanded={cmOpen === r.id}
+                      onClick={() => { setCmOpen(cmOpen === r.id ? null : r.id); setCmName(""); setCmBody(""); }}
+                    >
+                      Reply{r.comments.length ? ` (${r.comments.length})` : ""}
+                    </Button>
+                  </div>
+
+                  {r.comments.map((c) => (
+                    <div
+                      key={c.id}
+                      style={{ marginLeft: "var(--sp-4)", marginTop: "var(--sp-2)", paddingLeft: "var(--sp-3)", borderLeft: "2px solid var(--border)" }}
+                    >
+                      <b className="t-sm">{c.name}</b>
+                      <p className="t-sm mt-1" style={{ whiteSpace: "pre-wrap" }}>{c.body}</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon="star"
+                        onClick={() => like("comment", c.id)}
+                        disabled={liked(c.id)}
+                        aria-label={`Like this reply (${c.likes} so far)`}
+                      >
+                        {c.likes}
+                      </Button>
+                    </div>
+                  ))}
+
+                  {cmOpen === r.id && (
+                    <div className="stack g-3" style={{ marginLeft: "var(--sp-4)", marginTop: "var(--sp-3)" }}>
+                      <Field label="Your name">
+                        {(p) => <Input {...p} autoComplete="name" value={cmName} onChange={(e) => setCmName(e.target.value)} />}
+                      </Field>
+                      <Field label="Reply">
+                        {(p) => <Textarea {...p} rows={2} value={cmBody} onChange={(e) => setCmBody(e.target.value)} />}
+                      </Field>
+                      <div className="row g-2">
+                        <Button variant="primary" onClick={() => postComment(r.id)}>Post reply</Button>
+                        <Button variant="ghost" onClick={() => setCmOpen(null)}>Cancel</Button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="stack g-4 mt-6">
+            <h3 className="t-section">Write a review</h3>
+            <Field label="Your name">
+              {(p) => <Input {...p} autoComplete="name" value={rvName} onChange={(e) => setRvName(e.target.value)} />}
+            </Field>
+
+            <div className="field">
+              <span className="field-label">Rating</span>
+              <div className="row g-1" role="group" aria-label="Rating out of 5">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Button
+                    key={n}
+                    variant={rvRating >= n ? "primary" : "secondary"}
+                    icon="star"
+                    aria-pressed={rvRating === n}
+                    aria-label={`${n} ${n === 1 ? "star" : "stars"}`}
+                    onClick={() => setRvRating(n)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <Field label="Your review">
+              {(p) => <Textarea {...p} rows={3} value={rvBody} onChange={(e) => setRvBody(e.target.value)} />}
+            </Field>
+
+            {rvMsg && <Note tone="error">{rvMsg}</Note>}
+
+            <Button variant="primary" size="lg" block loading={rvBusy} icon="star" onClick={postReview}>
+              Post review
+            </Button>
+          </div>
+        </Card>
+      </main>
+
       {lightbox && <Lightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />}
-    </main>
+    </>
   );
 }

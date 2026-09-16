@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { TZ } from "@/lib/time";
+import { cronAuthFailure } from "@/lib/cron";
+import { runRoute } from "@/lib/handler";
 
 export const dynamic = "force-dynamic";
 
 // Runs on Vercel Cron on the 1st of every month (see vercel.json).
 // Idempotent: skips any contract already charged this month.
 export async function GET(req: NextRequest) {
-  const auth = req.headers.get("authorization");
-  const isVercelCron = req.headers.get("user-agent")?.includes("vercel-cron");
-  if (process.env.CRON_SECRET && auth !== `Bearer ${process.env.CRON_SECRET}` && !isVercelCron) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  return runRoute("cron/rent GET", async () => {
+  const denied = cronAuthFailure(req);
+  if (denied) return denied;
 
   const now = new Date();
   const ym = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" }).format(now); // "2026-10"
@@ -69,4 +69,5 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, charged, ended });
+  });
 }

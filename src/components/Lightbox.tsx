@@ -1,47 +1,111 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Icon } from "@/components/ui";
 
-// Fullscreen photo viewer — tap the photo to zoom, drag/scroll to pan, ✕ or backdrop to close
+// Fullscreen photo viewer — tap the photo to zoom, drag/scroll to pan,
+// the close button or the backdrop to dismiss.
 export default function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   const [zoomed, setZoomed] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
     return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
   }, [onClose]);
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={alt}
       onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 9999, overflow: "auto", WebkitOverflowScrolling: "touch" }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "var(--n-950)",
+        zIndex: "var(--z-modal)",
+        overflow: "auto",
+        WebkitOverflowScrolling: "touch",
+      }}
     >
       <button
-        onClick={onClose}
-        aria-label="Close"
-        style={{ position: "fixed", top: 14, right: 14, zIndex: 10000, background: "rgba(255,255,255,0.14)", color: "#fff", border: "none", borderRadius: 999, width: 40, height: 40, fontSize: 19, fontWeight: 700, cursor: "pointer" }}
-      >✕</button>
+        ref={closeRef}
+        type="button"
+        // stopPropagation: without it the click also reaches the backdrop's
+        // onClick and onClose fires twice.
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        aria-label="Close photo"
+        style={{
+          position: "fixed",
+          top: "calc(var(--sp-3) + env(safe-area-inset-top))",
+          right: "var(--sp-3)",
+          zIndex: 1,
+          background: "var(--n-800)",
+          color: "var(--n-0)",
+          border: "1px solid var(--n-700)",
+          borderRadius: "var(--r-full)",
+          width: 44,
+          height: 44,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="close" size={20} />
+      </button>
+
       <div
         onClick={(e) => e.stopPropagation()}
         style={zoomed
           ? { minWidth: "100%", minHeight: "100%", display: "block", padding: 0 }
-          : { minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}
+          : { minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--sp-5)" }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src}
-          alt={alt}
+        <button
+          type="button"
           onClick={() => setZoomed((z) => !z)}
-          style={zoomed
-            ? { width: "220%", maxWidth: "none", display: "block", cursor: "zoom-out" }
-            : { maxWidth: "100%", maxHeight: "92vh", display: "block", cursor: "zoom-in", borderRadius: 10 }}
-        />
+          aria-pressed={zoomed}
+          aria-label={zoomed ? "Zoom out" : "Zoom in"}
+          style={{
+            padding: 0,
+            border: "none",
+            background: "none",
+            display: "block",
+            lineHeight: 0,
+            cursor: zoomed ? "zoom-out" : "zoom-in",
+            maxWidth: zoomed ? "none" : "100%",
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={alt}
+            style={zoomed
+              ? { width: "220%", maxWidth: "none", display: "block" }
+              : { maxWidth: "100%", maxHeight: "92vh", display: "block", borderRadius: "var(--r-md)" }}
+          />
+        </button>
       </div>
-      <div style={{ position: "fixed", bottom: 12, left: 0, right: 0, textAlign: "center", color: "rgba(255,255,255,0.75)", fontSize: 12, pointerEvents: "none" }}>
-        {zoomed ? "Tap photo to zoom out · drag to look around" : "Tap photo to zoom in"}
-      </div>
+
+      <p
+        style={{
+          position: "fixed",
+          bottom: "calc(var(--sp-3) + env(safe-area-inset-bottom))",
+          left: 0,
+          right: 0,
+          textAlign: "center",
+          color: "var(--n-400)",
+          fontSize: "var(--fs-xs)",
+          margin: 0,
+          pointerEvents: "none",
+        }}
+      >
+        {zoomed ? "Tap the photo to zoom out · drag to look around" : "Tap the photo to zoom in"}
+      </p>
     </div>
   );
 }

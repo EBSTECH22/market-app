@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { Button, Skeleton } from "@/components/ui";
 
 // Printable sign: post at the door, shelves, and register
 export default function ShopSign() {
@@ -10,10 +11,23 @@ export default function ShopSign() {
     const url = `${window.location.origin}/shop`;
     QRCode.toDataURL(url, { width: 700, margin: 1, color: { dark: "#000000", light: "#ffffff" } }).then(setQr);
   }, []);
-  if (!qr) return <main style={{ padding: 60, textAlign: "center" }}>Building your sign…</main>;
+  if (!qr) {
+    return (
+      <main className="public-wrap public-narrow">
+        <div className="card card-pad stack g-3" aria-busy="true">
+          <Skeleton width="55%" height={22} />
+          <Skeleton height={290} radius="var(--r-md)" />
+          <Skeleton width="80%" height={14} />
+          <span className="sr-only">Building your sign…</span>
+        </div>
+      </main>
+    );
+  }
   return (
     <main style={{ maxWidth: 480, margin: "0 auto", padding: "20px 16px 50px", textAlign: "center" }}>
-      <button className="btn no-print" style={{ marginBottom: 14 }} onClick={() => window.print()}>🖨 PRINT THIS SIGN</button>
+      <div className="no-print mb-4">
+        <Button icon="print" variant="secondary" onClick={() => window.print()}>Print this sign</Button>
+      </div>
       <div style={{ border: "2px solid #000", padding: "26px 20px", background: "#fff" }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/wordmark.png" alt="Community Harvest" style={{ width: 230, maxWidth: "80%", height: "auto", margin: "0 auto 8px", display: "block" }} />

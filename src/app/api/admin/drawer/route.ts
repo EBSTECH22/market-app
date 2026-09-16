@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { isStaff } from "@/lib/auth";
-import { createHash } from "crypto";
+import { isStaff, verifyPin, pinUpgrade } from "@/lib/auth";
+import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
+import { runRoute } from "@/lib/handler";
 
 export const dynamic = "force-dynamic";
-
-const pinHash = (pin: string) => createHash("sha256").update(`pin:${pin}`).digest("hex");
 
 export async function GET() {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -15,10 +14,9 @@ export async function GET() {
     where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt }, status: { not: "VOIDED" } },
     _sum: { totalCents: true },
   });
-  const cashVoids = await db.refund.aggregate({
-    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { startsWith: "VOID" } },
-    _sum: { amountCents: true, taxCents: true },
-  });
+  // Voided sales are already excluded above via status: { not: "VOIDED" },
+  // and cashRefunds filters out VOID-prefixed notes, so there is nothing
+  // further to subtract for voids here.
   const cashRefunds = await db.refund.aggregate({
     where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { not: { startsWith: "VOID" } } },
     _sum: { amountCents: true, taxCents: true },
@@ -28,23 +26,39 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { employee, pin, counts, totalCents } = await req.json();
-  const emp = await db.employee.findUnique({ where: { name: employee || "" } });
-  if (!emp || !emp.active || emp.pinHash !== pinHash(pin || "")) {
-    return NextResponse.json({ error: "Wrong employee or PIN." }, { status: 401 });
-  }
-  const existing = await db.drawerSession.findFirst({ where: { status: "OPEN" } });
-  if (existing) return NextResponse.json({ error: `Drawer is already open (${existing.employee}). Close it first.` }, { status: 400 });
+  return runRoute("admin/drawer POST", async () => {
+    if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { employee, pin, counts, totalCents } = await req.json();
+    const who = String(employee || "");
 
-  const session = await db.drawerSession.create({
-    data: {
-      employee: emp.name,
-      openTotalCents: Math.max(0, Math.round(Number(totalCents) || 0)),
-      openCounts: JSON.stringify(counts || {}),
-    },
+    const limited = enforceRateLimit(req, "drawer-pin", who, LIMITS.pin, "Too many PIN attempts.");
+    if (limited) return limited;
+
+    const emp = await db.employee.findUnique({ where: { name: who } });
+    if (!emp || !emp.active || !verifyPin(String(pin || ""), emp.pinHash)) {
+      return NextResponse.json({ error: "Wrong employee or PIN." }, { status: 401 });
+    }
+    const upgraded = pinUpgrade(String(pin || ""), emp.pinHash);
+    if (upgraded) {
+      try {
+        await db.employee.update({ where: { id: emp.id }, data: { pinHash: upgraded } });
+      } catch (err) {
+        console.error("pin hash upgrade failed", err);
+      }
+    }
+
+    const existing = await db.drawerSession.findFirst({ where: { status: "OPEN" } });
+    if (existing) return NextResponse.json({ error: `Drawer is already open (${existing.employee}). Close it first.` }, { status: 400 });
+
+    const session = await db.drawerSession.create({
+      data: {
+        employee: emp.name,
+        openTotalCents: Math.max(0, Math.round(Number(totalCents) || 0)),
+        openCounts: JSON.stringify(counts || {}),
+      },
+    });
+    return NextResponse.json({ session });
   });
-  return NextResponse.json({ session });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -57,10 +71,9 @@ export async function PATCH(req: NextRequest) {
     where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt }, status: { not: "VOIDED" } },
     _sum: { totalCents: true },
   });
-  const cashVoids = await db.refund.aggregate({
-    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { startsWith: "VOID" } },
-    _sum: { amountCents: true, taxCents: true },
-  });
+  // Voided sales are already excluded above via status: { not: "VOIDED" },
+  // and cashRefunds filters out VOID-prefixed notes, so there is nothing
+  // further to subtract for voids here.
   const cashRefunds = await db.refund.aggregate({
     where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { not: { startsWith: "VOID" } } },
     _sum: { amountCents: true, taxCents: true },

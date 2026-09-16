@@ -3,16 +3,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Lightbox from "@/components/Lightbox";
 import { usePulse } from "@/lib/usePulse";
+import {
+  Button, Card, EmptyState, Field, Icon, IconButton, Input, LinkButton, Note,
+  SearchInput, Skeleton, useDialog,
+} from "@/components/ui";
+import { money, plural } from "@/lib/format";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; photoId?: string | null };
 type Line = Item & { qty: number };
 
-const money = (c: number) => `$${(c / 100).toFixed(2)}`;
-
 export default function SelfCheckout() {
+  const dialog = useDialog();
   const [items, setItems] = useState<Item[]>([]);
   const [taxRate, setTaxRate] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const [cart, setCart] = useState<Line[]>([]);
   const [q, setQ] = useState("");
@@ -30,9 +35,10 @@ export default function SelfCheckout() {
   useEffect(() => {
     const loadShop = () => {
       fetch("/api/public/shop").then(async (r) => {
-        if (r.ok) { const d = await r.json(); setItems(d.items || []); setTaxRate(d.taxRatePercent || 0); setPaused(!!d.paused); }
+        if (r.ok) { const d = await r.json(); setItems(d.items || []); setTaxRate(d.taxRatePercent || 0); setPaused(!!d.paused); setLoadFailed(false); }
+        else setLoadFailed(true);
         setLoaded(true);
-      });
+      }).catch(() => { setLoadFailed(true); setLoaded(true); });
     };
     loadShop();
     (window as unknown as { __ls?: () => void }).__ls = loadShop;
@@ -50,7 +56,7 @@ export default function SelfCheckout() {
       }
       return [...c, { ...it, qty: 1 }];
     });
-    setOkMsg(`Added ${it.name} ✓`);
+    setOkMsg(`Added ${it.name}`);
     setTimeout(() => setOkMsg(""), 1600);
     if (navigator.vibrate) navigator.vibrate(40);
   }, []);
@@ -96,9 +102,9 @@ export default function SelfCheckout() {
           if (navigator.vibrate) navigator.vibrate(50);
           lookupSku(text.trim().toUpperCase()).then((res) => {
             if (res.ok && res.item) {
-              setScanHit({ kind: "ok", title: "ADDED - " + res.item.name.toUpperCase(), sub: "$" + (res.item.priceCents / 100).toFixed(2) + " - it's in your cart" });
+              setScanHit({ kind: "ok", title: "Added — " + res.item.name, sub: money(res.item.priceCents) + " · it's in your cart" });
             } else {
-              setScanHit({ kind: "err", title: "THAT ONE DIDN'T WORK", sub: res.error || "Try again, or type the code under the barcode." });
+              setScanHit({ kind: "err", title: "That one didn't work", sub: res.error || "Try again, or type the code under the barcode." });
             }
           });
         },
@@ -115,6 +121,20 @@ export default function SelfCheckout() {
     holdRef.current = false;
     setScanHit(null);
     setScanning(false);
+  };
+
+  const clearCart = async () => {
+    const yes = await dialog.confirm({
+      title: "Empty your cart?",
+      body: `This removes all ${plural(cart.reduce((n, l) => n + l.qty, 0), "item")} from your cart on this phone. Nothing is charged and nothing leaves the shelf — you can scan them again.`,
+      confirmLabel: "Empty the cart",
+      cancelLabel: "Keep shopping",
+      tone: "danger",
+    });
+    if (!yes) return;
+    setCart([]);
+    setMsg("");
+    setOkMsg("");
   };
 
   const pay = async () => {
@@ -136,100 +156,257 @@ export default function SelfCheckout() {
   const browse = needle ? items.filter((i) => i.name.toLowerCase().includes(needle) || i.vendorName.toLowerCase().includes(needle)) : items;
 
   return (
-    <main style={{ maxWidth: 520, margin: "0 auto", padding: "22px 14px 90px" }}>
-      <div style={{ textAlign: "center", marginBottom: 12 }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/wordmark.png" alt="Community Harvest" style={{ width: 180, maxWidth: "60%", height: "auto", margin: "0 auto 4px", display: "block" }} />
-        <div className="display" style={{ fontSize: 21 }}>SCAN &amp; PAY</div>
-        <p style={{ fontSize: 12.5, color: "var(--ash)", marginTop: 2 }}>Skip the line — scan your items, pay by card, show your green screen on the way out.</p>
-      </div>
-
-      {paused && (
-        <div className="card" style={{ marginBottom: 12, background: "#fef2f2", border: "1px solid #fecaca", textAlign: "center" }}>
-          <div style={{ fontSize: 30 }}>🛒</div>
-          <b style={{ fontSize: 15 }}>Self-checkout is paused right now.</b>
-          <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 4 }}>Bring your items to the register up front — we&rsquo;ll get you checked out with a smile.</p>
+    <>
+      <header className="public-header">
+        <div className="public-header-inner">
+          <a href="/market" aria-label="Community Harvest" style={{ display: "flex", alignItems: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/wordmark.png" alt="Community Harvest" style={{ width: 150, maxWidth: "46vw", height: "auto", display: "block" }} />
+          </a>
+          <LinkButton href="/market" variant="ghost" size="sm" icon="store" className="shrink0">Market</LinkButton>
         </div>
-      )}
-      {!paused && (
-      <div className="card" style={{ marginBottom: 12 }}>
-        {!scanning && <button className="btn" onClick={startScan}>📷 SCAN A BARCODE</button>}
-        <div id="scan-box" style={{ borderRadius: 12, overflow: "hidden", display: scanning ? "block" : "none" }} />
-        {scanning && scanHit && (
-          <div style={{
-            marginTop: 10, borderRadius: 12, padding: "14px 14px", textAlign: "center",
-            background: scanHit.kind === "ok" ? "#f0fdf4" : "#fef2f2",
-            border: scanHit.kind === "ok" ? "2px solid #16a34a" : "2px solid #fca5a5",
-          }}>
-            <div style={{ fontSize: 26, lineHeight: 1 }}>{scanHit.kind === "ok" ? "\u2705" : "\ud83e\udd14"}</div>
-            <div className="display" style={{ fontSize: 16, marginTop: 4 }}>{scanHit.title}</div>
-            <div style={{ fontSize: 12.5, color: "var(--ash)", marginTop: 2 }}>{scanHit.sub}</div>
-            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <button className="btn" style={{ flex: 1 }} onClick={() => { setScanHit(null); holdRef.current = false; try { scannerRef.current?.resume(); } catch {} }}>\ud83d\udcf7 SCAN NEXT ITEM</button>
-              <button className="btn small ghost" onClick={() => { setScanHit(null); stopScan(); }}>DONE</button>
-            </div>
-          </div>
+      </header>
+
+      <main className="public-wrap public-narrow">
+        <div className="hero">
+          <h1 className="hero-title">Scan &amp; pay</h1>
+          <p className="hero-sub">
+            Skip the line — scan your items, pay by card, and show your green screen on the way out.
+          </p>
+        </div>
+
+        {paused && (
+          <Note tone="warn" title="Self-checkout is paused right now">
+            Bring your items to the register up front — we&rsquo;ll get you checked out with a smile.
+          </Note>
         )}
-        {scanning && !scanHit && <div style={{ marginTop: 8 }}><button className="btn small ghost" onClick={stopScan}>STOP CAMERA</button></div>}
-        <label>Or type the code printed under the barcode</label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="V01-0003"
-            onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) { lookupSku(code.trim().toUpperCase()); setCode(""); } }} />
-          <button className="btn small" style={{ flex: "0 0 auto" }} onClick={() => { if (code.trim()) { lookupSku(code.trim().toUpperCase()); setCode(""); } }}>ADD</button>
-        </div>
-        {okMsg && <p className="ok" style={{ marginTop: 8 }}>{okMsg}</p>}
-        {msg && <p className="err" style={{ marginTop: 8 }}>{msg}</p>}
-      </div>
-      )}
 
-      {!paused && cart.length > 0 && (
-        <div className="card" style={{ marginBottom: 12, border: "1px solid #bbf7d0", background: "#f0fdf4" }}>
-          <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>YOUR CART</h2>
-          {cart.map((l) => (
-            <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: "1px solid #d1fae5", fontSize: 13.5 }}>
-              <span><b>{l.name}</b> <span style={{ color: "var(--ash)" }}>· {l.vendorName}</span></span>
-              <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
-                <button className="btn small ghost" style={{ padding: "3px 10px" }} onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, qty: Math.max(1, x.qty - 1) } : x))}>−</button>
-                <b>{l.qty}</b>
-                <button className="btn small ghost" style={{ padding: "3px 10px" }} onClick={() => addItem(l)}>＋</button>
-                <b style={{ minWidth: 54, textAlign: "right" }}>{money(l.priceCents * l.qty)}</b>
-                <button className="btn small ghost" style={{ padding: "3px 8px" }} onClick={() => setCart((c) => c.filter((x) => x.sku !== l.sku))}>✕</button>
-              </span>
+        {!paused && (
+          <Card title="Scan your items" className="mb-4">
+            <div className="stack g-3">
+              {!scanning && (
+                <Button variant="primary" size="xl" block icon="scan" onClick={startScan}>
+                  Scan a barcode
+                </Button>
+              )}
+
+              <div id="scan-box" style={{ borderRadius: "var(--r-lg)", overflow: "hidden", display: scanning ? "block" : "none" }} />
+
+              {scanning && scanHit && (
+                <div
+                  role="status"
+                  style={{
+                    borderRadius: "var(--r-lg)",
+                    padding: "var(--sp-4)",
+                    textAlign: "center",
+                    background: scanHit.kind === "ok" ? "var(--accent-soft)" : "var(--danger-soft)",
+                    border: `2px solid ${scanHit.kind === "ok" ? "var(--accent)" : "var(--danger)"}`,
+                    color: scanHit.kind === "ok" ? "var(--accent-text)" : "var(--danger-text)",
+                  }}
+                >
+                  <Icon name={scanHit.kind === "ok" ? "checkCircle" : "help"} size={28} />
+                  <div className="t-section mt-1">{scanHit.title}</div>
+                  <div className="t-sm mt-1">{scanHit.sub}</div>
+                  <div className="row g-2 mt-3">
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      icon="scan"
+                      className="grow"
+                      onClick={() => { setScanHit(null); holdRef.current = false; try { scannerRef.current?.resume(); } catch {} }}
+                    >
+                      Scan next item
+                    </Button>
+                    <Button variant="secondary" size="lg" onClick={() => { setScanHit(null); stopScan(); }}>Done</Button>
+                  </div>
+                </div>
+              )}
+
+              {scanning && !scanHit && (
+                <Button variant="secondary" size="lg" block icon="close" onClick={stopScan}>Stop the camera</Button>
+              )}
+
+              <Field label="Or type the code printed under the barcode">
+                {(p) => (
+                  <div className="row g-2">
+                    <Input
+                      {...p}
+                      className="grow"
+                      value={code}
+                      onChange={(e) => setCode(e.target.value)}
+                      placeholder="V01-0003"
+                      autoCapitalize="characters"
+                      autoComplete="off"
+                      onKeyDown={(e) => { if (e.key === "Enter" && code.trim()) { lookupSku(code.trim().toUpperCase()); setCode(""); } }}
+                    />
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className="shrink0"
+                      onClick={() => { if (code.trim()) { lookupSku(code.trim().toUpperCase()); setCode(""); } }}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                )}
+              </Field>
+
+              {okMsg && <Note tone="success">{okMsg}</Note>}
+              {msg && <Note tone="error">{msg}</Note>}
             </div>
-          ))}
-          <div style={{ fontSize: 13.5, marginTop: 8, display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(subtotal)}</b></div>
-          <div style={{ fontSize: 13.5, display: "flex", justifyContent: "space-between" }}><span>Sales tax</span><b>{money(tax)}</b></div>
-          <div style={{ fontSize: 16, display: "flex", justifyContent: "space-between" }}><span className="display">TOTAL</span><b className="display">{money(subtotal + tax)}</b></div>
-          <label>Email for your receipt (optional)</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-          <div style={{ marginTop: 12 }}>
-            <button className="btn" disabled={busy} onClick={pay}>💳 PAY {money(subtotal + tax)}</button>
-          </div>
-        </div>
-      )}
+          </Card>
+        )}
 
-      {!paused && (
-      <div className="card">
-        <h2 className="display" style={{ fontSize: 15, marginBottom: 6 }}>OR BROWSE WHAT&rsquo;S ON THE FLOOR</h2>
-        <input placeholder="Search… (bread, honey, candle)" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
-        {!loaded && <div className="skel" style={{ height: 120 }} />}
-        {loaded && browse.slice(0, 60).map((i) => (
-          <div key={i.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13.5 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{i.photoId && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={`/api/public/photo/${i.photoId}`} alt={i.name} onClick={() => setLightbox({ src: `/api/public/photo/${i.photoId}`, alt: i.name })} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)", flex: "0 0 auto", cursor: "zoom-in" }} />
-            )}<span><b>{i.name}</b> <span style={{ color: "var(--ash)" }}>· {i.vendorName}</span></span></span>
-            <span style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto" }}>
-              <b>{money(i.priceCents)}</b>
-              <button className="btn small" onClick={() => addItem(i)}>ADD</button>
-            </span>
-          </div>
-        ))}
-        {loaded && browse.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>Nothing matches — some vendors&rsquo; items only sell at the register.</p>}
-        <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 8 }}>Some items are register-only per the vendor — the page will tell you if one of yours is.</p>
-      </div>
-      )}
+        {!paused && cart.length > 0 && (
+          <Card
+            title="Your cart"
+            subtitle={plural(cart.reduce((n, l) => n + l.qty, 0), "item")}
+            actions={<Button variant="dangerSoft" size="sm" icon="trash" onClick={clearCart}>Clear cart</Button>}
+            className="mb-4"
+          >
+            <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {cart.map((l) => (
+                <li
+                  key={l.sku}
+                  className="row between g-3 wrap"
+                  style={{ padding: "var(--sp-3) 0", borderBottom: "1px solid var(--border)" }}
+                >
+                  <span className="grow" style={{ minWidth: 140 }}>
+                    <b className="t-body">{l.name}</b>
+                    <span className="t-xs t-muted" style={{ display: "block" }}>{l.vendorName}</span>
+                  </span>
+                  <span className="row g-2 shrink0">
+                    <IconButton
+                      icon="minus"
+                      size="sm"
+                      label={`One fewer ${l.name}`}
+                      disabled={l.qty <= 1}
+                      onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, qty: Math.max(1, x.qty - 1) } : x))}
+                    />
+                    <b className="num" style={{ minWidth: 20, textAlign: "center" }} aria-label={`Quantity ${l.qty}`}>{l.qty}</b>
+                    <IconButton icon="plus" size="sm" label={`One more ${l.name}`} onClick={() => addItem(l)} />
+                    <b className="num" style={{ minWidth: 62, textAlign: "right" }}>{money(l.priceCents * l.qty)}</b>
+                    <IconButton
+                      icon="trash"
+                      size="sm"
+                      variant="dangerSoft"
+                      label={`Remove ${l.name}`}
+                      onClick={() => setCart((c) => c.filter((x) => x.sku !== l.sku))}
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="stack g-1 mt-3">
+              <div className="row between t-body"><span>Subtotal</span><b className="num">{money(subtotal)}</b></div>
+              <div className="row between t-body"><span>Sales tax</span><b className="num">{money(tax)}</b></div>
+              <div className="row between t-section mt-1"><span>Total</span><b className="num">{money(subtotal + tax)}</b></div>
+            </div>
+
+            <div className="mt-4">
+              <Field label="Email for your receipt" hint="Optional — we'll send the receipt here.">
+                {(p) => (
+                  <Input {...p} type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+                )}
+              </Field>
+            </div>
+
+            <div className="mt-4">
+              <Button variant="primary" size="xl" block loading={busy} icon="card" onClick={pay}>
+                Pay {money(subtotal + tax)}
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {!paused && (
+          <Card title="Or browse what's on the floor">
+            <div className="stack g-3">
+              <SearchInput value={q} onValueChange={setQ} placeholder="Search… (bread, honey, candle)" aria-label="Search items on the floor" />
+
+              {!loaded && (
+                <div className="stack g-3" aria-hidden>
+                  <Skeleton height={44} />
+                  <Skeleton height={44} />
+                  <Skeleton height={44} />
+                </div>
+              )}
+
+              {loaded && loadFailed && (
+                <EmptyState
+                  icon="alert"
+                  title="We couldn't load the shelf"
+                  body="You can still scan barcodes or type a code. Try loading the list again."
+                  action={<Button variant="secondary" icon="refresh" onClick={() => (window as unknown as { __ls?: () => void }).__ls?.()}>Try again</Button>}
+                />
+              )}
+
+              {loaded && !loadFailed && browse.length === 0 && (
+                <EmptyState
+                  icon="search"
+                  title={needle ? "Nothing matches" : "Nothing listed right now"}
+                  body="Some vendors' items only sell at the register — bring those up front."
+                  action={needle ? <Button variant="secondary" onClick={() => setQ("")}>Clear search</Button> : undefined}
+                />
+              )}
+
+              {loaded && !loadFailed && browse.length > 0 && (
+                <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                  {browse.slice(0, 60).map((i) => (
+                    <li
+                      key={i.sku}
+                      className="row between g-3 wrap"
+                      style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border)" }}
+                    >
+                      <span className="row g-3 grow" style={{ minWidth: 140 }}>
+                        {i.photoId && (
+                          <button
+                            type="button"
+                            className="shrink0"
+                            aria-label={`View a larger photo of ${i.name}`}
+                            onClick={() => setLightbox({ src: `/api/public/photo/${i.photoId}`, alt: i.name })}
+                            style={{
+                              padding: 0,
+                              border: "1px solid var(--border)",
+                              borderRadius: "var(--r-md)",
+                              background: "none",
+                              cursor: "zoom-in",
+                              lineHeight: 0,
+                              overflow: "hidden",
+                            }}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={`/api/public/photo/${i.photoId}`}
+                              alt=""
+                              style={{ width: 44, height: 44, objectFit: "cover", display: "block" }}
+                            />
+                          </button>
+                        )}
+                        <span style={{ minWidth: 0 }}>
+                          <b className="t-body">{i.name}</b>
+                          <span className="t-xs t-muted" style={{ display: "block" }}>{i.vendorName}</span>
+                        </span>
+                      </span>
+                      <span className="row g-3 shrink0">
+                        <b className="num">{money(i.priceCents)}</b>
+                        <Button variant="secondary" size="lg" icon="plus" onClick={() => addItem(i)}>Add</Button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <p className="t-xs t-muted" style={{ margin: 0 }}>
+                Some items are register-only per the vendor — the page will tell you if one of yours is.
+              </p>
+            </div>
+          </Card>
+        )}
+      </main>
+
       {lightbox && <Lightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />}
-    </main>
+    </>
   );
 }

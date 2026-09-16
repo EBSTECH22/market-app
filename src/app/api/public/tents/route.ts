@@ -4,6 +4,7 @@ import { stripe } from "@/lib/stripe";
 import { tentSpotsTaken, TENT_DEPOSIT_CENTS } from "@/lib/tents";
 import { sendTentConfirmEmail } from "@/lib/email";
 import { pushToAdmin } from "@/lib/push";
+import { runRoute, HttpError } from "@/lib/handler";
 import { randomBytes } from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -33,28 +34,45 @@ export async function GET() {
   });
 }
 
+const FULL_MSG = "That date just filled up — pick another.";
+
 // POST { dateId, name, businessName, email, phone, creditToken? } → checkout url, or instant book on credit
 export async function POST(req: NextRequest) {
+  return runRoute("public/tents POST", async () => {
   const { dateId, name, businessName, email, phone, creditToken, website } = await req.json();
   if (website) return NextResponse.json({ ok: true });
   const pause = await tentPause();
   if (pause.paused) return NextResponse.json({ error: "Tent bookings are paused right now — check back soon." }, { status: 400 });
   const d = await db.tentDate.findUnique({ where: { id: dateId }, include: { bookings: true } });
   if (!d || !d.open) return NextResponse.json({ error: "That date isn't available." }, { status: 400 });
-  if (d.capacity - tentSpotsTaken(d.bookings) <= 0) return NextResponse.json({ error: "That date just filled up — pick another." }, { status: 400 });
+  if (d.capacity - tentSpotsTaken(d.bookings) <= 0) return NextResponse.json({ error: FULL_MSG }, { status: 400 });
 
   // weather-credit rebooking: no new charge
   if (creditToken) {
-    const credit = await db.tentBooking.findUnique({ where: { token: creditToken } });
-    if (!credit || credit.status !== "WEATHER_CREDIT") return NextResponse.json({ error: "That credit link isn't valid (already used?)." }, { status: 400 });
-    const token = randomBytes(16).toString("hex");
-    const nb = await db.tentBooking.create({
-      data: {
-        dateId: d.id, name: credit.name, businessName: credit.businessName, email: credit.email, phone: credit.phone,
-        status: "PAID_DEPOSIT", token, creditFromId: credit.id,
-      },
+    // read-check-create in one transaction: without it two people holding
+    // credits could both pass the capacity check and both take the last spot.
+    const nb = await db.$transaction(async (tx) => {
+      const fresh = await tx.tentDate.findUnique({ where: { id: d.id }, include: { bookings: true } });
+      if (!fresh || !fresh.open) throw new HttpError(400, "That date isn't available.");
+      if (fresh.capacity - tentSpotsTaken(fresh.bookings) <= 0) throw new HttpError(400, FULL_MSG);
+
+      // consume the credit conditionally, so one credit link can't book twice
+      const consumed = await tx.tentBooking.updateMany({
+        where: { token: creditToken, status: "WEATHER_CREDIT" },
+        data: { status: "CREDIT_USED" },
+      });
+      if (consumed.count === 0) throw new HttpError(400, "That credit link isn't valid (already used?).");
+      const credit = await tx.tentBooking.findUnique({ where: { token: creditToken } });
+      if (!credit) throw new HttpError(400, "That credit link isn't valid (already used?).");
+
+      const token = randomBytes(16).toString("hex");
+      return tx.tentBooking.create({
+        data: {
+          dateId: fresh.id, name: credit.name, businessName: credit.businessName, email: credit.email, phone: credit.phone,
+          status: "PAID_DEPOSIT", token, creditFromId: credit.id,
+        },
+      });
     });
-    await db.tentBooking.update({ where: { id: credit.id }, data: { status: "CREDIT_USED" } });
     try { await sendTentConfirmEmail(nb.email, nb.name, d.date, nb.token, true); } catch {}
     try { await pushToAdmin("Tent rebooked ⛺", `${nb.businessName || nb.name} — ${d.date} (weather credit)`); } catch {}
     return NextResponse.json({ booked: true, date: d.date });
@@ -67,8 +85,13 @@ export async function POST(req: NextRequest) {
   if (!stripe) return NextResponse.json({ error: "Online booking isn't configured — call the market to book." }, { status: 500 });
 
   const token = randomBytes(16).toString("hex");
-  const booking = await db.tentBooking.create({
-    data: { dateId: d.id, name: n.slice(0, 60), businessName: (businessName || "").trim().slice(0, 100), email: e.slice(0, 120), phone: p.slice(0, 25), token },
+  const booking = await db.$transaction(async (tx) => {
+    const fresh = await tx.tentDate.findUnique({ where: { id: d.id }, include: { bookings: true } });
+    if (!fresh || !fresh.open) throw new HttpError(400, "That date isn't available.");
+    if (fresh.capacity - tentSpotsTaken(fresh.bookings) <= 0) throw new HttpError(400, FULL_MSG);
+    return tx.tentBooking.create({
+      data: { dateId: fresh.id, name: n.slice(0, 60), businessName: (businessName || "").trim().slice(0, 100), email: e.slice(0, 120), phone: p.slice(0, 25), token },
+    });
   });
   const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
   const session = await stripe.checkout.sessions.create({
@@ -87,4 +110,5 @@ export async function POST(req: NextRequest) {
   });
   await db.tentBooking.update({ where: { id: booking.id }, data: { stripeSessionId: session.id } });
   return NextResponse.json({ url: session.url });
+  });
 }

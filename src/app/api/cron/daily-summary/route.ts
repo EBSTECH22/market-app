@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendDailySummaryEmail } from "@/lib/email";
 import { TZ, centralDayStart } from "@/lib/time";
+import { cronAuthFailure } from "@/lib/cron";
+import { runRoute } from "@/lib/handler";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -9,11 +11,9 @@ export const maxDuration = 60;
 // Evening cron: one summary email per vendor who sold today and has NO push devices.
 // Idempotent via a Setting flag per Central-time day.
 export async function GET(req: NextRequest) {
-  const auth = req.headers.get("authorization");
-  const isVercelCron = req.headers.get("user-agent")?.includes("vercel-cron");
-  if (process.env.CRON_SECRET && auth !== `Bearer ${process.env.CRON_SECRET}` && !isVercelCron) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  return runRoute("cron/daily-summary GET", async () => {
+  const denied = cronAuthFailure(req);
+  if (denied) return denied;
 
   const now = new Date();
   const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(now); // YYYY-MM-DD
@@ -72,4 +72,5 @@ export async function GET(req: NextRequest) {
 
   await db.setting.upsert({ where: { key: flag }, create: { key: flag, value: String(sent) }, update: { value: String(sent) } });
   return NextResponse.json({ ok: true, sent });
+  });
 }

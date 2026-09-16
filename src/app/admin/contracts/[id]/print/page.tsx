@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
 import { fmtDay } from "@/lib/time";
+import { LinkButton } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +23,10 @@ export default async function ContractPrintPage({ params }: { params: { id: stri
     <main style={{ maxWidth: 700, margin: "0 auto", padding: "30px 26px 60px", background: "#fff", color: "#111", minHeight: "100vh", fontSize: 13.5, lineHeight: 1.55 }}>
       <style>{`@media print { .no-print { display: none !important; } } h2 { font-size: 14px; margin: 16px 0 4px; } p { margin: 6px 0; }`}</style>
 
-      <button className="btn small no-print" style={{ marginBottom: 14 }}>
-        <a href="/admin" style={{ textDecoration: "none", color: "inherit" }}>← BACK</a>
-      </button>
-      <span className="no-print" style={{ fontSize: 12, color: "#777", marginLeft: 10 }}>Print with Ctrl+P (or Share → Print on a phone)</span>
+      <div className="no-print row wrap g-3" style={{ marginBottom: 14 }}>
+        <LinkButton href="/admin" variant="secondary" size="sm" icon="arrowLeft">Back</LinkButton>
+        <span style={{ fontSize: 12, color: "#777" }}>Print with Ctrl+P (or Share → Print on a phone)</span>
+      </div>
 
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/logo.png" alt="" style={{ width: 90, height: 90, display: "block", margin: "0 auto 8px" }} />

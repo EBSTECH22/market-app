@@ -5,10 +5,12 @@ import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/
 import { sendCustomerReceiptEmail } from "@/lib/email";
 import { getTaxRatePercent, getCardAdjustPercent } from "@/lib/settings";
 import { effectivePriceCents } from "@/lib/pricing";
+import { runRoute, HttpError } from "@/lib/handler";
 
 import { pushToVendor } from "@/lib/push";
 
 export async function POST(req: NextRequest) {
+  return runRoute("admin/sale POST", async () => {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { lines, paymentMethod, cardName, customerContact, redeem } = (await req.json()) as {
@@ -62,8 +64,10 @@ export async function POST(req: NextRequest) {
   const cardAdjustCents = paymentMethod === "CARD" && adjustPercent > 0 ? Math.round((subtotal * adjustPercent) / 100) : 0;
   const taxCents = Math.round(((subtotal + cardAdjustCents) * taxRate) / 100);
 
-  // rewards: find the customer up front so redemption can discount this sale
-  let customer = customerContact ? await findOrCreateCustomer(customerContact) : null;
+  // rewards: find the customer up front so redemption can discount this sale.
+  // This is only a friendly pre-check — the authoritative balance check and the
+  // decrement both happen inside the transaction below.
+  const customer = customerContact ? await findOrCreateCustomer(customerContact) : null;
   let discountCents = 0;
   if (redeem) {
     if (!customer) return NextResponse.json({ error: "Enter the customer's email or phone to redeem." }, { status: 400 });
@@ -73,6 +77,39 @@ export async function POST(req: NextRequest) {
   const totalCents = subtotal + cardAdjustCents + taxCents - discountCents;
 
   const sale = await db.$transaction(async (tx) => {
+    // ---- stock check, inside the transaction so two registers can't oversell
+    // the last unit (same guard /api/public/shop does before checkout)
+    const needed = new Map<string, number>();
+    for (const sl of saleLines) needed.set(sl.itemId, (needed.get(sl.itemId) || 0) + sl.quantity);
+    const fresh = await tx.item.findMany({
+      where: { id: { in: [...needed.keys()] } },
+      select: { id: true, name: true, quantity: true },
+    });
+    for (const [itemId, qty] of needed) {
+      const row = fresh.find((i) => i.id === itemId);
+      if (!row) throw new HttpError(400, "An item on the ticket no longer exists.");
+      if (row.quantity < qty) {
+        throw new HttpError(
+          400,
+          row.quantity <= 0
+            ? `${row.name} is sold out — take it off the ticket.`
+            : `Only ${row.quantity} of ${row.name} left (ticket has ${qty}) — adjust the quantity.`
+        );
+      }
+    }
+
+    // ---- redemption: conditional decrement, so the same 100 points can't be
+    // spent twice by two concurrent sales. 0 rows matched = someone beat us.
+    if (redeem && customer) {
+      const spent = await tx.customer.updateMany({
+        where: { id: customer.id, points: { gte: REDEEM_POINTS } },
+        data: { points: { decrement: REDEEM_POINTS } },
+      });
+      if (spent.count === 0) {
+        throw new HttpError(400, `Those points were just used — ${REDEEM_POINTS} points aren't available anymore. Ring it up without the reward.`);
+      }
+    }
+
     const last = await tx.sale.aggregate({ _max: { number: true } });
     const number = Math.max(1000, (last._max.number || 999) + 1);
     const created = await tx.sale.create({
@@ -104,6 +141,18 @@ export async function POST(req: NextRequest) {
     }
     // never let floor counts go negative
     await tx.item.updateMany({ where: { quantity: { lt: 0 } }, data: { quantity: 0 } });
+
+    // ---- points earned + the audit trail, committed with the sale
+    if (customer) {
+      const earned = pointsFor(totalCents);
+      if (earned > 0) {
+        await tx.customer.update({ where: { id: customer.id }, data: { points: { increment: earned } } });
+        await tx.loyaltyEvent.create({ data: { customerId: customer.id, saleId: created.id, delta: earned, note: `Sale #${created.number}` } });
+      }
+      if (redeem) {
+        await tx.loyaltyEvent.create({ data: { customerId: customer.id, saleId: created.id, delta: -REDEEM_POINTS, note: `$5 reward redeemed on #${created.number}` } });
+      }
+    }
     return created;
   });
 
@@ -132,13 +181,6 @@ export async function POST(req: NextRequest) {
 
   let customerPoints: number | null = null;
   if (customer) {
-    const earned = pointsFor(totalCents);
-    const delta = earned - (redeem ? REDEEM_POINTS : 0);
-    if (delta !== 0) {
-      await db.customer.update({ where: { id: customer.id }, data: { points: { increment: delta } } });
-    }
-    if (earned > 0) await db.loyaltyEvent.create({ data: { customerId: customer.id, saleId: sale.id, delta: earned, note: `Sale #${sale.number}` } });
-    if (redeem) await db.loyaltyEvent.create({ data: { customerId: customer.id, saleId: sale.id, delta: -REDEEM_POINTS, note: `$5 reward redeemed on #${sale.number}` } });
     const fresh = await db.customer.findUnique({ where: { id: customer.id } });
     customerPoints = fresh?.points ?? null;
     if (customer.email) {
@@ -151,4 +193,5 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
+  });
 }

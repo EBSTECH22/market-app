@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import SignaturePad from "@/components/SignaturePad";
 import RulesBody, { RULES_UPDATED } from "@/components/RulesBody";
+import { Badge, Button, Card, Note, Skeleton } from "@/components/ui";
 
 type Packet = {
   role: "STAFF" | "VENDOR";
@@ -20,6 +22,38 @@ type Packet = {
 };
 
 const fmtDay = (d: string) => new Date(d).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+/**
+ * The packet is a legal document: it is rendered on white with black text so
+ * the screen matches the page that comes out of the printer. That means the
+ * kit's chrome sitting on top of it (print button, signed badge, the signing
+ * card) has to stay legible even when the rest of the app is in dark mode, so
+ * the theme tokens are re-pointed at their light values for this subtree only.
+ * These are the same token names globals.css defines — no new colours.
+ */
+const PAPER_TOKENS = {
+  "--surface": "var(--n-0)",
+  "--surface-hover": "var(--n-50)",
+  "--surface-active": "var(--n-100)",
+  "--bg-elevated": "var(--n-0)",
+  "--bg-inset": "var(--n-50)",
+  "--bg-sunken": "var(--n-100)",
+  "--text": "var(--n-900)",
+  "--text-secondary": "var(--n-600)",
+  "--text-muted": "var(--n-500)",
+  "--border": "var(--n-200)",
+  "--border-strong": "var(--n-300)",
+  "--border-subtle": "var(--n-150)",
+  "--accent": "var(--brand-600)",
+  "--accent-hover": "var(--brand-700)",
+  "--accent-soft": "var(--brand-50)",
+  "--accent-border": "var(--brand-200)",
+  "--accent-text": "var(--brand-700)",
+  "--danger-soft": "var(--danger-50)",
+  "--danger-text": "var(--danger-700)",
+  "--warn-soft": "var(--warn-50)",
+  "--warn-text": "var(--warn-700)",
+} as unknown as CSSProperties;
 
 function AppRow({ label, value }: { label: string; value: string }) {
   if (!value) return null;
@@ -74,13 +108,23 @@ export default function ContractPacketView({ apiPath }: { apiPath: string }) {
     load();
   };
 
-  if (err && !p) return <main style={{ padding: 60, textAlign: "center" }}>{err}</main>;
-  if (!p) return (
-    <main style={{ maxWidth: 700, margin: "0 auto", padding: "30px 20px" }}>
-      <div className="skel" style={{ height: 30, width: 260, margin: "0 auto 16px" }} />
-      <div className="skel" style={{ height: 500 }} />
-    </main>
-  );
+  if (err && !p) {
+    return (
+      <main className="public-wrap public-narrow">
+        <Note tone="error" title="This contract couldn't be opened">{err}</Note>
+      </main>
+    );
+  }
+
+  if (!p) {
+    return (
+      <main className="public-wrap public-narrow" aria-busy="true">
+        <span className="sr-only">Loading the contract packet…</span>
+        <Skeleton width={260} height={30} style={{ margin: "0 auto var(--sp-4)" }} />
+        <Skeleton height={500} />
+      </main>
+    );
+  }
 
   const c = p.contract;
   const rent = (c.monthlyRentCents / 100).toFixed(2);
@@ -88,16 +132,21 @@ export default function ContractPacketView({ apiPath }: { apiPath: string }) {
   const mySideSigned = p.role === "VENDOR" ? !!c.vendorSignedAt : !!c.marketSignedAt;
 
   return (
-    <main style={{ maxWidth: 700, margin: "0 auto", padding: "24px 22px 70px", background: "#fff", minHeight: "100vh", fontSize: 13.5, lineHeight: 1.55, color: "#111" }}>
+    <main className="packet" style={{ maxWidth: 700, margin: "0 auto", padding: "24px 22px 70px", background: "#fff", minHeight: "100vh", fontSize: 13.5, lineHeight: 1.55, color: "#111", ...PAPER_TOKENS }}>
+      {/* The document's own typography. Scoped to unclassed elements so it
+          can't reach into the kit chrome (the Card heading, the Note body). */}
       <style>{`
-        @media print { .no-print { display: none !important; } .page-break { break-before: page; } main { padding: 0 !important; } }
-        h2 { font-size: 14px; margin: 14px 0 4px; } p { margin: 6px 0; }
+        @media print { .no-print { display: none !important; } .page-break { break-before: page; } .packet { padding: 0 !important; } }
+        .packet h2:not([class]) { font-size: 14px; margin: 14px 0 4px; }
+        .packet p:not([class]) { margin: 6px 0; }
       `}</style>
 
-      <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-        <button className="btn small" onClick={() => window.print()}>🖨 PRINT / SAVE PDF — FULL PACKET</button>
-        {fullySigned && <span className="ok" style={{ margin: 0 }}>Fully signed ✓</span>}
-        {!fullySigned && mySideSigned && <span style={{ fontSize: 12.5, color: "var(--ash)", fontWeight: 600 }}>Waiting on the other signature…</span>}
+      <div className="no-print row wrap g-3" style={{ marginBottom: 14 }}>
+        <Button variant="secondary" icon="print" onClick={() => window.print()}>
+          Print or save the full packet
+        </Button>
+        {fullySigned && <Badge tone="success" dot>Fully signed</Badge>}
+        {!fullySigned && mySideSigned && <Badge tone="warn" dot>Waiting on the other signature</Badge>}
       </div>
 
       {/* ── THE AGREEMENT ─────────────────────────────── */}
@@ -164,15 +213,19 @@ export default function ContractPacketView({ apiPath }: { apiPath: string }) {
 
       {/* ── SIGN HERE ─────────────────────────────── */}
       {!mySideSigned && (
-        <div className="card no-print" style={{ marginTop: 22, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-          <h2 className="display" style={{ fontSize: 16, margin: "0 0 4px" }}>
-            {p.role === "VENDOR" ? "SIGN AS VENDOR" : "SIGN FOR THE MARKET"}
-          </h2>
-          <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
-            By signing you agree to the Agreement above, certify the attached application (Exhibit A) is true, and agree to the Market Rules (Exhibit B).
-          </p>
-          <SignaturePad label={signing ? "SIGNING…" : "ADOPT & SIGN"} onSign={sign} />
-          {err && <p className="err">{err}</p>}
+        <div className="no-print" style={{ marginTop: 22 }}>
+          <Card
+            title={p.role === "VENDOR" ? "Sign as vendor" : "Sign for the market"}
+            subtitle="Electronic signatures on this packet are binding."
+          >
+            <div className="stack g-4">
+              <p className="t-sm t-secondary" style={{ margin: 0 }}>
+                By signing you agree to the Agreement above, certify the attached application (Exhibit A) is true, and agree to the Market Rules (Exhibit B).
+              </p>
+              <SignaturePad label={signing ? "Signing…" : "Adopt & sign"} onSign={sign} />
+              {err && <Note tone="error">{err}</Note>}
+            </div>
+          </Card>
         </div>
       )}
 

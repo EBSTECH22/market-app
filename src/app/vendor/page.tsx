@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePulse } from "@/lib/usePulse";
+import {
+  Icon, Button, IconButton, LinkButton, Field, Input, Textarea, Checkbox,
+  Modal, Panel, useDialog, useToast, DataTable, Badge, Card, Stat, EmptyState,
+  Note, Skeleton, SkeletonStats, PageHeader, type Column, type IconName,
+} from "@/components/ui";
+import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
+import { useHashTab } from "@/lib/useHashTab";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
@@ -9,8 +16,121 @@ type Me = {
   vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
+type Thread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; last: { sender: string; body: string } | null };
+type OpenThread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; messages: { id: string; sender: string; body: string; createdAt: string }[] };
+type Photo = { id: string; kind: string; itemId?: string };
 
-const money = (c: number) => `$${(c / 100).toFixed(2)}`;
+/* Tabs live in the URL hash so refresh, back/forward and shared links all work.
+   They used to sit in plain useState, so a reload always dumped a vendor back
+   on Home and there was no way to link anyone to a section. */
+const VENDOR_TABS = ["home", "items", "inbox", "page", "money", "chat", "settings"] as const;
+type VendorTab = (typeof VENDOR_TABS)[number];
+
+const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }> = {
+  home: { label: "Home", icon: "store", sub: "Your booth at a glance" },
+  items: { label: "My items", icon: "box", sub: "Prices, stock, sales, and barcode labels" },
+  inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
+  page: { label: "My page", icon: "star", sub: "Your public page, photos, and market feed posts" },
+  money: { label: "Money", icon: "dollar", sub: "Balance, rent, card on file, and your full statement" },
+  chat: { label: "Vendor chat", icon: "message", sub: "Every vendor and staff member at the market" },
+  settings: { label: "Settings", icon: "settings", sub: "Sale alerts and your password" },
+};
+
+/* Phones get the four most-used destinations plus a "More" sheet — seven
+   equal tabs across a phone is unreadable and under the 44px target. */
+const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "inbox", "money"];
+const MORE_MOBILE: VendorTab[] = ["page", "chat", "settings"];
+
+const LEDGER_ICON = (type: string): IconName =>
+  type === "SALE" ? "receipt" : type === "PAYOUT" ? "cash" : type === "RENT" ? "store" : "edit";
+
+const THREAD_ICON = (type: string): IconName =>
+  type === "PREORDER" ? "receipt" : type === "REQUEST" ? "help" : "warning";
+
+/** The price a shopper actually pays — unchanged from the original maths. */
+const effectivePriceCents = (it: Item): number =>
+  Math.max(0, Math.round((it.priceCents * (100 - Math.min(90, Math.max(0, it.salePercent || 0)))) / 100));
+
+/** Anything at or below this gets a badge so a thin shelf is obvious. */
+const LOW_STOCK = 3;
+
+/**
+ * One password form, used by both the forced first-change screen and the
+ * Settings tab. The markup was duplicated verbatim in two places, so a fix to
+ * one never reached the other. Lives at module scope so typing in it doesn't
+ * remount the inputs on every parent render.
+ */
+function PasswordForm({
+  requireCurrent, cur, next, again, onCur, onNext, onAgain,
+  onSubmit, busy, error, submitLabel,
+}: {
+  requireCurrent: boolean;
+  cur: string;
+  next: string;
+  again: string;
+  onCur: (v: string) => void;
+  onNext: (v: string) => void;
+  onAgain: (v: string) => void;
+  onSubmit: () => void;
+  busy: boolean;
+  error: string;
+  submitLabel: string;
+}) {
+  const mismatch = again.length > 0 && next.length > 0 && again !== next;
+  return (
+    <form className="stack g-4" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>
+      {requireCurrent ? (
+        <Field label="Current password" required>
+          {(p) => (
+            <Input
+              {...p}
+              type="password"
+              autoComplete="current-password"
+              value={cur}
+              onChange={(e) => onCur(e.target.value)}
+            />
+          )}
+        </Field>
+      ) : null}
+
+      <Field label="New password" hint="At least 8 characters." required>
+        {(p) => (
+          <Input
+            {...p}
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => onNext(e.target.value)}
+          />
+        )}
+      </Field>
+
+      <Field
+        label="Type it again"
+        error={mismatch ? "These two don't match yet." : undefined}
+        required
+      >
+        {(p) => (
+          <Input
+            {...p}
+            type="password"
+            autoComplete="new-password"
+            value={again}
+            onChange={(e) => onAgain(e.target.value)}
+          />
+        )}
+      </Field>
+
+      {error ? <Note tone="error">{error}</Note> : null}
+
+      <div>
+        <Button type="submit" variant="primary" size="lg" icon="lock" loading={busy} block>
+          {submitLabel}
+        </Button>
+      </div>
+    </form>
+  );
+}
 
 export default function VendorDashboard() {
   const [me, setMe] = useState<Me | null>(null);
@@ -22,36 +142,42 @@ export default function VendorDashboard() {
   const [pwCur, setPwCur] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwNew2, setPwNew2] = useState("");
-  const [pwMsg, setPwMsg] = useState("");
+  const [pwErr, setPwErr] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
   const [pushDevices, setPushDevices] = useState<number | null>(null);
   const [pushKey, setPushKey] = useState("");
-  const [pushMsg, setPushMsg] = useState("");
-  const [inbox, setInbox] = useState<{ id: string; type: string; status: string; customerName: string; email: string; phone: string; last: { sender: string; body: string } | null }[]>([]);
-  const [openThread, setOpenThread] = useState<{ id: string; type: string; status: string; customerName: string; email: string; phone: string; messages: { id: string; sender: string; body: string; createdAt: string }[] } | null>(null);
+  const [pushMsg, setPushMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [inbox, setInbox] = useState<Thread[]>([]);
+  const [inboxLoaded, setInboxLoaded] = useState(false);
+  const [inboxErr, setInboxErr] = useState("");
+  const [openThread, setOpenThread] = useState<OpenThread | null>(null);
   const [replyBody, setReplyBody] = useState("");
   const [inboxMsg, setInboxMsg] = useState("");
   const [pubPre, setPubPre] = useState(false);
   const [pubReq, setPubReq] = useState(false);
   const [pubBlurb, setPubBlurb] = useState("");
   const [pubSelf, setPubSelf] = useState(true);
-  const [pubMsg, setPubMsg] = useState("");
-  const [myPhotos, setMyPhotos] = useState<{ id: string; kind: string; itemId?: string }[]>([]);
-  const [photoMsg, setPhotoMsg] = useState("");
+  const [myPhotos, setMyPhotos] = useState<Photo[]>([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [po, setPo] = useState<{ status: string; description: string; subtotalCents: number; taxCents: number; totalCents: number; expectedDate: string; payUrl: string } | null>(null);
   const [poDesc, setPoDesc] = useState("");
   const [poAmt, setPoAmt] = useState("");
   const [poDate, setPoDate] = useState("");
-  const [poMsg, setPoMsg] = useState("");
-  const [vtab, setVtab] = useState<"home" | "items" | "inbox" | "page" | "money" | "chat" | "settings">("home");
+  const [poErr, setPoErr] = useState("");
+  const [tab, setTab] = useHashTab(VENDOR_TABS, "home");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [editItem, setEditItem] = useState<string | null>(null);
   const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0" });
-  const [cardMsg, setCardMsg] = useState("");
+  const [cardMsg, setCardMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [chat, setChat] = useState<{ id: string; vendorId: string; name: string; body: string; createdAt: string }[]>([]);
   const [chatMe, setChatMe] = useState("");
   const [chatBody, setChatBody] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
   const [postBody, setPostBody] = useState("");
   const [myPosts, setMyPosts] = useState<{ id: string; body: string; photoId: string | null; createdAt: string }[]>([]);
+  const dialog = useDialog();
+  const toast = useToast();
+
   const loadChat = useCallback(async () => {
     const r = await fetch("/api/vendor/chat");
     if (r.ok) { const d = await r.json(); setChat(d.messages); setChatMe(d.me); }
@@ -61,27 +187,6 @@ export default function VendorDashboard() {
     if (r.ok) setMyPosts((await r.json()).posts);
   }, []);
   useEffect(() => { loadChat(); loadPosts(); }, [loadChat, loadPosts]);
-  useEffect(() => {
-    const rsid = new URLSearchParams(window.location.search).get("rent_session");
-    if (rsid) {
-      fetch(`/api/vendor/rent-checkout?session_id=${encodeURIComponent(rsid)}`).then(async (r) => {
-        const d = await r.json();
-        setCardMsg(r.ok ? `Rent paid \u2713 — and card \u00b7\u00b7\u00b7\u00b7${d.last4} is saved for automatic settlement going forward.` : d.error || "Couldn't confirm the payment.");
-        window.history.replaceState(null, "", "/vendor");
-        load();
-      });
-      return;
-    }
-    const sid = new URLSearchParams(window.location.search).get("card_session");
-    if (!sid) return;
-    fetch(`/api/vendor/card?session_id=${encodeURIComponent(sid)}`).then(async (r) => {
-      const d = await r.json();
-      setCardMsg(r.ok ? `Card ····${d.last4} saved for automatic rent \u2713` : d.error || "Couldn't save the card.");
-      window.history.replaceState(null, "", "/vendor");
-      load();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -97,18 +202,51 @@ export default function VendorDashboard() {
   }, []);
 
   useEffect(() => {
+    const rsid = new URLSearchParams(window.location.search).get("rent_session");
+    if (rsid) {
+      fetch(`/api/vendor/rent-checkout?session_id=${encodeURIComponent(rsid)}`).then(async (r) => {
+        const d = await r.json();
+        setCardMsg(r.ok
+          ? { ok: true, text: `Rent paid — and card ····${d.last4} is saved for automatic settlement going forward.` }
+          : { ok: false, text: d.error || "Couldn't confirm the payment." });
+        window.history.replaceState(null, "", "/vendor");
+        load();
+      });
+      return;
+    }
+    const sid = new URLSearchParams(window.location.search).get("card_session");
+    if (!sid) return;
+    fetch(`/api/vendor/card?session_id=${encodeURIComponent(sid)}`).then(async (r) => {
+      const d = await r.json();
+      setCardMsg(r.ok
+        ? { ok: true, text: `Card ····${d.last4} saved for automatic rent.` }
+        : { ok: false, text: d.error || "Couldn't save the card." });
+      window.history.replaceState(null, "", "/vendor");
+      load();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     load();
   }, [load]);
   usePulse(() => { load(); loadChat(); loadPosts(); });
 
   const loadInbox = useCallback(async () => {
-    const r = await fetch("/api/vendor/inbox");
-    if (r.ok) setInbox((await r.json()).threads || []);
+    try {
+      const r = await fetch("/api/vendor/inbox");
+      if (r.ok) { setInbox((await r.json()).threads || []); setInboxErr(""); }
+      else setInboxErr("Couldn't load your messages.");
+    } catch {
+      setInboxErr("Couldn't load your messages — check your connection.");
+    } finally {
+      setInboxLoaded(true);
+    }
   }, []);
   useEffect(() => { loadInbox(); }, [loadInbox]);
 
   const openInboxThread = async (id: string) => {
-    setInboxMsg(""); setReplyBody(""); setPo(null); setPoMsg("");
+    setInboxMsg(""); setReplyBody(""); setPo(null); setPoErr("");
     const r = await fetch(`/api/vendor/inbox/${id}`);
     if (r.ok) {
       const t = (await r.json()).thread;
@@ -117,34 +255,47 @@ export default function VendorDashboard() {
         const pr = await fetch(`/api/vendor/inbox/${id}/preorder`);
         if (pr.ok) setPo((await pr.json()).preorder);
       }
+    } else {
+      toast.error("Couldn't open that message", "Pull it up again in a moment.");
     }
   };
 
   const acceptPreorder = async () => {
     if (!openThread) return;
-    setPoMsg("");
+    setPoErr("");
     const r = await fetch(`/api/vendor/inbox/${openThread.id}/preorder`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "accept", description: poDesc, subtotalDollars: poAmt, expectedDate: poDate }),
     });
     const d = await r.json();
-    if (!r.ok) { setPoMsg(d.error || "Couldn't accept."); return; }
-    setPoMsg("Accepted — payment link emailed to the customer. ✓");
+    if (!r.ok) { setPoErr(d.error || "Couldn't accept."); return; }
+    toast.success("Pre-order accepted", "The payment link is on its way to the customer by email.");
     await openInboxThread(openThread.id);
     await loadInbox();
   };
 
   const declinePreorder = async () => {
     if (!openThread) return;
-    const reason = prompt("Short reason for the customer:");
+    const reason = await dialog.prompt({
+      title: "Decline this pre-order",
+      body: "The customer gets your reason by email. A sentence is plenty — \"I'm booked that weekend\" saves them guessing.",
+      label: "Reason for the customer",
+      placeholder: "I'm fully booked that weekend, sorry!",
+      multiline: true,
+      required: true,
+      tone: "warn",
+      confirmLabel: "Send the decline",
+      validate: (v) => (v.trim().length < 5 ? "Give them at least a short sentence." : null),
+    });
     if (reason === null) return;
-    setPoMsg("");
+    setPoErr("");
     const r = await fetch(`/api/vendor/inbox/${openThread.id}/preorder`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "decline", reason }),
     });
     const d = await r.json();
-    if (!r.ok) { setPoMsg(d.error || "Couldn't decline."); return; }
+    if (!r.ok) { setPoErr(d.error || "Couldn't decline."); return; }
+    toast.info("Pre-order declined", "Your reason has been emailed to the customer.");
     await openInboxThread(openThread.id);
     await loadInbox();
   };
@@ -159,6 +310,7 @@ export default function VendorDashboard() {
     const d = await r.json();
     if (!r.ok) { setInboxMsg(d.error || "Couldn't send."); return; }
     setReplyBody("");
+    toast.success("Reply sent", "They get it by email with a private link back to you.");
     await openInboxThread(openThread.id);
     await loadInbox();
   };
@@ -210,14 +362,17 @@ export default function VendorDashboard() {
       const { data, mime } = await compressImage(file);
       const r = await fetch("/api/vendor/photos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data, mime, kind: "ITEM", itemId }) });
       const d = await r.json();
-      if (!r.ok) { alert(d.error || "Upload failed."); return; }
+      if (!r.ok) { toast.error("Couldn't add that photo", d.error || "Try a JPEG or PNG from your phone."); return; }
+      toast.success("Photo added", "It shows on your public page next to this item.");
       await loadPhotos();
+    } catch {
+      toast.error("That file didn't read as a photo", "Try a JPEG or PNG.");
     } finally { setBusy(false); }
   };
 
   const uploadPhoto = async (file: File | undefined, kind: "PRODUCT" | "LOGO" = "PRODUCT") => {
     if (!file) return;
-    setPhotoMsg(""); setPhotoBusy(true);
+    setPhotoBusy(true);
     try {
       const { data, mime } = await compressImage(file);
       const r = await fetch("/api/vendor/photos", {
@@ -225,27 +380,38 @@ export default function VendorDashboard() {
         body: JSON.stringify({ data, mime, kind }),
       });
       const d = await r.json();
-      if (!r.ok) { setPhotoMsg(d.error || "Couldn't upload."); return; }
-      setPhotoMsg("Added. ✓");
+      if (!r.ok) { toast.error("Couldn't upload that photo", d.error || "Try again."); return; }
+      toast.success(kind === "LOGO" ? "Logo updated" : "Photo added", "Customers see it on your public page.");
       await loadPhotos();
     } catch {
-      setPhotoMsg("That file didn't read as a photo — try a JPEG or PNG.");
+      toast.error("That file didn't read as a photo", "Try a JPEG or PNG.");
     } finally { setPhotoBusy(false); }
   };
 
   const deletePhoto = async (id: string) => {
-    if (!confirm("Remove this photo from your public page?")) return;
+    const yes = await dialog.confirm({
+      title: "Remove this photo?",
+      body: "It comes off your public page right away. The photo isn't recoverable — you'd need to upload it again.",
+      confirmLabel: "Remove the photo",
+      cancelLabel: "Keep it",
+      tone: "danger",
+    });
+    if (!yes) return;
     await fetch(`/api/vendor/photos/${id}`, { method: "DELETE" });
+    toast.success("Photo removed");
     await loadPhotos();
   };
 
   const savePublic = async () => {
-    setPubMsg("");
-    const r = await fetch("/api/vendor/settings", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb, allowSelfCheckout: pubSelf }),
-    });
-    setPubMsg(r.ok ? "Saved. ✓" : "Couldn't save.");
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb, allowSelfCheckout: pubSelf }),
+      });
+      if (r.ok) toast.success("Public page saved", "Customers see the change immediately.");
+      else toast.error("Couldn't save", "Try again in a moment.");
+    } finally { setBusy(false); }
   };
 
   useEffect(() => {
@@ -256,14 +422,17 @@ export default function VendorDashboard() {
   }, []);
 
   const enablePush = async () => {
-    setPushMsg("");
+    setPushMsg(null);
     try {
       if (!("Notification" in window) || !("serviceWorker" in navigator)) {
-        setPushMsg("This browser can't do notifications. On iPhone: share button → Add to Home Screen, then open the app from there and try again.");
+        setPushMsg({ ok: false, text: "This browser can't do notifications. On iPhone: share button → Add to Home Screen, then open the app from there and try again." });
         return;
       }
       const perm = await Notification.requestPermission();
-      if (perm !== "granted") { setPushMsg("Notifications were blocked — allow them in your browser settings and try again."); return; }
+      if (perm !== "granted") {
+        setPushMsg({ ok: false, text: "Notifications were blocked — allow them in your browser settings and try again." });
+        return;
+      }
       const reg = await navigator.serviceWorker.ready;
       const b64 = pushKey.replace(/-/g, "+").replace(/_/g, "/");
       const pad = "=".repeat((4 - (b64.length % 4)) % 4);
@@ -273,11 +442,33 @@ export default function VendorDashboard() {
       const res = await fetch("/api/vendor/push", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()),
       });
-      if (!res.ok) { setPushMsg("Couldn't save — try again."); return; }
+      if (!res.ok) { setPushMsg({ ok: false, text: "Couldn't save this device — try again." }); return; }
       setPushDevices((n) => (n || 0) + 1);
-      setPushMsg("Sale alerts ON for this device. ✓ You'll get a notification instead of an email.");
+      setPushMsg({ ok: true, text: "Sale alerts are on for this device. You'll get a notification instead of an email." });
+      toast.success("Sale alerts on", "This device will buzz the moment something sells.");
     } catch {
-      setPushMsg("Couldn't turn on notifications here. iPhone: must be iOS 16.4+ AND opened from a home-screen icon (share → Add to Home Screen).");
+      setPushMsg({ ok: false, text: "Couldn't turn on notifications here. iPhone: must be iOS 16.4+ AND opened from a home-screen icon (share → Add to Home Screen)." });
+    }
+  };
+
+  const disablePush = async () => {
+    const yes = await dialog.confirm({
+      title: "Turn off sale alerts everywhere?",
+      body: "Every device you've turned alerts on for stops buzzing. You'll get one summary email at the end of each selling day instead — never an email per sale. You can turn alerts back on from any device.",
+      confirmLabel: "Turn alerts off",
+      cancelLabel: "Keep them on",
+      tone: "warn",
+    });
+    if (!yes) return;
+    const r = await fetch("/api/vendor/push", {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }),
+    });
+    if (r.ok) {
+      setPushDevices(0);
+      setPushMsg({ ok: true, text: "Sale alerts are off — you'll get the end-of-day summary email instead." });
+      toast.success("Sale alerts off", "Daily summary email instead.");
+    } else {
+      toast.error("Couldn't turn them off", "Try again in a moment.");
     }
   };
 
@@ -297,32 +488,228 @@ export default function VendorDashboard() {
       setErr(data.error || "Couldn't add it.");
       return;
     }
+    toast.success(`${name.trim()} added`, "Print a label for it and it's ready to scan.");
     setName(""); setPrice(""); setQty("");
     await load();
   };
 
-  const patchItem = async (id: string, body: object) => {
+  const patchItem = async (id: string, body: object): Promise<boolean> => {
     setBusy(true);
-    await fetch(`/api/vendor/items/${id}`, {
+    const r = await fetch(`/api/vendor/items/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({} as { error?: string }));
+      toast.error("Couldn't save that change", d.error || "Try again in a moment.");
+    }
     await load();
     setBusy(false);
+    return r.ok;
+  };
+
+  const restockItem = async (it: Item) => {
+    const v = await dialog.prompt({
+      title: `Restock ${it.name}`,
+      body: `There ${it.quantity === 1 ? "is" : "are"} ${plural(it.quantity, "unit")} on the floor right now. Enter how many you're ADDING — the count goes up by that much.`,
+      label: "How many are you adding?",
+      hint: "To correct a wrong count instead, open the item and edit the floor total.",
+      type: "number",
+      placeholder: "6",
+      required: true,
+      confirmLabel: "Add to the floor",
+      validate: (raw) => {
+        const n = Math.round(Number(raw));
+        if (!raw.trim() || Number.isNaN(n)) return "Enter a number.";
+        if (n <= 0) return "Enter at least 1.";
+        if (n > 999) return "999 at a time is the most the register will take.";
+        return null;
+      },
+    });
+    if (v === null) return;
+    const ok = await patchItem(it.id, { addQuantity: v });
+    if (ok) toast.success("Floor count updated", `${plural(Math.round(Number(v)), "unit")} added to ${it.name}.`);
+  };
+
+  const runSaleOnEverything = async () => {
+    const v = await dialog.prompt({
+      title: "Run a sale on everything",
+      body: "Every active item drops by this much. The register and your online page both charge the sale price automatically — your labels don't need reprinting.",
+      label: "Percent off",
+      hint: "Anything from 0 to 90. Entering 0 puts everything back to full price.",
+      type: "number",
+      placeholder: "10",
+      required: true,
+      confirmLabel: "Start the sale",
+      validate: (raw) => {
+        const n = Math.round(Number(raw));
+        if (!raw.trim() || Number.isNaN(n)) return "Enter a number between 0 and 90.";
+        if (n < 0 || n > 90) return "A sale has to be between 0% and 90%.";
+        return null;
+      },
+    });
+    if (v === null) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: v }) });
+      const d = await r.json();
+      if (!r.ok) { toast.error("Couldn't start the sale", d.error || "Try again."); return; }
+      toast.success(
+        Math.round(Number(v)) === 0 ? "Sales ended" : `${Math.round(Number(v))}% off everything`,
+        `${plural(d.updated ?? 0, "item")} updated.`
+      );
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const endAllSales = async () => {
+    const yes = await dialog.confirm({
+      title: "End every sale?",
+      body: "All of your items go back to full price right away, at the register and online. You can start another sale any time.",
+      confirmLabel: "Back to full price",
+      cancelLabel: "Leave the sale running",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: 0 }) });
+      if (r.ok) { toast.success("Sales ended", "Everything is back to full price."); await load(); }
+      else toast.error("Couldn't end the sale", "Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  const retireItem = async (it: Item) => {
+    const yes = await dialog.confirm({
+      title: `Retire ${it.name}?`,
+      body: "It comes off the floor, its count goes to zero, and its barcode stops scanning at the register. Your sales history is kept, and you can bring it back any time.",
+      confirmLabel: "Retire it",
+      cancelLabel: "Keep it selling",
+      tone: "warn",
+    });
+    if (!yes) return;
+    const ok = await patchItem(it.id, { active: false, quantity: 0 });
+    if (ok) { toast.success(`${it.name} retired`, "It's off the floor and can't be scanned."); setEditItem(null); }
+  };
+
+  const deleteItem = async (it: Item) => {
+    const yes = await dialog.confirm({
+      title: `Delete ${it.name} completely?`,
+      body: "This erases the item and its barcode for good — it can't be undone. If it has ever sold, it gets retired instead so the books stay whole.",
+      confirmLabel: "Delete it",
+      cancelLabel: "Keep it",
+      tone: "danger",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/vendor/items/${it.id}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!r.ok) { toast.error("Couldn't delete it", d.error || "Try again."); return; }
+      if (d.retired) {
+        await dialog.alert({
+          title: "Retired instead of deleted",
+          body: d.message,
+          tone: "warn",
+        });
+      } else {
+        toast.success(`${it.name} deleted`);
+      }
+      setEditItem(null);
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const publishPost = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: postBody }) });
+      if (r.ok) { setPostBody(""); toast.success("Posted to the market feed", "Customers see it on the market page now."); loadPosts(); }
+      else toast.error("Couldn't post that", (await r.json()).error || "Try again.");
+    } finally { setBusy(false); }
+  };
+
+  const deletePost = async (id: string) => {
+    const yes = await dialog.confirm({
+      title: "Delete this post?",
+      body: "It comes off the market feed for everyone. You can't undo it, but you can always post again.",
+      confirmLabel: "Delete the post",
+      cancelLabel: "Keep it",
+      tone: "danger",
+    });
+    if (!yes) return;
+    await fetch("/api/vendor/posts", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast.success("Post deleted");
+    loadPosts();
+  };
+
+  const startRentCheckout = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/rent-checkout", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) { toast.error("Couldn't start the payment", d.error || "Try again."); return; }
+      window.location.href = d.url;
+    } finally { setBusy(false); }
+  };
+
+  const startCardSetup = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/card", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) { toast.error("Couldn't start card setup", d.error || "Try again."); return; }
+      window.location.href = d.url;
+    } finally { setBusy(false); }
+  };
+
+  const removeCard = async () => {
+    const yes = await dialog.confirm({
+      title: "Remove your card on file?",
+      body: "Rent your sales don't cover would then need cash or a check at the market — nothing will charge automatically. You can add a card again whenever you like.",
+      confirmLabel: "Remove the card",
+      cancelLabel: "Keep it on file",
+      tone: "danger",
+    });
+    if (!yes) return;
+    const r = await fetch("/api/vendor/card", { method: "DELETE" });
+    if (r.ok) {
+      setCardMsg({ ok: true, text: "Card removed." });
+      toast.success("Card removed", "Unpaid rent now needs cash or a check.");
+      load();
+    } else {
+      toast.error("Couldn't remove the card", "Try again in a moment.");
+    }
+  };
+
+  /* Enter and the Send button ran two near-identical copies of this. */
+  const sendChat = async () => {
+    const b = chatBody.trim();
+    if (!b || chatBusy) return;
+    setChatBody("");
+    setChatBusy(true);
+    try {
+      const r = await fetch("/api/vendor/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: b }) });
+      if (!r.ok) { setChatBody(b); toast.error("Message didn't send", "Your text is still in the box — try again."); return; }
+      await loadChat();
+    } finally { setChatBusy(false); }
   };
 
   const changePw = async () => {
-    setPwMsg("");
-    if (pwNew !== pwNew2) { setPwMsg("The two passwords do not match - type them again."); return; }
+    setPwErr("");
+    if (pwNew !== pwNew2) { setPwErr("The two passwords do not match — type them again."); return; }
+    setPwBusy(true);
     const res = await fetch("/api/vendor/password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currentPassword: pwCur, newPassword: pwNew }),
     });
     const data = await res.json();
-    setPwMsg(res.ok ? "Password changed. ✓" : data.error || "Failed.");
-    if (res.ok) { setPwCur(""); setPwNew(""); setPwNew2(""); await load(); }
+    setPwBusy(false);
+    if (!res.ok) { setPwErr(data.error || "Couldn't change your password."); return; }
+    toast.success("Password changed", "Use the new one next time you sign in.");
+    setPwCur(""); setPwNew(""); setPwNew2("");
+    await load();
   };
 
   const logout = async () => {
@@ -330,590 +717,1362 @@ export default function VendorDashboard() {
     window.location.href = "/";
   };
 
-  if (!me) return (
-    <main style={{ maxWidth: 640, margin: "0 auto", padding: "22px 16px" }}>
-      <div className="skel" style={{ width: 128, height: 24, marginBottom: 10 }} />
-      <div className="skel" style={{ width: 220, height: 28, marginBottom: 18 }} />
-      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-        <div className="skel" style={{ flex: 1, height: 86 }} />
-        <div className="skel" style={{ flex: 1, height: 86 }} />
-      </div>
-      <div className="skel" style={{ height: 130, marginBottom: 14 }} />
-      <div className="skel" style={{ height: 220 }} />
-    </main>
-  );
+  /* ----------------------------------------------------------- loading -- */
 
-  if (me.vendor.mustChangePassword) {
+  if (!me) {
     return (
-      <main style={{ maxWidth: 430, margin: "0 auto", padding: "70px 16px" }}>
-        <div style={{ textAlign: "center", marginBottom: 18 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" style={{ width: 110, height: 110, marginBottom: 8 }} />
-{/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 210, maxWidth: "70%", height: "auto", margin: "2px auto 2px", display: "block" }} />
-          <div style={{ fontWeight: 700, fontSize: 11, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
+      <main className="content" aria-busy="true">
+        <div className="stack g-3 mb-5">
+          <Skeleton width={140} height={13} />
+          <Skeleton width={240} height={26} />
         </div>
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>SET YOUR OWN PASSWORD</h2>
-          <p style={{ fontSize: 13, color: "var(--ash)" }}>
-            You signed in with a temporary password from your email. Pick your own before continuing &mdash; you&rsquo;ll use it from now on.
-          </p>
-          <label>Your new password (8+ characters)</label>
-          <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
-          <label>Type it again</label>
-          <input type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} onKeyDown={(e) => e.key === "Enter" && changePw()} />
-          <div style={{ marginTop: 14 }}><button className="btn" onClick={changePw}>SAVE &amp; CONTINUE</button></div>
-          {pwMsg && <p className={pwMsg.includes("✓") ? "ok" : "err"}>{pwMsg}</p>}
+        <SkeletonStats count={4} />
+        <div className="stack g-4 mt-5">
+          <Skeleton height={130} radius="var(--r-lg)" />
+          <Skeleton height={220} radius="var(--r-lg)" />
         </div>
       </main>
     );
   }
 
+  /* -------------------------------------------- forced password change -- */
+
+  if (me.vendor.mustChangePassword) {
+    return (
+      <main className="row center" style={{ minHeight: "100dvh", padding: "var(--sp-6) var(--sp-4)" }}>
+        <div style={{ width: "100%", maxWidth: 400 }}>
+          <div style={{ textAlign: "center", marginBottom: "var(--sp-6)" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="" style={{ width: 88, height: 88, margin: "0 auto var(--sp-3)" }} />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/wordmark.png" alt="Community Harvest" style={{ width: 190, maxWidth: "70%", height: "auto", margin: "0 auto" }} />
+            <p className="t-label mt-2">Food and Craft Market</p>
+          </div>
+
+          <Card title="Set your own password">
+            <div className="stack g-4">
+              <p className="t-sm t-secondary">
+                You signed in with the temporary password from your email. Pick your own before
+                continuing &mdash; it&rsquo;s the one you&rsquo;ll use from now on.
+              </p>
+              <PasswordForm
+                requireCurrent={false}
+                cur={pwCur}
+                next={pwNew}
+                again={pwNew2}
+                onCur={setPwCur}
+                onNext={setPwNew}
+                onAgain={setPwNew2}
+                onSubmit={changePw}
+                busy={pwBusy}
+                error={pwErr}
+                submitLabel="Save and continue"
+              />
+            </div>
+          </Card>
+        </div>
+      </main>
+    );
+  }
+
+  /* --------------------------------------------------------- derived -- */
+
   const needsReply = inbox.filter((t) => t.status === "OPEN" && t.last && t.last.sender !== "VENDOR").length;
+  const activeItems = me.items.filter((it) => it.active);
+  const retiredItems = me.items.filter((it) => !it.active);
   const floorUnits = me.items.reduce((n, i) => n + (i.active ? i.quantity : 0), 0);
+  const lowStock = activeItems.filter((it) => it.quantity <= LOW_STOCK).length;
+  const onSale = activeItems.filter((it) => (it.salePercent || 0) > 0).length;
+  const meta = TAB_META[tab];
+  const editing = activeItems.find((it) => it.id === editItem) || null;
+  const navBadge: Partial<Record<VendorTab, number>> = { inbox: needsReply };
 
-  const Tab = (props: { id: "home" | "items" | "inbox" | "page" | "money" | "chat" | "settings"; label: string; badge?: number }) => (
-    <button
-      className={`btn small ${vtab === props.id ? "" : "ghost"}`}
-      style={{ position: "relative", whiteSpace: "nowrap" }}
-      onClick={() => { setVtab(props.id); window.scrollTo({ top: 0 }); }}
-    >
-      {props.label}
-      {props.badge ? (
-        <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, fontSize: 10.5, fontWeight: 700, padding: "1px 6px" }}>{props.badge}</span>
-      ) : null}
-    </button>
-  );
+  const go = (t: VendorTab) => { setTab(t); setMoreOpen(false); window.scrollTo({ top: 0 }); };
 
-  const Stat = (props: { label: string; value: string; sub?: string; color?: string; hero?: boolean; onClick?: () => void }) => (
-    <div className={`card${props.hero ? " stat-hero" : ""}`} style={{ flex: "1 1 140px", textAlign: "center", cursor: props.onClick ? "pointer" : "default" }} onClick={props.onClick}>
-      <div className="statlabel" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ash)", letterSpacing: "0.06em" }}>{props.label}</div>
-      <div className="display" style={{ fontSize: 24, color: props.hero ? "#fff" : props.color || "var(--ink)" }}>{props.value}</div>
-      {props.sub && <div style={{ fontSize: 11, color: props.hero ? "#9ca3af" : "var(--ash)" }}>{props.sub}</div>}
-    </div>
-  );
+  const itemColumns: Column<Item>[] = [
+    {
+      key: "name",
+      header: "Item",
+      primary: true,
+      sortBy: (it) => it.name,
+      cell: (it) => (
+        <div className="stack g-1" style={{ minWidth: 0 }}>
+          <b className="truncate">{it.name}</b>
+          <span className="t-xs t-muted mono">{it.sku}</span>
+        </div>
+      ),
+    },
+    {
+      key: "price",
+      header: "Price",
+      align: "right",
+      sortBy: (it) => effectivePriceCents(it),
+      cell: (it) => (
+        <span className="row end g-2 wrap">
+          {(it.salePercent || 0) > 0 ? (
+            <s className="t-muted num">{money(it.priceCents)}</s>
+          ) : null}
+          <b className={`num ${(it.salePercent || 0) > 0 ? "t-danger" : ""}`}>{money(effectivePriceCents(it))}</b>
+          {(it.salePercent || 0) > 0 ? (
+            <Badge tone="danger" icon="tag">{it.salePercent}% off</Badge>
+          ) : null}
+        </span>
+      ),
+    },
+    {
+      key: "stock",
+      header: "On the floor",
+      align: "right",
+      sortBy: (it) => it.quantity,
+      cell: (it) => (
+        <span className="row end g-2 wrap">
+          <span className="num">{it.quantity}</span>
+          {it.quantity === 0 ? (
+            <Badge tone="danger" dot>Sold out</Badge>
+          ) : it.quantity <= LOW_STOCK ? (
+            <Badge tone="warn" dot>Low stock</Badge>
+          ) : null}
+        </span>
+      ),
+    },
+  ];
+
+  const ledgerColumns: Column<Ledger>[] = [
+    {
+      key: "date",
+      header: "Date",
+      width: "150px",
+      sortBy: (l) => l.createdAt,
+      cell: (l) => <span className="t-sm">{fmtDate(l.createdAt)}</span>,
+    },
+    {
+      key: "activity",
+      header: "Activity",
+      primary: true,
+      sortBy: (l) => l.note || l.type,
+      cell: (l) => (
+        <span className="row g-2" style={{ minWidth: 0 }}>
+          <Icon name={LEDGER_ICON(l.type)} size={14} />
+          <span className="truncate">{l.note || l.type}</span>
+        </span>
+      ),
+    },
+    {
+      key: "amount",
+      header: "Amount",
+      align: "right",
+      sortBy: (l) => l.amountCents,
+      cell: (l) => (
+        <b className={`num ${l.amountCents >= 0 ? "t-accent" : "t-danger"}`}>
+          {l.amountCents >= 0 ? "+" : "−"}{money(Math.abs(l.amountCents))}
+        </b>
+      ),
+    },
+  ];
+
+  const logoPhotos = myPhotos.filter((ph) => ph.kind === "LOGO");
+  const productPhotos = myPhotos.filter((ph) => ph.kind !== "LOGO");
 
   return (
-    <main style={{ maxWidth: 640, margin: "0 auto", padding: "22px 16px 70px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div>
+    <div className="shell">
+      <a href="#main-content" className="btn btn-primary btn-sm sr-only">Skip to content</a>
+
+      {/* ------------------------------------------------------------ sidebar */}
+      <nav className="sidebar no-print" aria-label="Vendor portal sections">
+        <div className="sidebar-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 128, height: "auto", display: "block", marginBottom: 4 }} />
-          <div className="display" style={{ fontSize: 21 }}>{me.vendor.businessName.toUpperCase()}</div>
-          <div style={{ fontSize: 12, color: "var(--ash)", fontWeight: 600 }}>
-            Vendor {me.vendor.code}
-            {me.vendor.commissionPercent > 0 ? ` · ${me.vendor.commissionPercent}% market commission` : ""}
+          <img src="/logo.png" alt="" style={{ width: 30, height: 30, flex: "0 0 auto" }} />
+          <div style={{ minWidth: 0 }}>
+            <div className="t-card truncate">{me.vendor.businessName}</div>
+            <div className="t-xs t-muted truncate">
+              Vendor {me.vendor.code}
+              {me.vendor.commissionPercent > 0 ? ` · ${me.vendor.commissionPercent}% commission` : ""}
+            </div>
           </div>
         </div>
-        <button className="btn small ghost" onClick={logout}>LOG OUT</button>
-      </div>
 
-      <div className="glassbar" style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 16, WebkitOverflowScrolling: "touch" }}>
-        <Tab id="home" label="🏠 HOME" />
-        <Tab id="items" label="📦 MY ITEMS" />
-        <Tab id="inbox" label="📩 INBOX" badge={needsReply} />
-        <Tab id="page" label="⭐ MY PAGE" />
-        <Tab id="money" label="💵 MONEY" />
-        <Tab id="chat" label="💬 CHAT" />
-        <Tab id="settings" label="⚙️ SETTINGS" />
-      </div>
-
-      {vtab === "home" && (
-        <div>
-          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-            <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} hero onClick={() => setVtab("money")} />
-            <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
-            <Stat label="ON THE FLOOR" value={String(floorUnits)} sub="units in stock" onClick={() => setVtab("items")} />
-            <Stat label="NEEDS A REPLY" value={String(needsReply)} color={needsReply > 0 ? "var(--red)" : "var(--green)"} sub={needsReply > 0 ? "open messages" : "all caught up"} onClick={() => setVtab("inbox")} />
+        <div className="sidebar-nav">
+          <div className="stack" style={{ gap: 2 }}>
+            {VENDOR_TABS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                className="nav-item"
+                aria-current={tab === t ? "page" : undefined}
+                onClick={() => go(t)}
+              >
+                <Icon name={TAB_META[t].icon} size={16} />
+                <span className="truncate">{TAB_META[t].label}</span>
+                {navBadge[t] ? <span className="nav-item-count">{navBadge[t]}</span> : null}
+              </button>
+            ))}
           </div>
 
-          {me.items.filter((i) => i.active).length === 0 && (
-            <div className="card" style={{ marginBottom: 16, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-              <h2 className="display" style={{ fontSize: 16, marginBottom: 6 }}>WELCOME! THREE STEPS AND YOU&rsquo;RE SELLING 🌾</h2>
-              <ol style={{ margin: "0 0 10px 18px", fontSize: 13.5, lineHeight: 1.9, listStyle: "decimal" }}>
-                <li><b>Add your items</b> with a price and how many you&rsquo;re bringing.</li>
-                <li><b>Print your barcode labels</b> and sticker every item.</li>
-                <li><b>Stock your booth</b> during a restock window — the register does the rest.</li>
-              </ol>
-              <button className="btn small" onClick={() => setVtab("items")}>START — ADD MY FIRST ITEM</button>
+          <div className="nav-group-label">Print &amp; share</div>
+          <div className="stack" style={{ gap: 2 }}>
+            <a className="nav-item" href="/vendor/labels">
+              <Icon name="tag" size={16} /><span className="truncate">Barcode labels</span>
+            </a>
+            <a className="nav-item" href="/vendor/qr">
+              <Icon name="print" size={16} /><span className="truncate">Table QR card</span>
+            </a>
+            <a className="nav-item" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">
+              <Icon name="external" size={16} /><span className="truncate">My public page</span>
+            </a>
+          </div>
+        </div>
+
+        <div className="sidebar-foot stack g-2">
+          <div
+            className="stack"
+            style={{
+              padding: "var(--sp-2) var(--sp-3)",
+              borderRadius: "var(--r-md)",
+              background: "var(--accent-soft)",
+              color: "var(--accent-text)",
+            }}
+          >
+            <span className="t-label" style={{ color: "inherit", opacity: 0.8 }}>Your balance</span>
+            <span className="num t-sm" style={{ fontWeight: 650 }}>{money(me.balance)}</span>
+          </div>
+          <Button size="sm" variant="ghost" icon="logout" onClick={logout} block>
+            Sign out
+          </Button>
+        </div>
+      </nav>
+
+      {/* --------------------------------------------------------------- main */}
+      <div className="shell-main">
+        <header className="topbar no-print">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="" style={{ width: 28, height: 28, flex: "0 0 auto" }} className="topbar-logo" />
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="t-card truncate">{meta.label}</div>
+          </div>
+          <div className="row g-3 shrink0" style={{ textAlign: "right" }}>
+            <div>
+              <div className="t-label">Balance</div>
+              <div className={`num t-sm ${me.balance >= 0 ? "" : "t-danger"}`} style={{ fontWeight: 650 }}>
+                {money(me.balance)}
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="content" id="main-content">
+          <style>{`
+            @media (min-width: 901px) { .topbar-logo { display: none; } }
+          `}</style>
+
+          <PageHeader title={meta.label} subtitle={meta.sub} />
+
+          {cardMsg ? (
+            <div className="mb-4">
+              <Note
+                tone={cardMsg.ok ? "success" : "error"}
+                action={<Button size="sm" variant="ghost" icon="close" onClick={() => setCardMsg(null)}>Dismiss</Button>}
+              >
+                {cardMsg.text}
+              </Note>
+            </div>
+          ) : null}
+
+          {/* ------------------------------------------------------------ home */}
+          {tab === "home" && (
+            <div className="stack g-4">
+              <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
+                <Stat feature label="Your balance" value={money(me.balance)} sub={me.balance >= 0 ? "Paid out monthly" : "Rent due"} icon="dollar" />
+                <Stat label="Sold this month" value={money(me.monthSales)} sub={`Your net ${money(me.monthNet)}`} icon="receipt" />
+                <Stat label="On the floor" value={String(floorUnits)} sub={`${plural(activeItems.length, "item")} selling`} icon="box" />
+                <Stat
+                  label="Needs a reply"
+                  value={String(needsReply)}
+                  sub={needsReply > 0 ? "open messages" : "all caught up"}
+                  icon="inbox"
+                />
+              </div>
+
+              {activeItems.length === 0 ? (
+                <Card title="Welcome — three steps and you're selling">
+                  <div className="stack g-4">
+                    <ol className="stack g-2 t-body" style={{ margin: 0, paddingLeft: "1.1rem", listStyle: "decimal" }}>
+                      <li><b>Add your items</b> with a price and how many you&rsquo;re bringing.</li>
+                      <li><b>Print your barcode labels</b> and sticker every item.</li>
+                      <li><b>Stock your booth</b> during a restock window — the register does the rest.</li>
+                    </ol>
+                    <div>
+                      <Button variant="primary" icon="plus" onClick={() => go("items")}>
+                        Add my first item
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              ) : null}
+
+              {lowStock > 0 ? (
+                <Note
+                  tone="warn"
+                  title={`${plural(lowStock, "item is", "items are")} running low`}
+                  action={<Button size="sm" variant="secondary" onClick={() => go("items")}>See items</Button>}
+                >
+                  Anything at {LOW_STOCK} units or fewer is close to selling out. Restock it on your next trip in.
+                </Note>
+              ) : null}
+
+              <Card title="Quick actions">
+                <div className="row wrap g-2">
+                  <Button variant="primary" icon="plus" onClick={() => go("items")}>Add an item</Button>
+                  <LinkButton href="/vendor/labels" variant="secondary" icon="tag">Print labels</LinkButton>
+                  <LinkButton href="/vendor/qr" variant="secondary" icon="print">Print table QR</LinkButton>
+                  <LinkButton href={`/v/${me.vendor.code}`} variant="secondary" icon="eye" external>View my public page</LinkButton>
+                  <LinkButton href="/rules" variant="ghost" icon="clipboard" external>Market rules</LinkButton>
+                  <LinkButton href="/guide" variant="ghost" icon="help" external>Setup guide</LinkButton>
+                  {me.vendor.contracts && me.vendor.contracts[0] ? (
+                    <LinkButton
+                      href={`/contract/${me.vendor.contracts[0].id}/packet`}
+                      variant={me.vendor.contracts[0].vendorSignedAt ? "secondary" : "primary"}
+                      icon="contract"
+                    >
+                      {me.vendor.contracts[0].vendorSignedAt ? "My contract" : "Sign your contract"}
+                    </LinkButton>
+                  ) : null}
+                </div>
+              </Card>
+
+              <Card
+                title="Recent activity"
+                actions={
+                  <Button size="sm" variant="ghost" iconRight="arrowRight" onClick={() => go("money")}>
+                    Full statement
+                  </Button>
+                }
+                flush
+              >
+                <DataTable
+                  rows={me.ledger.slice(0, 6)}
+                  columns={ledgerColumns}
+                  rowKey={(l) => l.id}
+                  mobileCards
+                  caption="Your six most recent ledger entries"
+                  empty={
+                    <div className="card-body">
+                      <EmptyState
+                        icon="receipt"
+                        title="Nothing on your statement yet"
+                        body="Sales, rent, and payouts show up here once you're rolling."
+                      />
+                    </div>
+                  }
+                />
+              </Card>
             </div>
           )}
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 15, marginBottom: 8 }}>QUICK ACTIONS</h2>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn small" onClick={() => setVtab("items")}>＋ ADD AN ITEM</button>
-              <a className="btn small ghost" href="/vendor/labels">🏷 PRINT LABELS</a>
-              <a className="btn small ghost" href="/vendor/qr">📱 PRINT TABLE QR</a>
-              <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">👀 VIEW MY PUBLIC PAGE</a>
-              <a className="btn small ghost" href="/rules" target="_blank" rel="noopener">📋 MARKET RULES</a>
-              <a className="btn small ghost" href="/guide" target="_blank" rel="noopener">📖 SETUP GUIDE</a>
-              {me.vendor.contracts && me.vendor.contracts[0] && (
-                <a className="btn small" href={`/contract/${me.vendor.contracts[0].id}/packet`}>
-                  📄 {me.vendor.contracts[0].vendorSignedAt ? "MY CONTRACT" : "SIGN YOUR CONTRACT"}
-                </a>
-              )}
-            </div>
-          </div>
-
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-              <h2 className="display" style={{ fontSize: 15 }}>RECENT ACTIVITY</h2>
-              <button className="btn small ghost" onClick={() => setVtab("money")}>FULL STATEMENT →</button>
-            </div>
-            <ul style={{ listStyle: "none", marginTop: 4 }}>
-              {me.ledger.slice(0, 6).map((l) => (
-                <li key={l.id} style={{ padding: "7px 0", borderBottom: "1px solid var(--border)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span>{l.type === "SALE" ? "🛒" : l.type === "PAYOUT" ? "💸" : l.type === "RENT" ? "🏠" : "✏️"} {l.note || l.type}</span>
-                  <b style={{ color: l.amountCents >= 0 ? "var(--green)" : "var(--red)", whiteSpace: "nowrap" }}>
-                    {l.amountCents >= 0 ? "+" : "−"}${(Math.abs(l.amountCents) / 100).toFixed(2)}
-                  </b>
-                </li>
-              ))}
-              {me.ledger.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13, paddingTop: 6 }}>Sales, rent, and payouts will show here once you&rsquo;re rolling.</li>}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {vtab === "items" && (
-        <div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-              <h2 className="display" style={{ fontSize: 17 }}>YOUR ITEMS ON THE FLOOR</h2>
-              <a className="btn small" href="/vendor/labels">🏷 PRINT BARCODE LABELS</a>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-              <button className="btn small ghost" disabled={busy} onClick={async () => {
-                const v = prompt("Run a sale on EVERYTHING — % off all your items (5–90):");
-                if (v === null || !v.trim()) return;
-                const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: v }) });
-                const d = await r.json();
-                if (!r.ok) { alert(d.error || "Couldn't start the sale."); return; }
-                load();
-              }}>🏷️ RUN A SALE ON EVERYTHING</button>
-              {me.items.some((it) => it.active && (it.salePercent || 0) > 0) && (
-                <button className="btn small ghost" disabled={busy} onClick={async () => {
-                  if (!confirm("End all sales and go back to full price?")) return;
-                  const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: 0 }) });
-                  if (r.ok) load();
-                }}>END ALL SALES</button>
-              )}
-            </div>
-            <ul style={{ listStyle: "none", marginTop: 8 }}>
-              {me.items.filter((it) => it.active).map((it) => (
-                <li key={it.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <span className="display" style={{ fontSize: 15 }}>{it.name.toUpperCase()}</span>{" "}
-                      {(it.salePercent || 0) > 0 && (
-                        <s style={{ color: "var(--ash)", fontSize: 13 }}>${(it.priceCents / 100).toFixed(2)}</s>
-                      )}{" "}
-                      <span className="display" style={{ fontSize: 15, color: (it.salePercent || 0) > 0 ? "var(--red)" : "var(--green)" }}>
-                        ${(() => { const e = Math.max(0, Math.round(it.priceCents * (100 - Math.min(90, Math.max(0, it.salePercent || 0))) / 100)) / 100; return e % 1 === 0 ? e.toFixed(0) : e.toFixed(2); })()}
-                      </span>{" "}
-                      {(it.salePercent || 0) > 0 && (
-                        <span style={{ background: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>🏷️ {it.salePercent}% OFF</span>
-                      )}
-                      <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{it.sku} · <b style={{ color: it.quantity > 0 ? "var(--green)" : "var(--red)" }}>{it.quantity} on the floor</b></div>
+          {/* ----------------------------------------------------------- items */}
+          {tab === "items" && (
+            <div className="stack g-4">
+              <Card
+                title="Your items on the floor"
+                subtitle={`${plural(activeItems.length, "item")} selling · ${plural(floorUnits, "unit")} in stock${onSale > 0 ? ` · ${onSale} on sale` : ""}`}
+                actions={
+                  <>
+                    <LinkButton href="/vendor/labels" size="sm" variant="secondary" icon="tag">
+                      Print labels
+                    </LinkButton>
+                    <Button size="sm" variant="ghost" icon="tag" disabled={busy} onClick={runSaleOnEverything}>
+                      Run a sale on everything
+                    </Button>
+                    {onSale > 0 ? (
+                      <Button size="sm" variant="ghost" disabled={busy} onClick={endAllSales}>
+                        End all sales
+                      </Button>
+                    ) : null}
+                  </>
+                }
+                flush
+              >
+                <DataTable
+                  rows={activeItems}
+                  columns={itemColumns}
+                  rowKey={(it) => it.id}
+                  defaultSort={{ key: "name", dir: "asc" }}
+                  mobileCards
+                  caption="Your active items, prices, and floor counts"
+                  onRowClick={(it) => {
+                    setEditItem(it.id);
+                    setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0) });
+                  }}
+                  empty={
+                    <div className="card-body">
+                      <EmptyState
+                        icon="box"
+                        title="No items yet"
+                        body="Add your first one below — it takes about twenty seconds, and every item gets its own barcode."
+                      />
                     </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button className="btn small" disabled={busy} onClick={() => {
-                        const v = prompt(`RESTOCKING ${it.name} — how many are you ADDING to the floor? (currently ${it.quantity})`);
-                        if (v !== null && v.trim()) patchItem(it.id, { addQuantity: v });
-                      }}>➕ RESTOCK</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => {
-                        if (editItem === it.id) { setEditItem(null); return; }
-                        setEditItem(it.id);
-                        setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0) });
-                      }}>✏️ EDIT</button>
+                  }
+                />
+              </Card>
+
+              {retiredItems.length > 0 ? (
+                <Card
+                  title="Retired items"
+                  subtitle="Off the floor, history kept. Bringing one back re-activates its barcode — old labels still scan."
+                  flush
+                >
+                  <DataTable
+                    rows={retiredItems}
+                    columns={[
+                      {
+                        key: "name",
+                        header: "Item",
+                        primary: true,
+                        sortBy: (it) => it.name,
+                        cell: (it) => (
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <b className="truncate">{it.name}</b>
+                            <span className="t-xs t-muted mono">{it.sku}</span>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: "price",
+                        header: "Price",
+                        align: "right",
+                        sortBy: (it) => it.priceCents,
+                        cell: (it) => <span className="num">{money(it.priceCents)}</span>,
+                      },
+                      {
+                        key: "back",
+                        header: "",
+                        align: "right",
+                        cell: (it) => (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            icon="refresh"
+                            disabled={busy}
+                            onClick={async () => {
+                              const ok = await patchItem(it.id, { active: true });
+                              if (ok) toast.success(`${it.name} is back`, "Restock it and it's selling again.");
+                            }}
+                          >
+                            Bring back
+                          </Button>
+                        ),
+                      },
+                    ]}
+                    rowKey={(it) => it.id}
+                    mobileCards
+                    caption="Retired items you can reactivate"
+                  />
+                </Card>
+              ) : null}
+
+              <Card title="Add an item" subtitle="Each item gets its own barcode. Print labels, sticker your goods, restock any time.">
+                <form
+                  className="stack g-4"
+                  onSubmit={(e) => { e.preventDefault(); addItem(); }}
+                >
+                  <Field label="Item name" hint="This prints on your labels." required>
+                    {(p) => (
+                      <Input
+                        {...p}
+                        value={name}
+                        placeholder="Hand-poured soy candle"
+                        onChange={(e) => { setName(e.target.value); setErr(""); }}
+                      />
+                    )}
+                  </Field>
+                  <div className="grid-auto" style={{ ["--min" as string]: "180px" }}>
+                    <Field label="Price (dollars)" required>
+                      {(p) => (
+                        <Input
+                          {...p}
+                          type="number"
+                          min="0.5"
+                          step="0.5"
+                          inputMode="decimal"
+                          placeholder="14"
+                          value={price}
+                          onChange={(e) => { setPrice(e.target.value); setErr(""); }}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Quantity you're putting out" hint="You can restock any time.">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          placeholder="6"
+                          value={qty}
+                          onChange={(e) => setQty(e.target.value)}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                  {err ? <Note tone="error">{err}</Note> : null}
+                  <div>
+                    <Button type="submit" variant="primary" size="lg" icon="plus" loading={busy}>
+                      Add item
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            </div>
+          )}
+
+          {/* ----------------------------------------------------------- inbox */}
+          {tab === "inbox" && (
+            <Card
+              title="Pre-orders, requests and complaints"
+              subtitle={needsReply > 0 ? `${plural(needsReply, "message needs", "messages need")} a reply` : "Everything's answered"}
+            >
+              {!inboxLoaded ? (
+                <div className="stack g-2" aria-busy="true">
+                  <Skeleton height={58} radius="var(--r-lg)" />
+                  <Skeleton height={58} radius="var(--r-lg)" />
+                  <Skeleton height={58} radius="var(--r-lg)" />
+                </div>
+              ) : inboxErr ? (
+                <Note
+                  tone="error"
+                  title="Your messages didn't load"
+                  action={<Button size="sm" variant="secondary" icon="refresh" onClick={loadInbox}>Try again</Button>}
+                >
+                  {inboxErr}
+                </Note>
+              ) : inbox.length === 0 ? (
+                <EmptyState
+                  icon="inbox"
+                  title="Nothing here yet"
+                  body="Customers reach you from your table QR card and your public page. Anything they send lands here."
+                  action={<LinkButton href="/vendor/qr" variant="secondary" icon="print">Print my table QR</LinkButton>}
+                />
+              ) : (
+                <div className="stack g-2">
+                  {inbox.map((t) => {
+                    const unread = t.status === "OPEN" && !!t.last && t.last.sender !== "VENDOR";
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className="card-link card-pad-sm"
+                        onClick={() => openInboxThread(t.id)}
+                      >
+                        <div className="row between g-2 wrap">
+                          <span className="row g-2" style={{ minWidth: 0 }}>
+                            <Icon name={THREAD_ICON(t.type)} size={15} />
+                            <b className="truncate">{t.customerName}</b>
+                          </span>
+                          <span className="row g-2 shrink0">
+                            {unread ? <Badge tone="danger" dot>Needs a reply</Badge> : null}
+                            {t.status === "CLOSED" ? <Badge tone="neutral">Closed</Badge> : null}
+                          </span>
+                        </div>
+                        {t.last ? (
+                          <p className="t-sm t-muted clamp-2 mt-1">
+                            {t.last.sender === "VENDOR" ? "You: " : ""}{t.last.body}
+                          </p>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* ------------------------------------------------------------ page */}
+          {tab === "page" && (
+            <div className="stack g-4">
+              <Card
+                title="Post to the market feed"
+                subtitle="Announcements, new products, what's coming out of the oven — customers see these on the market page instantly."
+              >
+                <div className="stack g-4">
+                  <Field label="What's your news?">
+                    {(p) => (
+                      <Textarea
+                        {...p}
+                        rows={3}
+                        placeholder="Fresh sourdough hitting the shelf at noon!"
+                        value={postBody}
+                        onChange={(e) => setPostBody(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <div>
+                    <Button
+                      variant="primary"
+                      icon="message"
+                      loading={busy}
+                      disabled={!postBody.trim()}
+                      onClick={publishPost}
+                    >
+                      Post to the feed
+                    </Button>
+                  </div>
+
+                  {myPosts.length > 0 ? (
+                    <div className="stack g-2">
+                      <hr className="divider" />
+                      {myPosts.map((p) => (
+                        <div key={p.id} className="row-top between g-3">
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <span className="t-body">{p.body}</span>
+                            <span className="t-xs t-muted">{fmtDateTime(p.createdAt)}</span>
+                          </div>
+                          <IconButton
+                            icon="trash"
+                            label={`Delete the post from ${fmtDate(p.createdAt)}`}
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => deletePost(p.id)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </Card>
+
+              <Card
+                title="Your public page and table QR"
+                subtitle="Customers scan your table card to see your goods, review you, and message you."
+                footer={
+                  <div className="row wrap g-2">
+                    <Button variant="primary" icon="check" loading={busy} onClick={savePublic}>Save</Button>
+                    <LinkButton href="/vendor/qr" variant="secondary" icon="print">Print my table QR card</LinkButton>
+                    <LinkButton href={`/v/${me.vendor.code}`} variant="ghost" icon="eye" external>View my public page</LinkButton>
+                  </div>
+                }
+              >
+                <div className="stack g-5">
+                  <div className="stack g-2">
+                    <p className="t-sm t-secondary">
+                      Complaints are always open — that&rsquo;s a market rule — but pre-orders and
+                      requests are up to you.
+                    </p>
+                    <Checkbox checked={pubPre} onCheckedChange={setPubPre} label="Accept pre-orders" />
+                    <Checkbox checked={pubReq} onCheckedChange={setPubReq} label="Accept requests" />
+                    <Checkbox
+                      checked={pubSelf}
+                      onCheckedChange={setPubSelf}
+                      label="Allow self-checkout"
+                      hint="Shoppers can scan and pay for your items on their own phone. Off means register only."
+                    />
+                  </div>
+
+                  <hr className="divider" />
+
+                  <div className="stack g-3">
+                    <Field
+                      label="Your logo"
+                      hint="Optional — it brands your card on the market directory. Uploading a new logo replaces the old one."
+                    >
+                      {(p) => (
+                        <input
+                          {...p}
+                          className="input"
+                          type="file"
+                          accept="image/*"
+                          disabled={photoBusy}
+                          onChange={(e) => { uploadPhoto(e.target.files?.[0], "LOGO"); e.target.value = ""; }}
+                        />
+                      )}
+                    </Field>
+                    <div className="row wrap g-3">
+                      {logoPhotos.map((ph) => (
+                        <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`/api/public/photo/${ph.id}`}
+                            alt="Your logo"
+                            style={{ height: 72, width: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-md)", display: "block" }}
+                          />
+                          {/* 34px minimum — the old × was a 20px target nobody could hit. */}
+                          <IconButton
+                            icon="close"
+                            label="Remove photo"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => deletePhoto(ph.id)}
+                            style={{
+                              position: "absolute",
+                              top: -10,
+                              right: -10,
+                              borderRadius: "var(--r-full)",
+                              background: "var(--surface)",
+                            }}
+                          />
+                        </span>
+                      ))}
+                      {logoPhotos.length === 0 ? (
+                        <p className="t-sm t-muted">
+                          No logo — your card shows your name in market style, which looks sharp too.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
-                  {editItem === it.id && (
-                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
-                      <label>Product photo (shows online — one per product; new upload replaces it)</label>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                        {(() => { const ph = myPhotos.find((x) => x.kind === "ITEM" && x.itemId === it.id); return ph ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={`/api/public/photo/${ph.id}`} alt={it.name} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 10, border: "1px solid var(--border)" }} />
-                        ) : <span style={{ fontSize: 11.5, color: "var(--ash)" }}>No photo yet</span>; })()}
-                        <input type="file" accept="image/*" style={{ width: "auto" }} onChange={(e) => uploadItemPhoto(e.target.files?.[0], it.id)} />
-                      </div>
-                      <label>Item name (prints on your labels)</label>
-                      <input value={editIF.name} onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))} />
-                      <label>Sale — % off (0 = no sale; register &amp; online charge the sale price automatically)</label>
-                      <input type="number" min="0" max="90" step="5" value={editIF.sale} onChange={(e) => setEditIF((f) => ({ ...f, sale: e.target.value }))} />
-                      <label>Price (dollars)</label>
-                      <input type="number" min="0.5" step="0.5" value={editIF.price} onChange={(e) => setEditIF((f) => ({ ...f, price: e.target.value }))} />
-                      <label>Correct the total on the floor (overrides the count — for restocks use ➕ RESTOCK instead)</label>
-                      <input type="number" min="0" step="1" value={editIF.qty} onChange={(e) => setEditIF((f) => ({ ...f, qty: e.target.value }))} />
-                      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                        <button className="btn small" disabled={busy} onClick={async () => {
-                          await patchItem(it.id, { name: editIF.name, priceDollars: editIF.price, quantity: editIF.qty, salePercent: editIF.sale });
-                          setEditItem(null);
-                        }}>SAVE</button>
-                        <button className="btn small ghost" onClick={() => setEditItem(null)}>CANCEL</button>
-                        <button className="btn small ghost" disabled={busy} onClick={() => {
-                          if (confirm(`Retire ${it.name}? It comes off the floor and stops scanning (history kept).`)) { patchItem(it.id, { active: false, quantity: 0 }); setEditItem(null); }
-                        }}>RETIRE</button>
-                        <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "#fecaca" }} disabled={busy} onClick={async () => {
-                          if (!confirm(`Delete ${it.name} completely? This can't be undone.`)) return;
-                          const r = await fetch(`/api/vendor/items/${it.id}`, { method: "DELETE" });
-                          const d = await r.json();
-                          if (!r.ok) { alert(d.error || "Couldn't delete."); return; }
-                          if (d.retired) alert(d.message);
-                          setEditItem(null);
-                          load();
-                        }}>🗑 DELETE</button>
-                      </div>
-                      <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 8 }}>Changed the name or price? Print fresh labels so the shelf matches the register.</p>
+
+                  <div className="stack g-3">
+                    <Field
+                      label="Product photos"
+                      hint="Up to six. Phone photos work great — they showcase on your public page."
+                    >
+                      {(p) => (
+                        <input
+                          {...p}
+                          className="input"
+                          type="file"
+                          accept="image/*"
+                          disabled={photoBusy}
+                          onChange={(e) => { uploadPhoto(e.target.files?.[0], "PRODUCT"); e.target.value = ""; }}
+                        />
+                      )}
+                    </Field>
+                    <div className="row wrap g-3">
+                      {productPhotos.map((ph) => (
+                        <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`/api/public/photo/${ph.id}`}
+                            alt=""
+                            style={{ height: 92, width: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-md)", display: "block" }}
+                          />
+                          <IconButton
+                            icon="close"
+                            label="Remove photo"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => deletePhoto(ph.id)}
+                            style={{
+                              position: "absolute",
+                              top: -10,
+                              right: -10,
+                              borderRadius: "var(--r-full)",
+                              background: "var(--surface)",
+                            }}
+                          />
+                        </span>
+                      ))}
+                      {productPhotos.length === 0 ? (
+                        <p className="t-sm t-muted">No photos yet — phone photos work great.</p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <Field label="Short blurb for your public page" hint="What you make, in a sentence. 300 characters max.">
+                    {(p) => (
+                      <Input
+                        {...p}
+                        value={pubBlurb}
+                        maxLength={300}
+                        placeholder="Small-batch sourdough, baked the morning of the market."
+                        onChange={(e) => setPubBlurb(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* ----------------------------------------------------------- money */}
+          {tab === "money" && (
+            <div className="stack g-4">
+              <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
+                <Stat feature label="Your balance" value={money(me.balance)} sub={me.balance >= 0 ? "Pays out monthly" : "Rent due"} icon="dollar" />
+                <Stat label="Sold this month" value={money(me.monthSales)} sub={`Your net ${money(me.monthNet)}`} icon="receipt" />
+                <Stat label="Market commission" value={`${me.vendor.commissionPercent}%`} sub="Taken off each sale" icon="chart" />
+              </div>
+
+              {me.balance < 0 ? (
+                <Card
+                  title={`Rent due: ${money(Math.abs(me.balance))}`}
+                  subtitle="Your sales pay this down automatically too."
+                  footer={
+                    <Button variant="primary" icon="card" loading={busy} onClick={startRentCheckout}>
+                      Pay {money(Math.round(Math.abs(me.balance) * 1.03))} and save the card
+                    </Button>
+                  }
+                >
+                  <Note tone="warn" title="One step pays the rent and saves your card">
+                    The same payment saves your card for automatic settlement going forward. A 3%
+                    card-processing adjustment applies to card payments; cash or a check at the
+                    market is always fee-free.
+                  </Note>
+                </Card>
+              ) : null}
+
+              <Card title="Card on file — automatic rent">
+                <div className="stack g-4">
+                  <p className="t-sm t-secondary">
+                    If your sales don&rsquo;t fully cover a month&rsquo;s rent, the remainder can charge to a
+                    saved card. A 3% card-processing adjustment applies to the charged amount only —
+                    cash, a check, or your sales balance never pay it. Saving a card authorizes this
+                    per your agreement; you can remove it any time.
+                  </p>
+                  {me.vendor.cardLast4 ? (
+                    <div className="row between wrap g-3">
+                      <span className="row g-2">
+                        <Icon name="card" size={16} />
+                        <b>Card ending ····{me.vendor.cardLast4}</b>
+                      </span>
+                      <Button variant="dangerSoft" icon="trash" disabled={busy} onClick={removeCard}>
+                        Remove card
+                      </Button>
+                    </div>
+                  ) : (
+                    <div>
+                      <Button variant="secondary" icon="card" loading={busy} onClick={startCardSetup}>
+                        Add a card — secure, via Stripe
+                      </Button>
                     </div>
                   )}
-                </li>
-              ))}
-              {me.items.filter((it) => it.active).length === 0 && <li style={{ color: "var(--ash)", paddingTop: 8, fontSize: 14 }}>No items yet — add your first below. It takes 20 seconds.</li>}
-            </ul>
-            {me.items.some((it) => !it.active) && (
-              <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", color: "var(--ash)" }}>RETIRED ITEMS</div>
-                <ul style={{ listStyle: "none", marginTop: 4 }}>
-                  {me.items.filter((it) => !it.active).map((it) => (
-                    <li key={it.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, opacity: 0.75 }}>
-                      <span style={{ fontSize: 13.5 }}>
-                        <b>{it.name}</b> <span style={{ color: "var(--ash)", fontSize: 11.5 }}>{it.sku} · ${(it.priceCents / 100).toFixed(2)}</span>
-                      </span>
-                      <button className="btn small ghost" disabled={busy} onClick={() => patchItem(it.id, { active: true })}>♻️ BRING BACK</button>
-                    </li>
-                  ))}
-                </ul>
-                <p style={{ fontSize: 11, color: "var(--ash)", marginTop: 4 }}>Bringing an item back re-activates its barcode — then ➕ RESTOCK it and it&rsquo;s selling again. Old labels still scan.</p>
-              </div>
-            )}
-          </div>
+                </div>
+              </Card>
 
-          <div className="card">
-            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>ADD AN ITEM</h2>
-            <label>Item name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Hand-poured soy candle" />
-            <label>Price (dollars)</label>
-            <input value={price} onChange={(e) => setPrice(e.target.value)} type="number" min="0.5" step="0.5" placeholder="14" />
-            <label>Quantity you&rsquo;re putting out</label>
-            <input value={qty} onChange={(e) => setQty(e.target.value)} type="number" min="0" step="1" placeholder="6" />
-            <div style={{ marginTop: 14 }}>
-              <button className="btn" disabled={busy} onClick={addItem}>ADD ITEM</button>
-            </div>
-            {err && <p className="err">{err}</p>}
-            <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 10 }}>
-              Each item gets a barcode. Print labels, sticker your items, restock anytime with SET QTY.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {vtab === "inbox" && (
-      <div className="card">
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>INBOX — PRE-ORDERS, REQUESTS &amp; COMPLAINTS</h2>
-        {openThread ? (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
-              <b style={{ fontSize: 14 }}>{openThread.type} — {openThread.customerName}</b>
-              <button className="btn small ghost" onClick={() => setOpenThread(null)}>← ALL MESSAGES</button>
-            </div>
-            <div style={{ fontSize: 12, color: "var(--ash)", margin: "2px 0 8px" }}>{openThread.email} · {openThread.phone}</div>
-            {openThread.messages.map((m) => (
-              <div key={m.id} style={{
-                margin: "6px 0", padding: "8px 11px", border: "1px solid var(--border)", fontSize: 13,
-                background: m.sender === "VENDOR" ? "#111827" : "#f9fafb", color: m.sender === "VENDOR" ? "#fff" : "#111827", borderRadius: 12,
-                marginLeft: m.sender === "VENDOR" ? 20 : 0, marginRight: m.sender === "VENDOR" ? 0 : 20,
-              }}>
-                {m.body}
-              </div>
-            ))}
-            {openThread.type === "PREORDER" && (
-              <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#f9fafb", padding: "10px 12px", margin: "10px 0" }}>
-                {po && po.status === "PAID" ? (
-                  <p className="ok" style={{ margin: 0 }}>PAID ✓ — {money(po.totalCents)} collected online. It&rsquo;s in the register tickets and your balance (net of commission). Expected: {po.expectedDate}.</p>
-                ) : po && po.status === "ACCEPTED" ? (
-                  <p style={{ fontSize: 13, margin: 0 }}><b>ACCEPTED — awaiting payment.</b> {money(po.totalCents)} total, expected {po.expectedDate}. The customer has the payment link (accept again to revise terms).</p>
-                ) : po && po.status === "DECLINED" ? (
-                  <p style={{ fontSize: 13, margin: 0 }}><b>DECLINED.</b> Accept below if you change your mind.</p>
-                ) : null}
-                {(!po || po.status !== "PAID") && (
-                  <div style={{ marginTop: po ? 10 : 0 }}>
-                    <b style={{ fontSize: 13 }}>ACCEPT &amp; SEND PAYMENT LINK</b>
-                    <label>What they&rsquo;re getting (shows on the payment page)</label>
-                    <input value={poDesc} onChange={(e) => setPoDesc(e.target.value)} placeholder="2 dozen dinner rolls + 1 apple pie" />
-                    <label>Your price, before tax ($) — tax is added automatically at the market rate</label>
-                    <input type="number" min="0" step="0.01" value={poAmt} onChange={(e) => setPoAmt(e.target.value)} />
-                    <label>Ready / expected date</label>
-                    <input value={poDate} onChange={(e) => setPoDate(e.target.value)} placeholder="Saturday Oct 3, by 10 AM" />
-                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                      <button className="btn small" onClick={acceptPreorder}>✅ ACCEPT &amp; SEND LINK</button>
-                      <button className="btn small ghost" onClick={declinePreorder}>❌ DECLINE</button>
+              <Card
+                title="Your statement"
+                subtitle="Every sale (your net after commission), booth rent, adjustment and payout. Balances pay out monthly."
+                flush
+              >
+                <DataTable
+                  rows={me.ledger}
+                  columns={ledgerColumns}
+                  rowKey={(l) => l.id}
+                  defaultSort={{ key: "date", dir: "desc" }}
+                  mobileCards
+                  caption="Your full ledger"
+                  empty={
+                    <div className="card-body">
+                      <EmptyState
+                        icon="receipt"
+                        title="Nothing on your statement yet"
+                        body="Sales, rent, and payouts will show here."
+                      />
                     </div>
-                  </div>
-                )}
-                {poMsg && <p className={poMsg.includes("✓") ? "ok" : "err"}>{poMsg}</p>}
-              </div>
-            )}
-            {openThread.status === "OPEN" ? (
-              <>
-                <label>Reply (they get it by email with a private link)</label>
-                <textarea rows={3} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} />
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                  <button className="btn" style={{ flex: 1 }} onClick={sendReply}>SEND REPLY</button>
-                  <button className="btn small ghost" onClick={() => setThreadStatus("CLOSED")}>CLOSE</button>
-                </div>
-              </>
-            ) : (
-              <div style={{ marginTop: 8 }}>
-                <button className="btn small ghost" onClick={() => setThreadStatus("OPEN")}>RE-OPEN CONVERSATION</button>
-              </div>
-            )}
-            {inboxMsg && <p className="err">{inboxMsg}</p>}
-          </div>
-        ) : (
-          <ul style={{ margin: "6px 0" }}>
-            {inbox.map((t) => (
-              <li key={t.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)", cursor: "pointer" }} onClick={() => openInboxThread(t.id)}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
-                  <b>{t.type === "PREORDER" ? "🛒" : t.type === "REQUEST" ? "🙋" : "⚠️"} {t.customerName}
-                    {t.status === "OPEN" && t.last && t.last.sender !== "VENDOR" && <span style={{ marginLeft: 6, background: "#dc2626", color: "#fff", borderRadius: 999, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>REPLY</span>}
-                  </b>
-                  <span style={{ fontWeight: 600, color: "var(--ash)", fontSize: 11.5 }}>{t.status === "CLOSED" ? "CLOSED" : ""}</span>
-                </div>
-                {t.last && <div style={{ fontSize: 12, color: "var(--ash)" }}>{t.last.sender === "VENDOR" ? "You: " : ""}{t.last.body}</div>}
-              </li>
-            ))}
-            {inbox.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>Nothing yet. Customers reach you here from your table QR card and public page.</li>}
-          </ul>
-        )}
-      </div>
-      )}
-
-      {vtab === "page" && (
-      <div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>📣 POST TO THE MARKET FEED</h2>
-            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>Announcements, new products, what&rsquo;s coming out of the oven — customers see these on the market page instantly.</p>
-            <textarea rows={3} placeholder="Fresh sourdough hitting the shelf at noon! 🍞" value={postBody} onChange={(e) => setPostBody(e.target.value)} />
-            <button className="btn small" style={{ marginTop: 6 }} disabled={busy || !postBody.trim()} onClick={async () => {
-              setBusy(true);
-              try {
-                const r = await fetch("/api/vendor/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: postBody }) });
-                if (r.ok) { setPostBody(""); loadPosts(); }
-                else alert((await r.json()).error || "Couldn't post.");
-              } finally { setBusy(false); }
-            }}>POST 📣</button>
-            {myPosts.length > 0 && (
-              <div style={{ marginTop: 10 }}>
-                {myPosts.map((po) => (
-                  <div key={po.id} style={{ borderTop: "1px solid var(--border)", padding: "8px 0", display: "flex", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 13 }}>{po.body}<br /><span style={{ fontSize: 11, color: "var(--ash)" }}>{new Date(po.createdAt).toLocaleString()}</span></span>
-                    <button className="btn small ghost" disabled={busy} onClick={async () => {
-                      if (!confirm("Delete this post?")) return;
-                      await fetch("/api/vendor/posts", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: po.id }) });
-                      loadPosts();
-                    }}>🗑</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="card">
-        <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR PUBLIC PAGE &amp; TABLE QR</h2>
-        <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
-          Customers scan your table card to see your goods, review you, and message you. Complaints are always open — that&rsquo;s a market rule — but pre-orders and requests are up to you:
-        </p>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 8 }}>
-          <input type="checkbox" checked={pubPre} onChange={(e) => setPubPre(e.target.checked)} style={{ width: "auto" }} />
-          Accept PRE-ORDERS
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-          <input type="checkbox" checked={pubReq} onChange={(e) => setPubReq(e.target.checked)} style={{ width: "auto" }} />
-          Accept REQUESTS
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-          <input type="checkbox" checked={pubSelf} onChange={(e) => setPubSelf(e.target.checked)} style={{ width: "auto" }} />
-          Allow SELF-CHECKOUT <span style={{ fontWeight: 400, color: "var(--ash)" }}>(shoppers can scan &amp; pay your items on their phone — off means register only)</span>
-        </label>
-        <label>Your logo (optional — brands your card on the market directory)</label>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "4px 0 8px", flexWrap: "wrap" }}>
-          {myPhotos.filter((ph) => ph.kind === "LOGO").map((ph) => (
-            <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${ph.id}`} alt="Your logo" style={{ height: 64, width: "auto", border: "1px solid var(--border)", borderRadius: 8, display: "block" }} />
-              <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
-            </span>
-          ))}
-          {myPhotos.filter((ph) => ph.kind === "LOGO").length === 0 && <span style={{ fontSize: 12, color: "var(--ash)" }}>No logo — your card shows your name in market style (which looks sharp too).</span>}
-        </div>
-        <input type="file" accept="image/*" disabled={photoBusy} onChange={(e) => { uploadPhoto(e.target.files?.[0], "LOGO"); e.target.value = ""; }} />
-        <p style={{ fontSize: 11, color: "var(--ash)", margin: "2px 0 8px" }}>Uploading a new logo replaces the old one.</p>
-
-        <label>Product photos (up to 6 — these showcase on your public page)</label>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "4px 0 8px" }}>
-          {myPhotos.filter((ph) => ph.kind !== "LOGO").map((ph) => (
-            <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/public/photo/${ph.id}`} alt="" style={{ height: 84, width: "auto", border: "1px solid var(--border)", borderRadius: 8, display: "block" }} />
-              <button className="btn small" style={{ position: "absolute", top: -8, right: -8, padding: "2px 7px", lineHeight: 1 }} onClick={() => deletePhoto(ph.id)}>×</button>
-            </span>
-          ))}
-          {myPhotos.filter((ph) => ph.kind !== "LOGO").length === 0 && <span style={{ fontSize: 12, color: "var(--ash)" }}>No photos yet — phone photos work great.</span>}
-        </div>
-        <input type="file" accept="image/*" disabled={photoBusy} onChange={(e) => { uploadPhoto(e.target.files?.[0], "PRODUCT"); e.target.value = ""; }} />
-        {photoMsg && <p className={photoMsg.includes("✓") ? "ok" : "err"} style={{ marginTop: 4 }}>{photoMsg}</p>}
-
-        <label>Short blurb for your public page (what you make, in a sentence)</label>
-        <input value={pubBlurb} onChange={(e) => setPubBlurb(e.target.value)} maxLength={300} />
-        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-          <button className="btn small" onClick={savePublic}>SAVE</button>
-          <a className="btn small ghost" href="/vendor/qr">🖨 PRINT MY TABLE QR CARD</a>
-          {me && <a className="btn small ghost" href={`/v/${me.vendor.code}`} target="_blank" rel="noopener">VIEW MY PUBLIC PAGE</a>}
-        </div>
-        {pubMsg && <p className={pubMsg.includes("✓") ? "ok" : "err"}>{pubMsg}</p>}
-      </div>
-        </div>
-      )}
-      {vtab === "money" && (
-        <div>
-          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-            <Stat label="YOUR BALANCE" value={`$${(me.balance / 100).toFixed(2)}`} color={me.balance >= 0 ? "var(--green)" : "var(--red)"} />
-            <Stat label="SOLD THIS MONTH" value={`$${(me.monthSales / 100).toFixed(2)}`} sub={`your net: $${(me.monthNet / 100).toFixed(2)}`} />
-          </div>
-          {me.balance < 0 && (
-            <div className="card" style={{ marginBottom: 16, background: "#fef2f2", border: "1px solid #fecaca" }}>
-              <h2 className="display" style={{ fontSize: 16, marginBottom: 4, color: "var(--red)" }}>RENT DUE: ${(Math.abs(me.balance) / 100).toFixed(2)}</h2>
-              <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
-                Pay it by card in one step — <b>the same payment saves your card for automatic settlement</b> going forward (a 3% card-processing adjustment applies to card payments; cash or check at the market is always fee-free). Your sales also pay this down automatically.
-              </p>
-              <button className="btn small" style={{ marginTop: 8 }} disabled={busy} onClick={async () => {
-                setBusy(true);
-                try {
-                  const r = await fetch("/api/vendor/rent-checkout", { method: "POST" });
-                  const d = await r.json();
-                  if (!r.ok) { alert(d.error || "Couldn't start."); return; }
-                  window.location.href = d.url;
-                } finally { setBusy(false); }
-              }}>💳 PAY ${((Math.abs(me.balance) * 1.03) / 100).toFixed(2)} &amp; SAVE CARD</button>
+                  }
+                />
+              </Card>
             </div>
           )}
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>💳 CARD ON FILE — AUTOMATIC RENT</h2>
-            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
-              If your sales don&rsquo;t fully cover a month&rsquo;s rent, the remainder can charge to a saved card (a 3% card-processing adjustment applies to the charged amount only — cash, check, or sales balance never pay it). Saving a card authorizes this per your agreement; remove it anytime.
-            </p>
-            {me.vendor.cardLast4 ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
-                <b style={{ fontSize: 14 }}>💳 Card ending ····{me.vendor.cardLast4}</b>
-                <button className="btn small ghost" disabled={busy} onClick={async () => {
-                  if (!confirm("Remove your card on file? Unpaid rent would then need cash or check.")) return;
-                  const r = await fetch("/api/vendor/card", { method: "DELETE" });
-                  if (r.ok) { setCardMsg("Card removed \u2713"); load(); }
-                }}>REMOVE</button>
+
+          {/* ------------------------------------------------------------ chat */}
+          {tab === "chat" && (
+            <Card
+              title="Vendor chat"
+              subtitle="Every vendor and staff member can read this — coordinate menus, cover restocks, plan the weekend."
+            >
+              <div className="stack g-4">
+                <div
+                  className="stack g-3"
+                  style={{
+                    maxHeight: 420,
+                    overflowY: "auto",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r-md)",
+                    background: "var(--bg-sunken)",
+                    padding: "var(--sp-3)",
+                  }}
+                >
+                  {chat.length === 0 ? (
+                    <EmptyState icon="message" title="No messages yet" body="Say hello — everyone at the market reads this." />
+                  ) : (
+                    chat.map((mg) => {
+                      const mine = mg.vendorId === chatMe;
+                      return (
+                        <div key={mg.id} style={{ textAlign: mine ? "right" : "left" }}>
+                          <div className="t-xs t-muted">{mg.name} · {fmtTime(mg.createdAt)}</div>
+                          <div
+                            className="t-sm"
+                            style={{
+                              display: "inline-block",
+                              textAlign: "left",
+                              maxWidth: "85%",
+                              marginTop: 2,
+                              padding: "var(--sp-2) var(--sp-3)",
+                              borderRadius: "var(--r-md)",
+                              border: "1px solid var(--border)",
+                              background: mine ? "var(--accent-soft)" : "var(--surface)",
+                              color: mine ? "var(--accent-text)" : "inherit",
+                            }}
+                          >
+                            {mg.body}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <Field label="Message the vendors">
+                  {(p) => (
+                    <div className="row g-2">
+                      <Input
+                        {...p}
+                        className="grow"
+                        placeholder="Message the vendors…"
+                        value={chatBody}
+                        onChange={(e) => setChatBody(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendChat(); } }}
+                      />
+                      <Button
+                        variant="primary"
+                        icon="message"
+                        loading={chatBusy}
+                        disabled={!chatBody.trim()}
+                        onClick={sendChat}
+                      >
+                        Send
+                      </Button>
+                    </div>
+                  )}
+                </Field>
+              </div>
+            </Card>
+          )}
+
+          {/* -------------------------------------------------------- settings */}
+          {tab === "settings" && (
+            <div className="stack g-4">
+              <Card
+                title="Sale alerts"
+                subtitle={
+                  pushDevices !== null && pushDevices > 0
+                    ? `On for ${plural(pushDevices, "device")}`
+                    : "Off — you get one summary email each selling day"
+                }
+              >
+                <div className="stack g-4">
+                  <p className="t-sm t-secondary">
+                    Get a push notification the moment your items sell. Without this you get one
+                    summary email at the end of each selling day — never an email per sale.
+                  </p>
+                  <div className="row wrap g-2">
+                    <Button variant="primary" icon="bell" onClick={enablePush}>
+                      Turn on for this device
+                    </Button>
+                    {pushDevices !== null && pushDevices > 0 ? (
+                      <Button variant="ghost" onClick={disablePush}>
+                        Turn off — daily email instead
+                      </Button>
+                    ) : null}
+                  </div>
+                  {pushMsg ? <Note tone={pushMsg.ok ? "success" : "error"}>{pushMsg.text}</Note> : null}
+                  <p className="t-xs t-muted">
+                    iPhone: works on iOS 16.4+ only after you add this site to your home screen
+                    (share button → Add to Home Screen) and open it from that icon. Android: works
+                    right in Chrome.
+                  </p>
+                </div>
+              </Card>
+
+              <Card title="Change password">
+                <PasswordForm
+                  requireCurrent
+                  cur={pwCur}
+                  next={pwNew}
+                  again={pwNew2}
+                  onCur={setPwCur}
+                  onNext={setPwNew}
+                  onAgain={setPwNew2}
+                  onSubmit={changePw}
+                  busy={pwBusy}
+                  error={pwErr}
+                  submitLabel="Update password"
+                />
+              </Card>
+
+              <Card title="Your account">
+                <div className="stack g-3">
+                  <p className="t-sm t-secondary">
+                    Signed in as <b>{me.vendor.email}</b> · vendor {me.vendor.code}. Need your email
+                    or business name changed? Ask the market — they update it from the admin side.
+                  </p>
+                  <div>
+                    <Button variant="secondary" icon="logout" onClick={logout}>Sign out</Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* ------------------------------------------------------ mobile tab bar */}
+      <nav className="tabbar no-print" aria-label="Vendor portal sections">
+        {PRIMARY_MOBILE.map((t) => (
+          <button
+            key={t}
+            type="button"
+            className="tabbar-item"
+            aria-current={tab === t ? "page" : undefined}
+            onClick={() => go(t)}
+          >
+            <span style={{ position: "relative", display: "block" }}>
+              <Icon name={TAB_META[t].icon} size={20} />
+              {navBadge[t] ? (
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute", top: -3, right: -6,
+                    minWidth: 15, height: 15, padding: "0 3px",
+                    borderRadius: "var(--r-full)", background: "var(--danger)",
+                    color: "#fff", fontSize: 9, fontWeight: 700,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  {navBadge[t]}
+                </span>
+              ) : null}
+            </span>
+            <span>{TAB_META[t].label}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className="tabbar-item"
+          aria-expanded={moreOpen}
+          aria-current={MORE_MOBILE.includes(tab) ? "page" : undefined}
+          onClick={() => setMoreOpen(true)}
+        >
+          <Icon name="more" size={20} />
+          <span>More</span>
+        </button>
+      </nav>
+
+      <Modal open={moreOpen} onClose={() => setMoreOpen(false)} title="All sections" width="sm">
+        <div className="stack g-1">
+          {MORE_MOBILE.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className="nav-item"
+              style={{ minHeight: 46 }}
+              aria-current={tab === t ? "page" : undefined}
+              onClick={() => go(t)}
+            >
+              <Icon name={TAB_META[t].icon} size={17} />
+              <span className="truncate">{TAB_META[t].label}</span>
+            </button>
+          ))}
+          <div className="divider mt-2 mb-2" />
+          <a className="nav-item" style={{ minHeight: 46 }} href="/vendor/labels">
+            <Icon name="tag" size={17} /><span>Barcode labels</span>
+          </a>
+          <a className="nav-item" style={{ minHeight: 46 }} href="/vendor/qr">
+            <Icon name="print" size={17} /><span>Table QR card</span>
+          </a>
+          <div className="divider mt-2 mb-2" />
+          <button type="button" className="nav-item" style={{ minHeight: 46 }} onClick={logout}>
+            <Icon name="logout" size={17} />
+            <span>Sign out</span>
+          </button>
+        </div>
+      </Modal>
+
+      {/* ------------------------------------------------------- item editor */}
+      {editing ? (
+        <Panel
+          open
+          onClose={() => setEditItem(null)}
+          title={editing.name}
+          subtitle={`${editing.sku} · ${plural(editing.quantity, "unit")} on the floor`}
+          actions={
+            <Button size="sm" variant="secondary" icon="plus" disabled={busy} onClick={() => restockItem(editing)}>
+              Restock
+            </Button>
+          }
+          footer={
+            <div className="row wrap g-2">
+              <Button
+                variant="primary"
+                icon="check"
+                loading={busy}
+                onClick={async () => {
+                  const ok = await patchItem(editing.id, {
+                    name: editIF.name,
+                    priceDollars: editIF.price,
+                    quantity: editIF.qty,
+                    salePercent: editIF.sale,
+                  });
+                  if (ok) { toast.success("Item saved", "Changed the name or price? Print fresh labels so the shelf matches the register."); setEditItem(null); }
+                }}
+              >
+                Save changes
+              </Button>
+              <Button variant="ghost" onClick={() => setEditItem(null)}>Cancel</Button>
+            </div>
+          }
+        >
+          <div className="stack g-5">
+            <div className="stack g-3">
+              <Field label="Product photo" hint="Shows online — one per product. A new upload replaces it.">
+                {(p) => (
+                  <input
+                    {...p}
+                    className="input"
+                    type="file"
+                    accept="image/*"
+                    disabled={busy}
+                    onChange={(e) => { uploadItemPhoto(e.target.files?.[0], editing.id); e.target.value = ""; }}
+                  />
+                )}
+              </Field>
+              {(() => {
+                const ph = myPhotos.find((x) => x.kind === "ITEM" && x.itemId === editing.id);
+                return ph ? (
+                  <span style={{ position: "relative", display: "inline-block" }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`/api/public/photo/${ph.id}`}
+                      alt={editing.name}
+                      style={{ width: 96, height: 96, objectFit: "cover", borderRadius: "var(--r-md)", border: "1px solid var(--border)", display: "block" }}
+                    />
+                    <IconButton
+                      icon="close"
+                      label="Remove photo"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => deletePhoto(ph.id)}
+                      style={{
+                        position: "absolute",
+                        top: -10,
+                        right: -10,
+                        borderRadius: "var(--r-full)",
+                        background: "var(--surface)",
+                      }}
+                    />
+                  </span>
+                ) : (
+                  <p className="t-sm t-muted">No photo yet.</p>
+                );
+              })()}
+            </div>
+
+            <Field label="Item name" hint="This prints on your labels.">
+              {(p) => (
+                <Input
+                  {...p}
+                  value={editIF.name}
+                  onChange={(e) => setEditIF((f) => ({ ...f, name: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Field label="Price (dollars)">
+              {(p) => (
+                <Input
+                  {...p}
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  inputMode="decimal"
+                  value={editIF.price}
+                  onChange={(e) => setEditIF((f) => ({ ...f, price: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Field
+              label="Sale — % off"
+              hint="0 means no sale. The register and your online page both charge the sale price automatically."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  type="number"
+                  min="0"
+                  max="90"
+                  step="5"
+                  inputMode="numeric"
+                  value={editIF.sale}
+                  onChange={(e) => setEditIF((f) => ({ ...f, sale: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Field
+              label="Correct the total on the floor"
+              hint="This overrides the count. For a restock use the Restock button instead — it adds to the count."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={editIF.qty}
+                  onChange={(e) => setEditIF((f) => ({ ...f, qty: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <hr className="divider" />
+
+            <div className="stack g-2">
+              <span className="t-label">Take it off the floor</span>
+              <div className="row wrap g-2">
+                <Button variant="secondary" icon="box" disabled={busy} onClick={() => retireItem(editing)}>
+                  Retire item
+                </Button>
+                <Button variant="danger" icon="trash" disabled={busy} onClick={() => deleteItem(editing)}>
+                  Delete item
+                </Button>
+              </div>
+              <p className="t-xs t-muted">
+                Retiring keeps the sales history and lets you bring the item back. Deleting is
+                permanent — and if the item has ever sold, it gets retired instead.
+              </p>
+            </div>
+          </div>
+        </Panel>
+      ) : null}
+
+      {/* ---------------------------------------------------- inbox thread -- */}
+      {openThread ? (
+        <Panel
+          open
+          onClose={() => setOpenThread(null)}
+          title={openThread.customerName}
+          subtitle={`${openThread.type === "PREORDER" ? "Pre-order" : openThread.type === "REQUEST" ? "Request" : "Complaint"} · ${[openThread.email, openThread.phone].filter(Boolean).join(" · ")}`}
+          footer={
+            openThread.status === "OPEN" ? (
+              <div className="row wrap g-2">
+                <Button variant="primary" icon="mail" disabled={!replyBody.trim()} onClick={sendReply}>
+                  Send reply
+                </Button>
+                <Button variant="ghost" onClick={() => setThreadStatus("CLOSED")}>Close conversation</Button>
               </div>
             ) : (
-              <button className="btn small" style={{ marginTop: 8 }} disabled={busy} onClick={async () => {
-                setBusy(true);
-                try {
-                  const r = await fetch("/api/vendor/card", { method: "POST" });
-                  const d = await r.json();
-                  if (!r.ok) { alert(d.error || "Couldn't start."); return; }
-                  window.location.href = d.url;
-                } finally { setBusy(false); }
-              }}>ADD A CARD (SECURE — VIA STRIPE)</button>
-            )}
-            {cardMsg && <p className="ok" style={{ marginTop: 6 }}>{cardMsg}</p>}
-          </div>
-          <div className="card">
-            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>YOUR STATEMENT</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>Every sale (your net after commission), booth rent, adjustment, and payout. Balance pays out monthly.</p>
-            <ul style={{ listStyle: "none", marginTop: 6 }}>
-              {me.ledger.map((l) => (
-                <li key={l.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <span>{l.type === "SALE" ? "🛒" : l.type === "PAYOUT" ? "💸" : l.type === "RENT" ? "🏠" : "✏️"} {l.note || l.type}
-                    <span style={{ color: "var(--ash)", fontSize: 11 }}> · {new Date(l.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                  </span>
-                  <b style={{ color: l.amountCents >= 0 ? "var(--green)" : "var(--red)", whiteSpace: "nowrap" }}>
-                    {l.amountCents >= 0 ? "+" : "−"}${(Math.abs(l.amountCents) / 100).toFixed(2)}
-                  </b>
-                </li>
-              ))}
-              {me.ledger.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13, paddingTop: 6 }}>Sales, rent, and payouts will show here.</li>}
-            </ul>
-          </div>
-        </div>
-      )}
+              <Button variant="secondary" icon="refresh" onClick={() => setThreadStatus("OPEN")}>
+                Re-open conversation
+              </Button>
+            )
+          }
+        >
+          <div className="stack g-4">
+            <div className="stack g-2">
+              {openThread.messages.map((m) => {
+                const mine = m.sender === "VENDOR";
+                return (
+                  <div key={m.id} style={{ textAlign: mine ? "right" : "left" }}>
+                    <div className="t-xs t-muted">{mine ? "You" : openThread.customerName} · {fmtDateTime(m.createdAt)}</div>
+                    <div
+                      className="t-sm"
+                      style={{
+                        display: "inline-block",
+                        textAlign: "left",
+                        maxWidth: "88%",
+                        marginTop: 2,
+                        padding: "var(--sp-2) var(--sp-3)",
+                        borderRadius: "var(--r-md)",
+                        border: "1px solid var(--border)",
+                        background: mine ? "var(--accent-soft)" : "var(--surface)",
+                        color: mine ? "var(--accent-text)" : "inherit",
+                      }}
+                    >
+                      {m.body}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
-      {vtab === "chat" && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR CHAT 💬</h2>
-          <p style={{ fontSize: 12, color: "var(--ash)" }}>All market vendors + staff can read this — coordinate menus, cover restocks, plan the weekend.</p>
-          <div style={{ maxHeight: 380, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 12, padding: "8px 10px", margin: "8px 0", background: "#fafafa" }}>
-            {chat.length === 0 && <p style={{ fontSize: 13, color: "var(--ash)" }}>No messages yet — say hi! 👋</p>}
-            {chat.map((mg) => (
-              <div key={mg.id} style={{ marginBottom: 8, textAlign: mg.vendorId === chatMe ? "right" : "left" }}>
-                <div style={{ fontSize: 10.5, color: "var(--ash)" }}>{mg.name} · {new Date(mg.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>
-                <div style={{ display: "inline-block", background: mg.vendorId === chatMe ? "#111827" : "#fff", color: mg.vendorId === chatMe ? "#fff" : "inherit", border: "1px solid var(--border)", borderRadius: 12, padding: "6px 10px", fontSize: 13.5, maxWidth: "85%", textAlign: "left" }}>{mg.body}</div>
+            {openThread.type === "PREORDER" ? (
+              <div className="stack g-3">
+                <hr className="divider" />
+                {po && po.status === "PAID" ? (
+                  <Note tone="success" title={`Paid — ${money(po.totalCents)} collected online`}>
+                    It&rsquo;s in the register tickets and your balance, net of commission.
+                    Expected: {po.expectedDate}.
+                  </Note>
+                ) : po && po.status === "ACCEPTED" ? (
+                  <Note tone="info" title={`Accepted — awaiting payment of ${money(po.totalCents)}`}>
+                    Expected {po.expectedDate}. The customer has the payment link; accepting again
+                    revises the terms.
+                  </Note>
+                ) : po && po.status === "DECLINED" ? (
+                  <Note tone="neutral" title="Declined">
+                    Accept below if you change your mind.
+                  </Note>
+                ) : null}
+
+                {!po || po.status !== "PAID" ? (
+                  <div className="stack g-4">
+                    <h3 className="t-section">Accept and send a payment link</h3>
+                    <Field label="What they're getting" hint="This shows on the payment page.">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={poDesc}
+                          placeholder="2 dozen dinner rolls + 1 apple pie"
+                          onChange={(e) => setPoDesc(e.target.value)}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Your price, before tax (dollars)" hint="Tax is added automatically at the market rate.">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          value={poAmt}
+                          onChange={(e) => setPoAmt(e.target.value)}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Ready / expected date">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={poDate}
+                          placeholder="Saturday Oct 3, by 10 AM"
+                          onChange={(e) => setPoDate(e.target.value)}
+                        />
+                      )}
+                    </Field>
+                    {poErr ? <Note tone="error">{poErr}</Note> : null}
+                    <div className="row wrap g-2">
+                      <Button variant="primary" icon="check" onClick={acceptPreorder}>
+                        Accept and send the link
+                      </Button>
+                      <Button variant="dangerSoft" icon="close" onClick={declinePreorder}>
+                        Decline
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input placeholder="Message the vendors…" value={chatBody} onChange={(e) => setChatBody(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && chatBody.trim() && (async () => {
-                const b = chatBody; setChatBody("");
-                await fetch("/api/vendor/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: b }) });
-                loadChat();
-              })()} />
-            <button className="btn small" style={{ flex: "0 0 auto" }} disabled={busy || !chatBody.trim()} onClick={async () => {
-              const b = chatBody; setChatBody("");
-              await fetch("/api/vendor/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: b }) });
-              loadChat();
-            }}>SEND</button>
-          </div>
-        </div>
-      )}
+            ) : null}
 
-      {vtab === "settings" && (
-        <div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>SALE ALERTS 🔔</h2>
-            <p style={{ fontSize: 13, color: "var(--ash)" }}>
-              Get a push notification the moment your items sell. Without this you get one summary email at the end of each selling day — never an email per sale.
-              {pushDevices !== null && pushDevices > 0 ? ` Currently ON for ${pushDevices} device${pushDevices === 1 ? "" : "s"}.` : ""}
-            </p>
-            <div style={{ margin: "10px 0 4px", display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn small" onClick={enablePush}>TURN ON FOR THIS DEVICE</button>
-              {pushDevices !== null && pushDevices > 0 && (
-                <button className="btn small ghost" onClick={async () => {
-                  if (!confirm("Turn off sale alert pushes on all your devices? You'll get the daily summary email instead.")) return;
-                  const r = await fetch("/api/vendor/push", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
-                  if (r.ok) { setPushDevices(0); setPushMsg("Sale alerts off \u2014 you'll get the end-of-day summary email instead. \u2713"); }
-                }}>TURN OFF \u2014 DAILY EMAIL INSTEAD</button>
-              )}
-            </div>
-            <p style={{ fontSize: 11.5, color: "var(--ash)" }}>
-              iPhone: works on iOS 16.4+ only after you add this site to your home screen (share button → Add to Home Screen) and open it from that icon. Android: works right in Chrome.
-            </p>
-            {pushMsg && <p className={pushMsg.includes("✓") ? "ok" : "err"}>{pushMsg}</p>}
-          </div>
+            {openThread.status === "OPEN" ? (
+              <Field label="Reply" hint="They get it by email with a private link back to this conversation.">
+                {(p) => (
+                  <Textarea
+                    {...p}
+                    rows={3}
+                    value={replyBody}
+                    onChange={(e) => setReplyBody(e.target.value)}
+                  />
+                )}
+              </Field>
+            ) : null}
 
-          <div className="card">
-            <h2 className="display" style={{ fontSize: 16, marginBottom: 4 }}>CHANGE PASSWORD</h2>
-            <label>Current password</label>
-            <input type="password" value={pwCur} onChange={(e) => setPwCur(e.target.value)} />
-            <label>New password (8+ characters)</label>
-            <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
-            <label>Type it again</label>
-            <input type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} />
-            <div style={{ marginTop: 12 }}>
-              <button className="btn small" onClick={changePw}>UPDATE PASSWORD</button>
-            </div>
-            {pwMsg && <p className={pwMsg.includes("✓") ? "ok" : "err"}>{pwMsg}</p>}
+            {inboxMsg ? <Note tone="error">{inboxMsg}</Note> : null}
           </div>
-        </div>
-      )}
-    </main>
+        </Panel>
+      ) : null}
+    </div>
   );
 }

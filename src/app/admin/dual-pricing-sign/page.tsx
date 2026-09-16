@@ -1,11 +1,19 @@
 "use client";
 
+import { Button } from "@/components/ui";
+
 // Printable dual-pricing disclosure — post at the entry and the register
 export default function DualPricingSign() {
   return (
     <main style={{ maxWidth: 520, margin: "0 auto", padding: "20px 16px 50px", textAlign: "center" }}>
-      <button className="btn no-print" style={{ marginBottom: 14 }} onClick={() => window.print()}>🖨 PRINT THIS SIGN</button>
-      <div style={{ border: "2px solid #000", padding: "30px 22px", background: "#fff" }}>
+      <div className="no-print" style={{ marginBottom: 14 }}>
+        <Button variant="secondary" icon="print" className="no-print" onClick={() => window.print()}>
+          Print this sign
+        </Button>
+      </div>
+      {/* The sign prints on white paper, so it is rendered on white whatever the
+          app theme is — which means it has to pin its own ink colour too. */}
+      <div style={{ border: "2px solid #000", padding: "30px 22px", background: "#fff", color: "var(--n-900)" }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/wordmark.png" alt="Community Harvest" style={{ width: 220, maxWidth: "76%", height: "auto", margin: "0 auto 10px", display: "block" }} />
         <div style={{ fontWeight: 800, fontSize: 30, letterSpacing: "-0.02em", lineHeight: 1.15 }}>PAY CASH, PAY LESS 💵</div>

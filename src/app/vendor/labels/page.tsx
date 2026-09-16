@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Button, LinkButton, Field, Input, Checkbox, Segmented, Card, Note,
+  EmptyState, PageHeader, Skeleton,
+} from "@/components/ui";
+import { money, plural } from "@/lib/format";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number };
 
 declare global {
   interface Window { JsBarcode?: (el: Element | string, code: string, opts?: object) => void }
 }
+
+const BARCODE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js";
 
 // Two market-standard sheets, exact Avery-compatible geometry so barcodes land on stickers:
 // STANDARD: 1" x 2-5/8", 30/sheet (Avery 5160 class — "address labels")
@@ -21,9 +28,23 @@ export default function LabelsPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [business, setBusiness] = useState("");
   const [ready, setReady] = useState(false);
+  const [scriptFailed, setScriptFailed] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [copies, setCopies] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [format, setFormat] = useState<FormatKey>("STANDARD");
+
+  /* The barcode library comes off a CDN. If that request fails — captive wifi
+     at the market, an ad blocker, a bad connection — every label used to print
+     with a blank space where its barcode should be, silently. */
+  const loadBarcodeScript = useCallback(() => {
+    setScriptFailed(false);
+    const s = document.createElement("script");
+    s.src = BARCODE_SRC;
+    s.onload = () => setReady(true);
+    s.onerror = () => { setReady(false); setScriptFailed(true); s.remove(); };
+    document.head.appendChild(s);
+  }, []);
 
   useEffect(() => {
     fetch("/api/vendor/me").then(async (r) => {
@@ -35,37 +56,54 @@ export default function LabelsPage() {
       for (const it of data.items) c[it.id] = Math.max(1, it.quantity || 1);
       setCopies(c);
       setSelected({});
-    });
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js";
-    s.onload = () => setReady(true);
-    document.head.appendChild(s);
-  }, []);
-
-  useEffect(() => {
-    if (!ready || !window.JsBarcode) return;
-    const f = FORMATS[format];
-    document.querySelectorAll("svg.barcode").forEach((el) => {
-      const code = el.getAttribute("data-code");
-      if (code) window.JsBarcode!(el, code, { format: "CODE128", width: f.bar.width, height: f.bar.height, fontSize: f.bar.fontSize, margin: 0 });
-    });
-  });
+      setLoading(false);
+    }).catch(() => setLoading(false));
+    loadBarcodeScript();
+  }, [loadBarcodeScript]);
 
   const f = FORMATS[format];
-  const sheet: { item: Item; n: number }[] = [];
-  for (const it of items) {
-    if (!selected[it.id]) continue;
-    const n = copies[it.id] || 0;
-    for (let i = 0; i < n; i++) sheet.push({ item: it, n: i });
-  }
+
+  const sheet = useMemo(() => {
+    const out: { item: Item; n: number }[] = [];
+    for (const it of items) {
+      if (!selected[it.id]) continue;
+      const n = copies[it.id] || 0;
+      for (let i = 0; i < n; i++) out.push({ item: it, n: i });
+    }
+    return out;
+  }, [items, selected, copies]);
+
+  /* This effect had no dependency array at all, so it re-rendered every barcode
+     on every keystroke and every parent render. It only needs to run when the
+     library lands, the sheet changes, or the label geometry changes. */
+  useEffect(() => {
+    if (!ready || !window.JsBarcode) return;
+    const fmt = FORMATS[format];
+    document.querySelectorAll("svg.barcode").forEach((el) => {
+      const code = el.getAttribute("data-code");
+      if (code) {
+        window.JsBarcode!(el, code, {
+          format: "CODE128",
+          width: fmt.bar.width,
+          height: fmt.bar.height,
+          fontSize: fmt.bar.fontSize,
+          margin: 0,
+        });
+      }
+    });
+  }, [ready, format, sheet]);
+
   const setAll = (on: boolean) => {
     const next: Record<string, boolean> = {};
     for (const it of items) next[it.id] = on;
     setSelected(next);
   };
 
+  const selectedCount = items.filter((it) => selected[it.id]).length;
+  const sheets = Math.ceil(sheet.length / f.perSheet);
+
   return (
-    <main style={{ maxWidth: 880, margin: "0 auto", padding: "22px 16px 60px" }}>
+    <main className="content">
       <style>{`
         .label-sheet {
           display: grid;
@@ -76,7 +114,7 @@ export default function LabelsPage() {
           justify-content: flex-start;
         }
         .lbl {
-          overflow: hidden; text-align: center; background: #fff;
+          overflow: hidden; text-align: center; background: #fff; color: #000;
           display: flex; flex-direction: column; align-items: center; justify-content: center;
           border: 1px dashed #d1d5db; break-inside: avoid;
         }
@@ -91,66 +129,141 @@ export default function LabelsPage() {
           .lbl { border: none; }
         }
         @media screen {
-          .print-area { border: 1px solid var(--border); border-radius: 12px; background: #fff; padding: 14px; overflow-x: auto; }
+          .print-area { border: 1px solid var(--border); border-radius: var(--r-lg); background: #fff; padding: 14px; overflow-x: auto; }
         }
       `}</style>
 
-      <div className="no-print" style={{ marginBottom: 16 }}>
-        <a className="btn small ghost" href="/vendor">← DASHBOARD</a>{" "}
-        <button className="btn small" onClick={() => window.print()}>🖨 PRINT LABELS</button>
+      <div className="no-print">
+        <PageHeader
+          title="Barcode labels"
+          subtitle="Tick the items you want labels for, set how many of each, then print. Only what's ticked prints."
+          actions={
+            <>
+              <LinkButton href="/vendor" variant="ghost" icon="arrowLeft">Back to the portal</LinkButton>
+              <Button
+                variant="primary"
+                icon="print"
+                disabled={sheet.length === 0 || !ready}
+                onClick={() => window.print()}
+              >
+                Print labels
+              </Button>
+            </>
+          }
+        />
 
-        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-          <button className={`btn small ${format === "STANDARD" ? "" : "ghost"}`} onClick={() => setFormat("STANDARD")}>
-            STANDARD — 1&quot; × 2⅝&quot; (30/sheet)
-          </button>
-          <button className={`btn small ${format === "SMALL" ? "" : "ghost"}`} onClick={() => setFormat("SMALL")}>
-            SMALL — ⅔&quot; × 1¾&quot; (60/sheet)
-          </button>
-        </div>
+        <div className="stack g-4">
+          {scriptFailed ? (
+            <Note
+              tone="error"
+              title="Barcodes can't be drawn right now"
+              action={<Button size="sm" variant="secondary" icon="refresh" onClick={loadBarcodeScript}>Try again</Button>}
+            >
+              The barcode library didn&rsquo;t load — usually a spotty connection or a blocker.
+              Printing now would give you labels with blank barcodes, so printing is paused until
+              it loads. Check your connection and try again.
+            </Note>
+          ) : null}
 
-        <div className="card" style={{ marginTop: 10, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-          <b style={{ fontSize: 13 }}>🛒 What to buy:</b>
-          <p style={{ fontSize: 12.5, margin: "4px 0 0" }}>
-            {format === "STANDARD"
-              ? <>White <b>&ldquo;address labels, 30 per sheet&rdquo;</b> — 1&quot; × 2⅝&quot; (Avery 5160 or any store brand, ~$10). Works in any printer. Best for jars, bags, boxes, candles, soap.</>
-              : <>White <b>&ldquo;return address labels, 60 per sheet&rdquo;</b> — ⅔&quot; × 1¾&quot; (Avery 5195/8195 or any store brand, ~$10). For lip balm, jewelry cards, small tins. Tip: for tiny items, put the label on a hang tag instead of the product.</>}
-          </p>
-          <p style={{ fontSize: 12.5, fontWeight: 700, margin: "6px 0 0", color: "#b91c1c" }}>
-            ⚠️ In the print window set Scale to 100% (never &ldquo;Fit to page&rdquo;) or labels won&rsquo;t line up with the stickers.
-          </p>
-        </div>
+          {!ready && !scriptFailed ? (
+            <Note tone="neutral" title="Getting the barcode library">
+              Printing unlocks as soon as it lands — a second or two on most connections.
+            </Note>
+          ) : null}
 
-        <p style={{ fontSize: 13, color: "var(--ash)", marginTop: 10 }}>
-          Tick the items you want labels for and set how many of each (copies start at your floor quantity). Only what&rsquo;s checked prints. Each full sheet holds {f.perSheet} labels. Plain paper + tape works in a pinch.
-        </p>
-        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-          <button className="btn small ghost" onClick={() => setAll(true)}>SELECT ALL</button>
-          <button className="btn small ghost" onClick={() => setAll(false)}>SELECT NONE</button>
-        </div>
-        <div className="card" style={{ marginTop: 10 }}>
-          {items.map((it) => (
-            <div key={it.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--border)", gap: 10 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
-                <input type="checkbox" checked={!!selected[it.id]} style={{ width: "auto" }}
-                  onChange={(e) => setSelected((sel) => ({ ...sel, [it.id]: e.target.checked }))} />
-                {it.name} <span style={{ color: "var(--ash)", fontSize: 12 }}>({it.sku})</span>
-              </label>
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-                copies:
-                <input
-                  type="number" min="0" step="1" value={copies[it.id] ?? 1}
-                  onChange={(e) => setCopies((c) => ({ ...c, [it.id]: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
-                  style={{ width: 70, padding: "6px 8px" }}
-                />
-              </span>
+          <Card title="Label size">
+            <div className="stack g-4">
+              <Segmented
+                value={format}
+                onChange={setFormat}
+                label="Label size"
+                options={[
+                  { value: "STANDARD", label: "Standard — 1\" × 2⅝\" (30/sheet)" },
+                  { value: "SMALL", label: "Small — ⅔\" × 1¾\" (60/sheet)" },
+                ]}
+              />
+
+              <Note tone="info" title="What to buy">
+                {format === "STANDARD"
+                  ? <>White <b>&ldquo;address labels, 30 per sheet&rdquo;</b> — 1&quot; × 2⅝&quot; (Avery 5160 or any store brand, about $10). Works in any printer. Best for jars, bags, boxes, candles, soap.</>
+                  : <>White <b>&ldquo;return address labels, 60 per sheet&rdquo;</b> — ⅔&quot; × 1¾&quot; (Avery 5195/8195 or any store brand, about $10). For lip balm, jewelry cards, small tins. For tiny items, put the label on a hang tag instead of the product.</>}
+              </Note>
+
+              <Note tone="warn" title="Set your printer scale to 100%">
+                In the print window choose 100% scale, never &ldquo;Fit to page&rdquo; — otherwise the
+                labels won&rsquo;t line up with the stickers.
+              </Note>
             </div>
-          ))}
-          {items.length === 0 && <p style={{ color: "var(--ash)", fontSize: 14 }}>No items yet — add some on your dashboard first.</p>}
+          </Card>
+
+          <Card
+            title="What to print"
+            subtitle={
+              sheet.length > 0
+                ? `${plural(selectedCount, "item")} · ${plural(sheet.length, "label")} · ${plural(sheets, "sheet")} (${f.perSheet} per sheet)`
+                : `Copies start at your floor quantity. Each full sheet holds ${f.perSheet} labels.`
+            }
+            actions={
+              items.length > 0 ? (
+                <>
+                  <Button size="sm" variant="ghost" onClick={() => setAll(true)}>Select all</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setAll(false)}>Select none</Button>
+                </>
+              ) : undefined
+            }
+          >
+            {loading ? (
+              <div className="stack g-3" aria-busy="true">
+                <Skeleton height={40} />
+                <Skeleton height={40} />
+                <Skeleton height={40} />
+              </div>
+            ) : items.length === 0 ? (
+              <EmptyState
+                icon="box"
+                title="No items to label yet"
+                body="Add your items on the dashboard first — each one gets its own barcode automatically."
+                action={<LinkButton href="/vendor" variant="primary" icon="plus">Add an item</LinkButton>}
+              />
+            ) : (
+              <div className="stack g-3">
+                {items.map((it) => (
+                  <div key={it.id} className="row between wrap g-3" style={{ borderBottom: "1px solid var(--border-subtle)", paddingBottom: "var(--sp-2)" }}>
+                    <div className="grow" style={{ minWidth: 0 }}>
+                      <Checkbox
+                        checked={!!selected[it.id]}
+                        onCheckedChange={(on) => setSelected((sel) => ({ ...sel, [it.id]: on }))}
+                        label={it.name}
+                        hint={`${it.sku} · ${money(it.priceCents)}`}
+                      />
+                    </div>
+                    <Field label="Copies" className="shrink0">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          style={{ width: 92 }}
+                          value={copies[it.id] ?? 1}
+                          onChange={(e) => setCopies((c) => ({ ...c, [it.id]: Math.max(0, Math.round(Number(e.target.value) || 0)) }))}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                ))}
+
+                {sheet.length === 0 ? (
+                  <Note tone="neutral">Nothing selected yet — tick the items you want, then print.</Note>
+                ) : null}
+              </div>
+            )}
+          </Card>
         </div>
-        {sheet.length === 0 && <p style={{ fontSize: 13, fontWeight: 600, marginTop: 10 }}>Nothing selected yet — tick items above, then print.</p>}
       </div>
 
-      <div className="print-area">
+      <div className="print-area mt-4">
         <div className="label-sheet">
           {sheet.map(({ item, n }) => (
             <div className="lbl" key={`${item.id}-${n}`}>

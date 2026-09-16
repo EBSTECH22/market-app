@@ -1,8 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button, Card, Icon, LinkButton, Note, Skeleton } from "@/components/ui";
+import { money } from "@/lib/format";
 
 type Info = { businessName: string; boothLabel: string; dueCents: number; feeCents: number; totalCents: number; processingPercent: number };
+
+/** One line of the rent breakdown. Replaces the old hand-rolled flex rows. */
+function Line({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="row between g-3" style={{ minHeight: 28 }}>
+      <span className={strong ? "t-card" : "t-sm t-secondary"}>{label}</span>
+      <span className={strong ? "t-card num" : "t-sm num"}>{value}</span>
+    </div>
+  );
+}
 
 export default function RentPayPage({ params }: { params: { token: string } }) {
   const [info, setInfo] = useState<Info | null>(null);
@@ -32,38 +44,88 @@ export default function RentPayPage({ params }: { params: { token: string } }) {
   };
 
   return (
-    <main style={{ maxWidth: 460, margin: "0 auto", padding: "40px 16px 60px", textAlign: "center" }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/wordmark.png" alt="Community Harvest" style={{ width: 200, maxWidth: "70%", height: "auto", margin: "0 auto 14px", display: "block" }} />
-      {err && <p className="err">{err}</p>}
+    <main className="public-wrap public-narrow">
+      <div className="mb-4" style={{ textAlign: "center" }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/wordmark.png" alt="Community Harvest" style={{ width: 200, maxWidth: "70%", height: "auto", margin: "0 auto", display: "block" }} />
+      </div>
+
+      {err && (
+        <div className="mb-4">
+          <Note tone="error" title="We couldn't open that rent link">{err}</Note>
+        </div>
+      )}
+
       {paid && (
-        <div className="card" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-          <div style={{ fontSize: 40 }}>✅</div>
-          <h1 className="display" style={{ fontSize: 22, margin: "6px 0" }}>RENT PAID — YOU&rsquo;RE ALL SET</h1>
-          <p style={{ fontSize: 13.5 }}>Your card ····{paid.last4} is saved for automatic settlement going forward. Log in to your portal to add products and start selling.</p>
-          <a className="btn" style={{ marginTop: 12 }} href="/">🔑 OPEN YOUR VENDOR PORTAL</a>
-        </div>
+        <Card>
+          <div className="stack g-4" style={{ textAlign: "center" }}>
+            <span style={{ color: "var(--accent)", display: "block" }}>
+              <Icon name="checkCircle" size={40} />
+            </span>
+            <div>
+              <h1 className="t-page">Rent paid — you&rsquo;re all set</h1>
+              <p className="t-sm t-secondary mt-2">
+                Your card ····{paid.last4} is saved for automatic settlement from here on. Log in to your
+                portal to add products and start selling.
+              </p>
+            </div>
+            <LinkButton href="/" variant="primary" size="lg" block icon="unlock">
+              Open your vendor portal
+            </LinkButton>
+          </div>
+        </Card>
       )}
+
       {info && !paid && (
-        <div className="card">
-          <h1 className="display" style={{ fontSize: 21 }}>FIRST MONTH&rsquo;S RENT</h1>
-          <p style={{ fontSize: 13, color: "var(--ash)" }}>{info.businessName} · booth {info.boothLabel}</p>
+        <Card
+          title={<>First month&rsquo;s rent</>}
+          subtitle={`${info.businessName} · booth ${info.boothLabel}`}
+        >
           {info.dueCents === 0 ? (
-            <p className="ok" style={{ marginTop: 8 }}>Nothing due — your balance is covered. 🎉</p>
+            <Note tone="success" title="Nothing due">
+              Your balance already covers this month&rsquo;s rent — there&rsquo;s nothing to pay.
+            </Note>
           ) : (
-            <>
-              <div style={{ textAlign: "left", background: "#fafafa", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px", margin: "12px 0" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}><span>Rent due</span><b>${(info.dueCents / 100).toFixed(2)}</b></div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}><span>Card-processing adjustment ({info.processingPercent}%)</span><b>${(info.feeCents / 100).toFixed(2)}</b></div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 8 }}><span><b>Total</b></span><b>${(info.totalCents / 100).toFixed(2)}</b></div>
+            <div className="stack g-4">
+              <div
+                className="stack g-2"
+                style={{
+                  background: "var(--bg-inset)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-md)",
+                  padding: "var(--sp-3) var(--sp-4)",
+                }}
+              >
+                <Line label="Rent due" value={money(info.dueCents)} />
+                <Line label={`Card-processing adjustment (${info.processingPercent}%)`} value={money(info.feeCents)} />
+                <hr className="divider" />
+                <Line label="Total" value={money(info.totalCents)} strong />
               </div>
-              <button className="btn" disabled={busy} onClick={pay}>💳 PAY ${(info.totalCents / 100).toFixed(2)} &amp; SET UP AUTOPAY</button>
-              <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 10 }}>One payment covers your first month AND saves your card for automatic settlement. Prefer cash or check (no fee)? Just pay at the market. Secure payment by Stripe.</p>
-            </>
+
+              <Button variant="primary" size="lg" block icon="card" loading={busy} onClick={pay}>
+                Pay {money(info.totalCents)} and set up autopay
+              </Button>
+
+              <p className="t-xs t-muted" style={{ textAlign: "center" }}>
+                One payment covers your first month and saves your card for automatic settlement. Prefer cash
+                or check (no fee)? Just pay at the market. Secure payment by Stripe.
+              </p>
+            </div>
           )}
-        </div>
+        </Card>
       )}
-      {!info && !paid && !err && <p style={{ color: "var(--ash)" }}>Loading…</p>}
+
+      {!info && !paid && !err && (
+        <Card>
+          <div className="stack g-3" aria-busy="true">
+            <span className="sr-only">Loading what&rsquo;s due…</span>
+            <Skeleton width="55%" height={20} />
+            <Skeleton height={14} />
+            <Skeleton height={14} />
+            <Skeleton height={48} style={{ marginTop: "var(--sp-3)" }} />
+          </div>
+        </Card>
+      )}
     </main>
   );
 }

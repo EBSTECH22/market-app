@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { TZ } from "@/lib/time";
-import { sendFirstRentEmail, sendWelcomeEmail } from "@/lib/email";
+import { sendFirstRentEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 
 // Posts the prorated first-month rent when a contract becomes fully executed.
@@ -22,7 +22,6 @@ export async function postFirstMonthRent(contractId: string) {
   const paidThrough = new Date(start);
   paidThrough.setMonth(paidThrough.getMonth() + 1);
   await db.contract.update({ where: { id: c.id }, data: { paidThrough } });
-  const daysCharged = daysInMonth - d + 1;
   if (amount <= 0) return;
 
   let token = c.signToken;

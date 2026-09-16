@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
+import { LinkButton } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +23,10 @@ export default async function ApplicationPrint({ params }: { params: { id: strin
   return (
     <main style={{ maxWidth: 640, margin: "0 auto", padding: "26px 22px 60px", background: "#fff", minHeight: "100vh", color: "#111" }}>
       <style>{`@media print { .no-print { display: none !important; } main { padding: 0 !important; } }`}</style>
-      <button className="btn small no-print" style={{ marginBottom: 12 }}><a href="/admin" style={{ textDecoration: "none", color: "inherit" }}>← BACK</a></button>
-      <span className="no-print" style={{ fontSize: 12, color: "#777", marginLeft: 10 }}>Ctrl+P to print or save as PDF</span>
+      <div className="no-print row wrap g-3" style={{ marginBottom: 12 }}>
+        <LinkButton href="/admin" variant="secondary" size="sm" icon="arrowLeft">Back</LinkButton>
+        <span style={{ fontSize: 12, color: "#777" }}>Ctrl+P to print or save as PDF</span>
+      </div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/logo.png" alt="" style={{ width: 80, height: 80, display: "block", margin: "0 auto 6px" }} />
       <h1 style={{ textAlign: "center", fontSize: 18, fontWeight: 900 }}>VENDOR APPLICATION</h1>

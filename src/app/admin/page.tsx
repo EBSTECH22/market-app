@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { usePulse } from "@/lib/usePulse";
+import {
+  Icon, Button, IconButton, LinkButton, Field, Input, Select, SearchInput,
+  Checkbox, ToggleTile, Segmented, Modal, Panel, useDialog, useToast,
+  DataTable, DescList, Badge, Card, Stat, EmptyState, Note, Skeleton,
+  SkeletonStats, PageHeader, type Column, type IconName,
+} from "@/components/ui";
+import { money, fmtDate, fmtDateTime, fmtTime, relTime, isoDate, fmtPhone, plural } from "@/lib/format";
+import { useHashTab } from "@/lib/useHashTab";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
@@ -24,12 +33,72 @@ type Report = {
   byHour: Record<string, number>;
 };
 
-const money = (c: number) => `$${(c / 100).toFixed(2)}`;
 const DENOMS: [string, string, number][] = [
   ["b100", "$100 bills", 10000], ["b50", "$50 bills", 5000], ["b20", "$20 bills", 2000],
   ["b10", "$10 bills", 1000], ["b5", "$5 bills", 500], ["b1", "$1 bills", 100],
   ["q", "Quarters", 25], ["d", "Dimes", 10], ["n", "Nickels", 5], ["p", "Pennies", 1],
 ];
+
+/* Tabs live in the URL hash so refresh, back/forward and shared links all work. */
+const ADMIN_TABS = [
+  "register", "time", "reports", "bank", "floor", "vendors",
+  "customers", "contracts", "tents", "team", "links", "settings",
+] as const;
+type AdminTab = (typeof ADMIN_TABS)[number];
+
+const STAFF_TABS: readonly AdminTab[] = ["register", "time", "floor"];
+
+/* Grouped navigation — twelve peer buttons in one flat row gave no sense of
+   what belonged together or what a cashier was allowed to touch. */
+const NAV: { group: string; items: { id: AdminTab; label: string; icon: IconName }[] }[] = [
+  {
+    group: "Daily",
+    items: [
+      { id: "register", label: "Register", icon: "register" },
+      { id: "time", label: "Time clock", icon: "clock" },
+      { id: "floor", label: "Floor stock", icon: "grid" },
+    ],
+  },
+  {
+    group: "Money",
+    items: [
+      { id: "reports", label: "Reports", icon: "chart" },
+      { id: "bank", label: "Bank & payouts", icon: "bank" },
+    ],
+  },
+  {
+    group: "People",
+    items: [
+      { id: "vendors", label: "Vendors", icon: "store" },
+      { id: "contracts", label: "Contracts", icon: "contract" },
+      { id: "customers", label: "Customers", icon: "star" },
+      { id: "tents", label: "Tent days", icon: "tent" },
+      { id: "team", label: "Team & payroll", icon: "users" },
+    ],
+  },
+  {
+    group: "Setup",
+    items: [
+      { id: "links", label: "Links & QR", icon: "link" },
+      { id: "settings", label: "Settings", icon: "settings" },
+    ],
+  },
+];
+
+const TAB_META: Record<AdminTab, { label: string; icon: IconName; sub: string }> = {
+  register: { label: "Register", icon: "register", sub: "Ring up sales, manage the drawer, handle refunds" },
+  time: { label: "Time clock", icon: "clock", sub: "Your shifts and hours" },
+  floor: { label: "Floor stock", icon: "grid", sub: "Everything on the market floor right now" },
+  reports: { label: "Reports", icon: "chart", sub: "Sales by period, vendor, and item" },
+  bank: { label: "Bank & payouts", icon: "bank", sub: "Stripe balance, payouts, and month-end settlement" },
+  vendors: { label: "Vendors", icon: "store", sub: "Accounts, balances, applications, and complaints" },
+  contracts: { label: "Contracts", icon: "contract", sub: "Booth leases, signatures, and notice" },
+  customers: { label: "Customers", icon: "star", sub: "Rewards members and their spend" },
+  tents: { label: "Tent days", icon: "tent", sub: "Outdoor day-booth dates and bookings" },
+  team: { label: "Team & payroll", icon: "users", sub: "Employees, pay rates, documents, and payroll runs" },
+  links: { label: "Links & QR", icon: "link", sub: "Every public link and code for the market" },
+  settings: { label: "Settings", icon: "settings", sub: "Tax, rent, card adjustment, staff PINs, and the banner" },
+};
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
@@ -40,6 +109,7 @@ export default function AdminPage() {
   const [loginName, setLoginName] = useState("");
   const [loginPin, setLoginPin] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [timeData, setTimeData] = useState<{ open: { id: string; clockIn: string } | null; entries: { id: string; dayStr: string; inStr: string; outStr: string | null; hours: number | null }[] } | null>(null);
   const [timeMsg, setTimeMsg] = useState("");
   const [team, setTeam] = useState<TeamMember[]>([]);
@@ -57,8 +127,11 @@ export default function AdminPage() {
   const [refundQty, setRefundQty] = useState<Record<string, number>>({});
   const [refundRestock, setRefundRestock] = useState(true);
   const [refundMsg, setRefundMsg] = useState("");
-  const [tab, setTab] = useState<"register" | "time" | "reports" | "bank" | "floor" | "vendors" | "customers" | "contracts" | "tents" | "team" | "links" | "settings">("register");
+  const [tab, setTab] = useHashTab(ADMIN_TABS, "register");
   const [busy, setBusy] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const dialog = useDialog();
+  const toast = useToast();
 
   // register / drawer
   const [drawer, setDrawer] = useState<Drawer>(null);
@@ -118,20 +191,18 @@ export default function AdminPage() {
   const [cardConfirm, setCardConfirm] = useState(false);
   const [editV, setEditV] = useState<string | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
-  const [appNotes, setAppNotes] = useState<Record<string, string>>({});
   const [showInactive, setShowInactive] = useState(false);
-  const [appForm, setAppForm] = useState<{ id: string; booth: string; rent: string; start: string } | null>(null);
-  const appAction = async (id: string, payload: Record<string, unknown>, refresh = true) => {
-    setBusy(true);
-    try {
-      const r = await fetch(`/api/admin/applications/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { alert(d.error || "Couldn't update."); return null; }
-      if (refresh) loadAll();
-      return d;
-    } finally { setBusy(false); }
-  };
+  /* Note: the per-application notes/contract form and its PATCH handler used to
+     live here too. That workflow now has its own screen at /admin/applications,
+     so this page only needs the read-only pipeline view. */
   const [editF, setEditF] = useState({ businessName: "", contactName: "", email: "", phone: "" });
+  /* Presentation-only state for the vendor/contract/application views: which
+     record the slide-over is showing, and what's typed in each search box. */
+  const [vendorQ, setVendorQ] = useState("");
+  const [vendorOpen, setVendorOpen] = useState<string | null>(null);
+  const [contractOpen, setContractOpen] = useState<string | null>(null);
+  const [appQ, setAppQ] = useState("");
+  const [appFilter, setAppFilter] = useState<"PENDING" | "ACCEPTED" | "DECLINED">("PENDING");
   const [rateMsg, setRateMsg] = useState("");
   const [adminPushDevices, setAdminPushDevices] = useState<number | null>(null);
   const [adminPushKey, setAdminPushKey] = useState("");
@@ -148,6 +219,13 @@ export default function AdminPage() {
   const [newEmpName, setNewEmpName] = useState("");
   const [newEmpPin, setNewEmpPin] = useState("");
   const [empMsg, setEmpMsg] = useState("");
+
+  /* Presentation-only state for team / tents / links / settings: which employee
+     the slide-over is showing, the document type picked in that slide-over, and
+     which single button is mid-request (so only that one shows a spinner). */
+  const [teamOpen, setTeamOpen] = useState<string | null>(null);
+  const [docKind, setDocKind] = useState("W4");
+  const [pending, setPending] = useState("");
 
   const safeFetch = async (url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> => {
     try {
@@ -237,6 +315,26 @@ export default function AdminPage() {
   }, [authed, role, tab]);
   useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ); }, [authed, tab, ticketQ, loadTickets]);
   useEffect(() => { if (authed && tab === "reports") loadReport(); }, [authed, tab, loadReport]);
+  /* Customers used to hide behind a "load customers" button, so the tab read as
+     empty until you found it. It loads on open now, like every other tab, which
+     means it needs its own loading and error state. clockBusy keeps the time
+     clock's one big button from being double-tapped. */
+  const [custLoading, setCustLoading] = useState(false);
+  const [custErr, setCustErr] = useState("");
+  const [clockBusy, setClockBusy] = useState(false);
+  const loadCustomers = useCallback(async () => {
+    setCustLoading(true); setCustErr("");
+    try {
+      const r = await fetch("/api/admin/customers");
+      if (!r.ok) { setCustErr("Couldn't load the customer list."); return; }
+      setCustomers((await r.json()).customers || []);
+    } catch {
+      setCustErr("Couldn't reach the server. Check the connection and try again.");
+    } finally {
+      setCustLoading(false);
+    }
+  }, []);
+  useEffect(() => { if (authed && role === "admin" && tab === "customers") loadCustomers(); }, [authed, role, tab, loadCustomers]);
   useEffect(() => {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
     if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) setSettle((await r.json()).rows); });
@@ -250,20 +348,43 @@ export default function AdminPage() {
 
   const login = async () => {
     setLoginError("");
-    if (loginMode === "admin") {
-      const res = await fetch("/api/admin/login", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
-      if (!res.ok) { setLoginError("Wrong password."); return; }
-    } else {
-      const res = await fetch("/api/staff/login", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: loginName, pin: loginPin }),
-      });
-      if (!res.ok) { setLoginError("Wrong name or PIN."); return; }
+    if (loginMode === "admin" && !password) { setLoginError("Enter the admin password."); return; }
+    if (loginMode === "staff" && (!loginName.trim() || !loginPin)) {
+      setLoginError("Enter both your name and your PIN.");
+      return;
     }
-    await probeRole(); await loadDrawer(); await loadAll();
+    setLoggingIn(true);
+    try {
+      if (loginMode === "admin") {
+        const { ok, status, data } = await safeFetch("/api/admin/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        });
+        if (!ok) {
+          // 429 means the server's rate limiter kicked in — say so rather than
+          // letting them keep guessing against a lockout.
+          setLoginError(status === 429
+            ? String(data.error || "Too many attempts. Wait a minute and try again.")
+            : "That password isn't right.");
+          return;
+        }
+      } else {
+        const { ok, status, data } = await safeFetch("/api/staff/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: loginName.trim(), pin: loginPin }),
+        });
+        if (!ok) {
+          setLoginError(status === 429
+            ? String(data.error || "Too many attempts. Wait a minute and try again.")
+            : "That name or PIN isn't right. Your name has to match exactly what the owner entered.");
+          return;
+        }
+      }
+      setPassword(""); setLoginPin("");
+      await probeRole(); await loadDrawer(); await loadAll();
+    } finally {
+      setLoggingIn(false);
+    }
   };
 
   const staffLogout = async () => {
@@ -290,22 +411,46 @@ export default function AdminPage() {
     await loadTeam();
   };
 
-  const addDeduction = async (employeeId: string) => {
-    const name = prompt("Deduction name (e.g. Health insurance, Advance repayment):");
-    if (name === null || !name.trim()) return;
-    const amt = prompt("Amount per pay period (dollars):");
-    if (amt === null) return;
+  const addDeduction = async (employeeId: string, employeeName: string) => {
+    const name = await dialog.prompt({
+      title: "Add a recurring deduction",
+      body: `This comes off ${employeeName}'s gross pay every pay period until you remove it.`,
+      label: "What is it for?",
+      placeholder: "Health insurance",
+      hint: "Shows on their payroll breakdown under this name.",
+      required: true,
+      confirmLabel: "Next",
+    });
+    if (name === null) return;
+
+    const cents = await dialog.money({
+      title: "Amount per pay period",
+      body: `Deducted from ${employeeName}'s gross every run.`,
+      label: `Amount for "${name}"`,
+      confirmLabel: "Add deduction",
+    });
+    if (cents === null) return;
+
     const { ok, data } = await safeFetch("/api/admin/team", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ employeeId, name, amountDollars: amt }),
+      body: JSON.stringify({ employeeId, name, amountDollars: String(cents / 100) }),
     });
-    if (!ok) { setTeamMsg(String(data.error || "Failed.")); return; }
+    if (!ok) { toast.error("Couldn't add the deduction", String(data.error || "")); return; }
+    toast.success("Deduction added", `${name} — ${money(cents)} per pay period.`);
     await loadTeam();
   };
 
-  const dropDeduction = async (id: string) => {
-    if (!confirm("Remove this deduction going forward?")) return;
-    await safeFetch(`/api/admin/team?id=${id}`, { method: "DELETE" });
+  const dropDeduction = async (id: string, name: string) => {
+    const yes = await dialog.confirm({
+      title: "Remove this deduction?",
+      body: `"${name}" stops coming out of their pay from the next payroll run on. Runs you've already done aren't changed.`,
+      confirmLabel: "Remove deduction",
+      tone: "danger",
+    });
+    if (!yes) return;
+    const { ok, data } = await safeFetch(`/api/admin/team?id=${id}`, { method: "DELETE" });
+    if (!ok) { toast.error("Couldn't remove it", String(data.error || "")); return; }
+    toast.success("Deduction removed");
     await loadTeam();
   };
 
@@ -326,9 +471,17 @@ export default function AdminPage() {
     await loadTeam();
   };
 
-  const dropDoc = async (id: string) => {
-    if (!confirm("Delete this document?")) return;
-    await safeFetch(`/api/admin/team/docs/${id}`, { method: "DELETE" });
+  const dropDoc = async (id: string, filename: string) => {
+    const yes = await dialog.confirm({
+      title: "Delete this document?",
+      body: `"${filename}" will be permanently removed from their file. This can't be undone.`,
+      confirmLabel: "Delete document",
+      tone: "danger",
+    });
+    if (!yes) return;
+    const { ok, data } = await safeFetch(`/api/admin/team/docs/${id}`, { method: "DELETE" });
+    if (!ok) { toast.error("Couldn't delete it", String(data.error || "")); return; }
+    toast.success("Document deleted");
     await loadTeam();
   };
 
@@ -352,13 +505,24 @@ export default function AdminPage() {
   }, []);
   useEffect(() => { if (authed && role === "admin" && tab === "tents") loadTents(); }, [authed, role, tab, loadTents]);
 
-  const tentAct = async (body: Record<string, unknown>, confirmMsg?: string) => {
-    if (confirmMsg && !confirm(confirmMsg)) return;
+  const tentAct = async (
+    body: Record<string, unknown>,
+    confirmOpts?: { title: string; body?: string; confirmLabel?: string; tone?: "danger" | "warn" }
+  ) => {
+    if (confirmOpts) {
+      const yes = await dialog.confirm({
+        title: confirmOpts.title,
+        body: confirmOpts.body,
+        confirmLabel: confirmOpts.confirmLabel ?? "Confirm",
+        tone: confirmOpts.tone ?? "default",
+      });
+      if (!yes) return;
+    }
     setTentMsg("");
     const { ok, data } = await safeFetch("/api/admin/tents", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    if (!ok) { setTentMsg(String(data.error || "Failed.")); return; }
+    if (!ok) { toast.error("Couldn't update tent days", String(data.error || "")); return; }
     await loadTents();
   };
 
@@ -372,23 +536,46 @@ export default function AdminPage() {
     }
     if (out.length === 0) { setTentMsg("No days matched — check the weekday boxes."); return; }
     await tentAct({ action: "openDates", dates: out, capacity: Number(tentCap) || 4 });
-    setTentMsg(`Opened ${out.length} date${out.length === 1 ? "" : "s"}. ✓`);
+    toast.success(
+      `Opened ${plural(out.length, "date")}`,
+      `Capacity ${tentCap} per day. Vendors can book these now.`
+    );
+    setTentMsg("");
   };
 
-  const decideApplication = async (id: string, action: "accept" | "decline") => {
+  const decideApplication = async (id: string, action: "accept" | "decline", businessName: string) => {
     let reason = "";
     if (action === "decline") {
-      const r = prompt("Optional note for the decline email (leave blank for the standard message):", "");
+      const r = await dialog.prompt({
+        title: `Decline ${businessName}?`,
+        body: "They'll get a decline email. Anything you write here is added to it — leave it blank to send the standard message.",
+        label: "Note for the email (optional)",
+        placeholder: "We're full on bakers right now, but we'd love to revisit in the spring.",
+        multiline: true,
+        confirmLabel: "Send decline",
+        tone: "warn",
+      });
       if (r === null) return;
       reason = r;
-    } else if (!confirm("Accept this application? They'll get the 'welcome — someone will be calling you' email.")) return;
+    } else {
+      const yes = await dialog.confirm({
+        title: `Accept ${businessName}?`,
+        body: "They'll get the welcome email letting them know someone will be calling. You can set up their booth and contract after that.",
+        confirmLabel: "Accept application",
+      });
+      if (!yes) return;
+    }
     setBusy(true);
     try {
       const { ok, data } = await safeFetch(`/api/admin/applications/${id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, reason }),
       });
-      if (!ok) { alert(String(data.error || "Failed.")); return; }
+      if (!ok) { toast.error(`Couldn't ${action} the application`, String(data.error || "")); return; }
+      toast.success(
+        action === "accept" ? `${businessName} accepted` : `${businessName} declined`,
+        action === "accept" ? "Welcome email sent." : "Decline email sent."
+      );
       const r2 = await fetch("/api/admin/applications");
       if (r2.ok) setApplications((await r2.json()).applications || []);
     } finally { setBusy(false); }
@@ -416,12 +603,34 @@ export default function AdminPage() {
   };
 
   const voidSale = async (t: Ticket) => {
-    if (!confirm(`VOID ticket #${t.number} entirely? Items go back on the floor, vendor credits reverse, and it drops out of every report.${t.paymentMethod === "CASH" ? ` Hand back ${money(t.totalCents)} cash.` : " Reverse the card charge on your card machine."}`)) return;
+    const yes = await dialog.confirm({
+      title: `Void ticket #${t.number}?`,
+      body: (
+        <>
+          <p>This reverses the whole sale — {money(t.totalCents)}. Items go back on the floor,
+          the vendors&rsquo; credits reverse, and the ticket drops out of every report.</p>
+          <p style={{ marginTop: 8, fontWeight: 580 }}>
+            {t.paymentMethod === "CASH"
+              ? `Hand back ${money(t.totalCents)} in cash from the drawer.`
+              : "Reverse the charge on your card machine — this system only records it."}
+          </p>
+        </>
+      ),
+      confirmLabel: "Void the sale",
+      tone: "danger",
+      // A void is irreversible and moves real money, so make it deliberate.
+      typeToConfirm: "VOID",
+    });
+    if (!yes) return;
     const { ok, data } = await safeFetch("/api/admin/refund", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ saleId: t.id, action: "void" }),
     });
-    if (!ok) { alert(String(data.error || "Void failed.")); return; }
+    if (!ok) { toast.error("Void failed", String(data.error || "")); return; }
+    toast.success(
+      `Ticket #${t.number} voided`,
+      t.paymentMethod === "CASH" ? `Hand back ${money(t.totalCents)} cash.` : "Reverse it on the card machine."
+    );
     await loadTickets(ticketQ); await loadDrawer(); await loadAll();
   };
 
@@ -437,8 +646,14 @@ export default function AdminPage() {
     if (!ok) { setRefundMsg(String(data.error || "Refund failed.")); return; }
     const back = Number(data.refundCents) || 0;
     const method = refundTarget.ticket.paymentMethod;
+    const num = refundTarget.ticket.number;
     setRefundTarget(null);
-    alert(`Refund recorded: ${money(back)}. ${method === "CASH" ? "Hand that back from the drawer." : "Reverse it on your card machine — this system only records it."}`);
+    toast.success(
+      `Refunded ${money(back)} on #${num}`,
+      method === "CASH"
+        ? "Hand that back from the drawer."
+        : "Reverse it on your card machine — this system only records it."
+    );
     await loadTickets(ticketQ); await loadDrawer(); await loadAll();
   };
 
@@ -572,7 +787,11 @@ export default function AdminPage() {
     const r = await fetch("/api/admin/sale/attach", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ saleId: receipt.id, contact: attachQ.trim() }) });
     const d = await r.json();
     if (!r.ok) { setAttachMsg(d.error || "Couldn't add."); return; }
-    setAttachMsg(`⭐ ${d.points} points · ${d.contact}${d.contact.includes("@") ? " · receipt emailed" : ""}`);
+    setAttachMsg("");
+    toast.success(
+      `${d.points} points · ${d.contact}`,
+      d.contact.includes("@") ? "Receipt emailed." : undefined
+    );
   };
 
   const lookupCust = async () => {
@@ -616,36 +835,81 @@ export default function AdminPage() {
       });
       if (!ok) { setVMsg(String(data.error || "Couldn't add vendor.")); return; }
       const v = data.vendor as { businessName: string; code: string };
-      setVMsg(`Added ${v.businessName} (${v.code}). Temp password: ${String(data.tempPassword)} — also emailed to them.`);
+      setVMsg("");
+      // The temp password used to flash past in an alert() — dismiss it and the
+      // only recovery was issuing another one. Now it's copyable and deliberate.
+      await dialog.alert({
+        title: `${v.businessName} added as ${v.code}`,
+        body: "This temporary password was emailed to them too. They'll be asked to change it when they first sign in.",
+        tone: "success",
+        copyable: String(data.tempPassword),
+        confirmLabel: "Done",
+      });
       setVName(""); setVContact(""); setVEmail(""); setVPhone(""); setVComm("0");
       await loadAll();
     } finally { setBusy(false); }
   };
 
-  const patchVendor = async (id: string, body: object) => {
+  const patchVendor = async (id: string, body: object, successMsg?: string) => {
     setBusy(true);
     try {
       const { ok, data } = await safeFetch(`/api/admin/vendors/${id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
-      if (!ok) { alert(String(data.error || "Update failed.")); return; }
-      if (data.tempPassword) alert(`New temp password for ${(data.vendor as { businessName: string }).businessName}: ${String(data.tempPassword)}`);
+      if (!ok) { toast.error("Update failed", String(data.error || "")); return; }
+      if (data.tempPassword) {
+        await dialog.alert({
+          title: `New password for ${(data.vendor as { businessName: string }).businessName}`,
+          body: "Their old password stopped working. This one was emailed to them as well.",
+          tone: "success",
+          copyable: String(data.tempPassword),
+          confirmLabel: "Done",
+        });
+      } else if (successMsg) {
+        toast.success(successMsg);
+      }
       await loadAll();
     } finally { setBusy(false); }
   };
 
   const ledgerEntry = async (v: Vendor, type: "RENT" | "PAYOUT" | "ADJUST") => {
-    const label = type === "RENT" ? "Rent amount to charge" : type === "PAYOUT" ? "Payout amount you're paying them" : "Adjustment (minus sign to subtract)";
-    const raw = prompt(`${label} for ${v.businessName} (dollars):`, type === "PAYOUT" ? String(Math.max(0, v.balance) / 100) : "");
-    if (raw === null) return;
-    const note = prompt("Note (shows on their statement):", type === "RENT" ? "Booth rent" : type === "PAYOUT" ? "Payout" : "") || "";
+    const copy = {
+      RENT:   { title: `Charge rent to ${v.businessName}`, label: "Rent to charge", note: "Booth rent",
+                body: "Adds a debit to their account. It shows on their next statement." },
+      PAYOUT: { title: `Pay out ${v.businessName}`, label: "Payout amount", note: "Payout",
+                body: `Record money you're handing them. Their balance is currently ${money(v.balance)}.` },
+      ADJUST: { title: `Adjust ${v.businessName}'s balance`, label: "Adjustment", note: "",
+                body: "Use a minus sign to take money off their balance, no sign to add it." },
+    }[type];
+
+    const cents = await dialog.money({
+      title: copy.title,
+      body: copy.body,
+      label: copy.label,
+      defaultCents: type === "PAYOUT" ? Math.max(0, v.balance) : undefined,
+      allowNegative: type === "ADJUST",
+      confirmLabel: "Next",
+    });
+    if (cents === null) return;
+
+    const note = await dialog.prompt({
+      title: "What should this say on their statement?",
+      body: `${money(cents)} — ${copy.title.toLowerCase()}.`,
+      label: "Note",
+      defaultValue: copy.note,
+      placeholder: "Booth rent for October",
+      confirmLabel: "Post to ledger",
+    });
+    if (note === null) return;
+
     setBusy(true);
     try {
       const { ok, data } = await safeFetch(`/api/admin/vendors/${v.id}/ledger`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, amountDollars: raw, note }),
+        body: JSON.stringify({ type, amountDollars: String(cents / 100), note }),
       });
-      if (!ok) { alert(String(data.error || "Failed.")); return; }
+      if (!ok) { toast.error("Couldn't post that entry", String(data.error || "")); return; }
+      toast.success(`${money(cents)} posted to ${v.businessName}`, note || undefined);
       await loadAll();
     } finally { setBusy(false); }
   };
@@ -659,14 +923,28 @@ export default function AdminPage() {
         body: JSON.stringify({ vendorId: cVendor, boothLabel: cBooth, monthlyRentDollars: cRent, startDate: cStart }),
       });
       if (!ok) { setCMsg(String(data.error || "Couldn't create it.")); return; }
-      setCMsg(`Contract created. First month prorated: ${money(Number(data.firstMonthCents) || 0)} — posted to their balance. Full rent auto-charges every 1st after that.`);
+      setCMsg("");
+      toast.success(
+        "Contract created",
+        `First month prorates to ${money(Number(data.firstMonthCents) || 0)} and is on their balance. Full rent auto-charges every 1st after that.`
+      );
       setCBooth(""); setCStart("");
       await loadAll();
     } finally { setBusy(false); }
   };
 
   const giveNotice = async (c: Contract) => {
-    const d = prompt("Date the 30-day notice was given (YYYY-MM-DD):", new Date().toISOString().slice(0, 10));
+    const d = await dialog.prompt({
+      title: `Record 30-day notice — booth ${c.boothLabel}`,
+      body: `${c.vendor.businessName} is giving notice. The lease ends 30 days from the date you enter, and their final month's rent prorates to that day.`,
+      label: "Date the notice was given",
+      type: "date",
+      defaultValue: isoDate(),
+      required: true,
+      confirmLabel: "Record notice",
+      tone: "warn",
+      validate: (v) => (Number.isNaN(new Date(v).getTime()) ? "Pick a valid date." : null),
+    });
     if (d === null) return;
     setBusy(true);
     try {
@@ -674,32 +952,92 @@ export default function AdminPage() {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "give_notice", noticeDate: d }),
       });
-      if (!ok) { alert(String(data.error || "Failed.")); return; }
-      alert(`Notice recorded. Lease ends ${new Date((data.contract as { endDate: string }).endDate).toLocaleDateString()}. Final month rent prorates to ${money(Number(data.finalRentCents) || 0)}.`);
+      if (!ok) { toast.error("Couldn't record the notice", String(data.error || "")); return; }
+      await dialog.alert({
+        title: "Notice recorded",
+        tone: "success",
+        body: (
+          <DescList
+            items={[
+              { label: "Vendor", value: c.vendor.businessName },
+              { label: "Booth", value: c.boothLabel },
+              { label: "Lease ends", value: fmtDate((data.contract as { endDate: string }).endDate) },
+              { label: "Final month rent", value: money(Number(data.finalRentCents) || 0) },
+            ]}
+          />
+        ),
+      });
       await loadAll();
     } finally { setBusy(false); }
   };
 
-  const finalStatement = (c: Contract) => {
+  const finalStatement = async (c: Contract) => {
     const v = vendors.find((x) => x.id === c.vendorId);
     if (!v || !c.endDate) return;
     const end = new Date(c.endDate);
     const dim = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
     const finalRent = Math.round((c.monthlyRentCents * end.getDate()) / dim);
     const net = v.balance - finalRent;
-    alert(
-      `FINAL STATEMENT — ${v.businessName}\nLease ends: ${end.toLocaleDateString()}\nCurrent balance: ${money(v.balance)}\nFinal month rent (prorated, auto-charges on the 1st): ${money(finalRent)}\n--------------------------\n${net >= 0 ? "WE OWE THEM: " + money(net) : "THEY OWE US: " + money(-net)}`
-    );
+    // Previously an alert() with \n-joined text — the one copy of a document
+    // the operator needs at move-out, gone as soon as they hit OK.
+    await dialog.alert({
+      title: `Final statement — ${v.businessName}`,
+      tone: net >= 0 ? "default" : "warn",
+      body: (
+        <>
+          <DescList
+            items={[
+              { label: "Booth", value: c.boothLabel },
+              { label: "Lease ends", value: fmtDate(end) },
+              { label: "Current balance", value: money(v.balance) },
+              { label: "Final rent (prorated)", value: `−${money(finalRent)}` },
+            ]}
+          />
+          <div
+            className="row between mt-4"
+            style={{
+              padding: "var(--sp-3)",
+              borderRadius: "var(--r-md)",
+              background: net >= 0 ? "var(--accent-soft)" : "var(--warn-soft)",
+              color: net >= 0 ? "var(--accent-text)" : "var(--warn-text)",
+              fontWeight: 650,
+            }}
+          >
+            <span>{net >= 0 ? "We owe them" : "They owe us"}</span>
+            <span className="num">{money(Math.abs(net))}</span>
+          </div>
+          <p className="t-xs t-muted mt-3">
+            The prorated final rent auto-charges on the 1st. This is a summary, not a posted entry.
+          </p>
+        </>
+      ),
+    });
   };
 
-  const contractAction = async (id: string, action: string, confirmText: string) => {
-    if (!confirm(confirmText)) return;
+  const contractAction = async (
+    id: string,
+    action: string,
+    confirmOpts: { title: string; body?: ReactNode; confirmLabel: string; tone?: "danger" | "warn"; typeToConfirm?: string },
+    successMsg?: string
+  ) => {
+    const yes = await dialog.confirm({
+      title: confirmOpts.title,
+      body: confirmOpts.body,
+      confirmLabel: confirmOpts.confirmLabel,
+      tone: confirmOpts.tone ?? "default",
+      typeToConfirm: confirmOpts.typeToConfirm,
+    });
+    if (!yes) return;
     setBusy(true);
     try {
-      await safeFetch(`/api/admin/contracts/${id}`, {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       });
+      // The old version swallowed failures here entirely — the list just
+      // reloaded unchanged and the operator had no idea nothing happened.
+      if (!ok) { toast.error("That didn't go through", String(data.error || "")); return; }
+      if (successMsg) toast.success(successMsg);
       await loadAll();
     } finally { setBusy(false); }
   };
@@ -733,9 +1071,10 @@ export default function AdminPage() {
       });
       if (!res.ok) { setAdminPushMsg("Couldn't save — try again."); return; }
       setAdminPushDevices((n) => (n || 0) + 1);
-      setAdminPushMsg("Admin alerts ON for this device. ✓");
+      setAdminPushMsg("");
+      toast.success("Admin alerts are on for this device");
     } catch {
-      setAdminPushMsg("Couldn't turn on notifications here. iPhone: iOS 16.4+ AND opened from a home-screen icon.");
+      setAdminPushMsg("Couldn't turn on notifications here. On iPhone this needs iOS 16.4+ and the app opened from a home-screen icon.");
     }
   };
 
@@ -754,7 +1093,8 @@ export default function AdminPage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ banner: { enabled: banEnabled, title: banTitle, dateLine: banDate, message: banMessage } }),
     });
-    setBanMsg(ok ? "Saved — live on /apply and /market. ✓" : String(data.error || "Failed."));
+    if (ok) { setBanMsg(""); toast.success("Banner saved", "It's live on /apply and /market now."); }
+    else setBanMsg(String(data.error || "Couldn't save the banner."));
   };
 
   const sqft = Math.max(0, (Number(cW) || 0) * (Number(cD) || 0));
@@ -766,7 +1106,8 @@ export default function AdminPage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rentPerSqft }),
     });
-    setRateMsg(ok ? "Saved. ✓" : String(data.error || "Failed."));
+    if (ok) { setRateMsg(""); toast.success("Booth rent rate saved", `New contracts price at $${rentPerSqft}/sq ft.`); }
+    else setRateMsg(String(data.error || "Couldn't save the rate."));
   };
 
   const saveTax = async () => {
@@ -775,8 +1116,9 @@ export default function AdminPage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taxRatePercent: taxRate }),
     });
-    const data = await res.json();
-    setSettingsMsg(res.ok ? "Saved. ✓" : data.error || "Failed.");
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) { setSettingsMsg(""); toast.success("Sales tax saved", `The register now charges ${taxRate}%.`); }
+    else setSettingsMsg(String(data.error || "Couldn't save the tax rate."));
   };
 
   const addEmployee = async () => {
@@ -787,355 +1129,916 @@ export default function AdminPage() {
     });
     const data = await res.json();
     if (!res.ok) { setEmpMsg(data.error || "Failed."); return; }
-    setEmpMsg(`${data.employee.name} can now open the register. ✓`);
+    setEmpMsg("");
+    toast.success(`${data.employee.name} can now open the register`);
     setNewEmpName(""); setNewEmpPin("");
     await loadAll();
   };
 
   const removeEmployee = async (e: Employee) => {
-    if (!confirm(`Remove ${e.name} from the register?`)) return;
-    await fetch(`/api/admin/employees?id=${e.id}`, { method: "DELETE" });
+    const yes = await dialog.confirm({
+      title: `Remove ${e.name}?`,
+      body: "They won't be able to sign in or open a drawer any more. Their past shifts, sales and time entries are kept.",
+      confirmLabel: "Remove from register",
+      tone: "danger",
+    });
+    if (!yes) return;
+    const { ok, data } = await safeFetch(`/api/admin/employees?id=${e.id}`, { method: "DELETE" });
+    if (!ok) { toast.error("Couldn't remove them", String(data.error || "")); return; }
+    toast.success(`${e.name} removed`);
     await loadAll();
   };
 
+  /* Cash count grid. Each denomination shows its running subtotal so a
+     miscount is visible while counting, not after the drawer is closed. */
   const countForm = (
-    <div>
-      <table className="grid">
-        <thead><tr><th>Denomination</th><th style={{ textAlign: "right" }}>Count</th></tr></thead>
-        <tbody>
-          {DENOMS.map(([k, label]) => (
-            <tr key={k}>
-              <td>{label}</td>
-              <td style={{ textAlign: "right" }}>
-                <input type="number" min="0" step="1" value={counts[k] ?? ""}
-                  onChange={(e) => setCounts((c) => ({ ...c, [k]: e.target.value }))}
-                  style={{ width: 90, textAlign: "right", padding: "6px 8px" }} placeholder="0" />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div style={{ background: "var(--ink)", color: "var(--cream)", padding: "12px 16px", marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span style={{ fontWeight: 700, fontSize: 13 }}>DRAWER TOTAL</span>
-        <span className="display" style={{ fontSize: 26 }}>{money(countTotal())}</span>
+    <div className="stack g-3">
+      <div className="grid-auto" style={{ ["--min" as string]: "150px", gap: "var(--sp-2)" }}>
+        {DENOMS.map(([k, label, cents]) => {
+          const n = Math.max(0, Math.round(Number(counts[k]) || 0));
+          return (
+            <Field key={k} label={label}>
+              {(p) => (
+                <div className="row g-2">
+                  <Input
+                    {...p}
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
+                    value={counts[k] ?? ""}
+                    placeholder="0"
+                    style={{ textAlign: "right" }}
+                    onChange={(e) => setCounts((c) => ({ ...c, [k]: e.target.value }))}
+                  />
+                  <span
+                    className="t-xs t-muted num shrink0"
+                    style={{ width: 62, textAlign: "right" }}
+                    aria-hidden
+                  >
+                    {n > 0 ? money(n * cents) : "—"}
+                  </span>
+                </div>
+              )}
+            </Field>
+          );
+        })}
+      </div>
+      <div
+        className="row between"
+        style={{
+          background: "var(--n-900)",
+          color: "#fff",
+          padding: "var(--sp-3) var(--sp-4)",
+          borderRadius: "var(--r-lg)",
+          alignItems: "baseline",
+        }}
+      >
+        <span className="t-label" style={{ color: "var(--n-400)" }}>Drawer total</span>
+        <span className="display" style={{ fontSize: "var(--fs-2xl)" }}>{money(countTotal())}</span>
       </div>
     </div>
   );
 
   if (!authed) {
     return (
-      <main style={{ maxWidth: 380, margin: "0 auto", padding: "80px 18px" }}>
-        <div style={{ textAlign: "center", marginBottom: 22 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="Community Harvest" style={{ width: 130, height: 130, marginBottom: 10 }} />
-{/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/wordmark.png" alt="Community Harvest" style={{ width: 210, maxWidth: "70%", height: "auto", margin: "2px auto 2px", display: "block" }} />
-          <div style={{ fontWeight: 700, fontSize: 12, letterSpacing: "0.08em" }}>FOOD AND CRAFT MARKET</div>
-          <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ash)", marginTop: 2 }}>Register &amp; Management</div>
-        </div>
-        <div className="card">
-          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <button className={`btn small ${loginMode === "staff" ? "" : "ghost"}`} onClick={() => setLoginMode("staff")}>EMPLOYEE</button>
-            <button className={`btn small ${loginMode === "admin" ? "" : "ghost"}`} onClick={() => setLoginMode("admin")}>ADMIN</button>
+      <main
+        className="row center"
+        style={{ minHeight: "100dvh", padding: "var(--sp-6) var(--sp-4)" }}
+      >
+        <div style={{ width: "100%", maxWidth: 380 }}>
+          <div style={{ textAlign: "center", marginBottom: "var(--sp-6)" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo.png"
+              alt=""
+              style={{ width: 88, height: 88, margin: "0 auto var(--sp-3)" }}
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/wordmark.png"
+              alt="Community Harvest"
+              style={{ width: 190, maxWidth: "70%", height: "auto", margin: "0 auto" }}
+            />
+            <p className="t-label mt-2">Food and Craft Market</p>
+            <p className="t-sm t-muted mt-1">Register &amp; management</p>
           </div>
-          {loginMode === "admin" ? (
-            <>
-              <label htmlFor="pw">Admin password</label>
-              <input id="pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && login()} />
-            </>
-          ) : (
-            <>
-              <label>Your name (exactly as the admin added you)</label>
-              <input value={loginName} onChange={(e) => setLoginName(e.target.value)} />
-              <label>PIN</label>
-              <input type="password" inputMode="numeric" value={loginPin} onChange={(e) => setLoginPin(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && login()} />
-            </>
-          )}
-          <div style={{ marginTop: 14 }}><button className="btn" onClick={login}>UNLOCK</button></div>
-          {loginError && <p className="err">{loginError}</p>}
+
+          <div className="card card-pad">
+            {/* A real labelled tablist — the old version was two look-alike
+                buttons with no indication which was selected to a screen reader. */}
+            <div className="segmented mb-4" style={{ display: "flex", width: "100%" }} role="tablist" aria-label="Sign in as">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={loginMode === "staff"}
+                style={{ flex: 1 }}
+                onClick={() => { setLoginMode("staff"); setLoginError(""); }}
+              >
+                Employee
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={loginMode === "admin"}
+                style={{ flex: 1 }}
+                onClick={() => { setLoginMode("admin"); setLoginError(""); }}
+              >
+                Owner
+              </button>
+            </div>
+
+            <form
+              className="stack g-4"
+              onSubmit={(e) => { e.preventDefault(); void login(); }}
+            >
+              {loginMode === "admin" ? (
+                <Field label="Admin password" required>
+                  {(p) => (
+                    <Input
+                      {...p}
+                      type="password"
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(e) => { setPassword(e.target.value); setLoginError(""); }}
+                    />
+                  )}
+                </Field>
+              ) : (
+                <>
+                  <Field
+                    label="Your name"
+                    hint="Exactly as the owner entered it when they added you."
+                    required
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        autoComplete="username"
+                        autoCapitalize="words"
+                        value={loginName}
+                        onChange={(e) => { setLoginName(e.target.value); setLoginError(""); }}
+                      />
+                    )}
+                  </Field>
+                  <Field label="PIN" required>
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="password"
+                        inputMode="numeric"
+                        autoComplete="current-password"
+                        value={loginPin}
+                        onChange={(e) => { setLoginPin(e.target.value); setLoginError(""); }}
+                      />
+                    )}
+                  </Field>
+                </>
+              )}
+
+              {loginError ? <Note tone="error">{loginError}</Note> : null}
+
+              <Button type="submit" variant="primary" size="lg" block loading={loggingIn} icon="unlock">
+                {loggingIn ? "Signing in…" : "Sign in"}
+              </Button>
+            </form>
+          </div>
+
+          <p className="t-xs t-muted mt-4" style={{ textAlign: "center" }}>
+            Trouble signing in? Ask the market owner to reset your PIN in Settings.
+          </p>
         </div>
       </main>
     );
   }
 
+  const visibleTabs = role === "admin" ? ADMIN_TABS : STAFF_TABS;
+  const meta = TAB_META[tab];
+  /* A cashier deep-linking to #settings shouldn't land on a blank screen. */
+  const allowed = (visibleTabs as readonly string[]).includes(tab);
+
+  const go = (t: AdminTab) => { setTab(t); setReceipt(null); setMoreOpen(false); };
+
+  /* Counts that need the operator's attention, shown on the nav itself so
+     pending work is visible without opening every tab. */
+  const pendingApps = applications.filter((a) => a.status === "PENDING").length;
+  const openComplaints = complaints.filter((c) => c.status !== "CLOSED").length;
+  const navBadge: Partial<Record<AdminTab, number>> = {
+    vendors: pendingApps + openComplaints,
+  };
+
+  /* Phones get the five most-used destinations plus a "More" sheet, rather
+     than a twelve-button wrap that pushed content below the fold. */
+  const primaryMobile: AdminTab[] = role === "admin"
+    ? ["register", "vendors", "reports", "contracts"]
+    : ["register", "time", "floor"];
+  const moreMobile = visibleTabs.filter((t) => !primaryMobile.includes(t));
+
   return (
-    <main style={{ maxWidth: 780, margin: "0 auto", padding: "22px 14px 70px" }}>
-      <style>{`
-        #printzone { display:none; }
-        @media print {
-          body.receiptmode main > *:not(#printzone) { display:none !important; }
-          body.receiptmode #printzone { display:block !important; }
-        }
-      `}</style>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <div className="shell">
+      <a href="#main-content" className="btn btn-primary btn-sm sr-only">Skip to content</a>
+
+      {/* ---------------------------------------------------------- sidebar */}
+      <nav className="sidebar no-print" aria-label="Admin sections">
+        <div className="sidebar-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" style={{ width: 40, height: 40 }} />
-{/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/wordmark.png" alt="Community Harvest" style={{ width: 150, height: "auto", display: "block" }} />
-        </span>
-        {overview && (
-          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ash)" }}>
-            Today: {money(overview.today.totalCents)} · {overview.today.count} sales
-          </span>
-        )}
-      </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
-        {(role === "admin"
-          ? (["register", "time", "reports", "bank", "floor", "vendors", "customers", "contracts", "tents", "team", "links", "settings"] as const)
-          : (["register", "time", "floor"] as const)
-        ).map((t) => (
-          <button key={t} className={`btn small ${tab === t ? "" : "ghost"}`} onClick={() => { setTab(t); setReceipt(null); }}>
-            {t === "register" ? "🛒 REGISTER" : t === "time" ? "⏱ TIME" : t === "customers" ? "⭐ CUSTOMERS" : t.toUpperCase()}
-          </button>
-        ))}
-        {role === "staff" && (
-          <button className="btn small ghost" style={{ marginLeft: "auto" }} onClick={staffLogout}>
-            {staffName ? staffName.toUpperCase() + " · " : ""}SIGN OUT
-          </button>
-        )}
-      </div>
+          <img src="/logo.png" alt="" style={{ width: 30, height: 30, flex: "0 0 auto" }} />
+          <div style={{ minWidth: 0 }}>
+            <div className="t-card truncate">Community Harvest</div>
+            <div className="t-xs t-muted truncate">
+              {role === "admin" ? "Owner" : staffName || "Employee"}
+            </div>
+          </div>
+        </div>
+
+        <div className="sidebar-nav">
+          {NAV.map((group) => {
+            const items = group.items.filter((i) => (visibleTabs as readonly string[]).includes(i.id));
+            if (items.length === 0) return null;
+            return (
+              <div key={group.group}>
+                <div className="nav-group-label">{group.group}</div>
+                <div className="stack" style={{ gap: 2 }}>
+                  {items.map((i) => (
+                    <button
+                      key={i.id}
+                      type="button"
+                      className="nav-item"
+                      aria-current={tab === i.id ? "page" : undefined}
+                      onClick={() => go(i.id)}
+                    >
+                      <Icon name={i.icon} size={16} />
+                      <span className="truncate">{i.label}</span>
+                      {navBadge[i.id] ? (
+                        <span className="nav-item-count">{navBadge[i.id]}</span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="sidebar-foot stack g-2">
+          {drawer ? (
+            <div
+              className="stack"
+              style={{
+                padding: "var(--sp-2) var(--sp-3)",
+                borderRadius: "var(--r-md)",
+                background: "var(--accent-soft)",
+                color: "var(--accent-text)",
+              }}
+            >
+              <span className="t-label" style={{ color: "inherit", opacity: 0.8 }}>Drawer open</span>
+              <span className="t-sm truncate" style={{ fontWeight: 600 }}>{drawer.employee}</span>
+              <span className="num t-sm">{money(drawer.openTotalCents + drawer.cashSalesCents)}</span>
+            </div>
+          ) : null}
+          <Button size="sm" variant="ghost" icon="logout" onClick={staffLogout} block>
+            Sign out
+          </Button>
+        </div>
+      </nav>
+
+      {/* ------------------------------------------------------------- main */}
+      <div className="shell-main">
+        <header className="topbar no-print">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt=""
+            style={{ width: 28, height: 28, flex: "0 0 auto" }}
+            className="topbar-logo"
+          />
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="t-card truncate">{meta.label}</div>
+          </div>
+          {overview ? (
+            <div className="row g-3 shrink0">
+              <div style={{ textAlign: "right" }}>
+                <div className="t-label">Today</div>
+                <div className="num t-sm" style={{ fontWeight: 650 }}>
+                  {money(overview.today.totalCents)}
+                  <span className="t-muted" style={{ fontWeight: 400 }}>
+                    {" "}· {plural(overview.today.count, "sale")}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </header>
+
+        <main className="content" id="main-content">
+          <style>{`
+            @media (min-width: 901px) { .topbar-logo { display: none; } }
+          `}</style>
+
+          {!allowed ? (
+            <Card>
+              <EmptyState
+                icon="lock"
+                title="That section is owner-only"
+                body="Your employee sign-in covers the register, the time clock and floor stock."
+                action={<Button variant="primary" icon="register" onClick={() => go("register")}>Go to the register</Button>}
+              />
+            </Card>
+          ) : (
+            <>
+              <PageHeader title={meta.label} subtitle={meta.sub} />
 
       {tab === "register" && !drawer && drawerErr && (
-        <div className="card" style={{ marginBottom: 14 }}><p className="err" style={{ marginTop: 0 }}>{drawerErr}</p></div>
+        <div className="mb-4"><Note tone="error" title="The register can't reach the drawer system">{drawerErr}</Note></div>
       )}
       {tab === "register" && closeReport && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>DRAWER CLOSED — COUNT REPORT</h2>
-          <table className="grid"><tbody>
-            <tr><td>Employee</td><td style={{ textAlign: "right" }}>{closeReport.employee}</td></tr>
-            <tr><td>Opening drawer</td><td style={{ textAlign: "right" }}>{money(closeReport.openTotalCents)}</td></tr>
-            <tr><td>+ Cash sales this shift</td><td style={{ textAlign: "right" }}>{money(closeReport.cashSalesCents)}</td></tr>
-            <tr><td style={{ fontWeight: 700 }}>EXPECTED IN DRAWER</td><td style={{ textAlign: "right", fontWeight: 700 }}>{money(closeReport.expected)}</td></tr>
-            <tr><td>Counted at close</td><td style={{ textAlign: "right" }}>{money(closeReport.counted)}</td></tr>
-            <tr><td style={{ fontWeight: 700 }}>{closeReport.diff === 0 ? "BALANCED ✓" : closeReport.diff > 0 ? "OVER" : "SHORT"}</td>
-              <td style={{ textAlign: "right", fontWeight: 700, color: closeReport.diff === 0 ? "var(--green)" : "var(--red)" }}>
-                {closeReport.diff === 0 ? "—" : money(Math.abs(closeReport.diff))}
-              </td></tr>
-          </tbody></table>
-          <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 8 }}>This count is saved with the shift — over/shorts have a paper trail.</p>
-          <div style={{ marginTop: 10 }}><button className="btn" onClick={() => setCloseReport(null)}>DONE</button></div>
-        </div>
+        <Card
+          title="Drawer closed — count report"
+          subtitle="This count is saved with the shift, so over/shorts keep a paper trail."
+          footer={
+            <Button variant="primary" icon="check" onClick={() => setCloseReport(null)}>
+              Done
+            </Button>
+          }
+        >
+          <div className="stack g-4">
+            <DescList
+              items={[
+                { label: "Employee", value: closeReport.employee },
+                { label: "Opening drawer", value: <span className="num">{money(closeReport.openTotalCents)}</span> },
+                { label: "Cash sales this shift", value: <span className="num">+ {money(closeReport.cashSalesCents)}</span> },
+                { label: "Expected in drawer", value: <b className="num">{money(closeReport.expected)}</b> },
+                { label: "Counted at close", value: <span className="num">{money(closeReport.counted)}</span> },
+              ]}
+            />
+            {closeReport.diff === 0 ? (
+              <Note tone="success" title="Balanced">
+                The count matches what the register expected to the penny.
+              </Note>
+            ) : (
+              <Note
+                tone={closeReport.diff > 0 ? "warn" : "error"}
+                title={`${closeReport.diff > 0 ? "Over" : "Short"} by ${money(Math.abs(closeReport.diff))}`}
+              >
+                {closeReport.diff > 0
+                  ? "There's more cash in the drawer than the register expected."
+                  : "There's less cash in the drawer than the register expected."}
+              </Note>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {tab === "register" && !closeReport && !drawerLoaded && (
+        <Card title="Register">
+          <div className="stack g-3" aria-busy="true">
+            <Skeleton width="45%" height={18} />
+            <Skeleton height={13} />
+            <Skeleton width="70%" height={13} />
+            <Skeleton height={44} />
+          </div>
+        </Card>
       )}
 
       {tab === "register" && !closeReport && drawerLoaded && !drawer && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>OPEN THE REGISTER</h2>
-          <p style={{ fontSize: 13, color: "var(--ash)" }}>Locked until an employee signs in and counts the starting drawer.</p>
+        <Card
+          title="Open the register"
+          subtitle="Locked until an employee signs in and counts the starting drawer."
+        >
           {employees.length === 0 ? (
-            <p className="err" style={{ marginTop: 10 }}>No employees yet — add yourself in SETTINGS first (name + PIN).</p>
+            <EmptyState
+              icon="users"
+              title="No employees on the register yet"
+              body="Add yourself in Settings first — a name and a PIN — then come back to open the drawer."
+              action={
+                role === "admin"
+                  ? <Button variant="primary" icon="settings" onClick={() => go("settings")}>Go to settings</Button>
+                  : undefined
+              }
+            />
           ) : (
-            <>
-              <label>Employee</label>
-              <select value={empName || employees[0]?.name} onChange={(e) => setEmpName(e.target.value)}>
-                {employees.map((e) => <option key={e.id}>{e.name}</option>)}
-              </select>
-              <label>PIN</label>
-              <input type="password" inputMode="numeric" value={empPin} onChange={(e) => setEmpPin(e.target.value)} />
-              <h2 className="display" style={{ fontSize: 15, margin: "16px 0 8px" }}>COUNT THE STARTING DRAWER</h2>
-              {countForm}
-              <div style={{ marginTop: 12 }}>
-                <button className="btn" disabled={busy} onClick={openDrawer}>SIGN IN + OPEN DRAWER</button>
+            <div className="stack g-5">
+              <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
+                <Field label="Employee">
+                  {(p) => (
+                    <Select
+                      {...p}
+                      value={empName || employees[0]?.name}
+                      onChange={(e) => setEmpName(e.target.value)}
+                    >
+                      {employees.map((e) => <option key={e.id}>{e.name}</option>)}
+                    </Select>
+                  )}
+                </Field>
+                <Field label="PIN" required>
+                  {(p) => (
+                    <Input
+                      {...p}
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={empPin}
+                      onChange={(e) => setEmpPin(e.target.value)}
+                    />
+                  )}
+                </Field>
               </div>
-              {drawerErr && <p className="err">{drawerErr}</p>}
-            </>
+
+              <div className="stack g-3">
+                <h3 className="t-section">Count the starting drawer</h3>
+                {countForm}
+              </div>
+
+              {drawerErr ? <Note tone="error">{drawerErr}</Note> : null}
+
+              <div>
+                <Button variant="primary" size="lg" icon="unlock" loading={busy} onClick={openDrawer}>
+                  Sign in and open the drawer
+                </Button>
+              </div>
+            </div>
           )}
-        </div>
+        </Card>
       )}
 
       {tab === "register" && !closeReport && drawer && closing && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>CLOSE THE DRAWER — COUNT WHAT&rsquo;S IN IT</h2>
-          <p style={{ fontSize: 13, color: "var(--ash)" }}>
-            {drawer.employee}&rsquo;s shift · opening {money(drawer.openTotalCents)} + cash sales {money(drawer.cashSalesCents)} → expected {money(drawer.openTotalCents + drawer.cashSalesCents)}
-          </p>
-          {countForm}
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={closeDrawer}>FINISH COUNT + CLOSE</button>
-            <button className="btn small ghost" onClick={() => { setClosing(false); setCounts({}); }}>BACK</button>
+        <Card
+          title="Close the drawer — count what's in it"
+          subtitle={`${drawer.employee}'s shift · opening ${money(drawer.openTotalCents)} + cash sales ${money(drawer.cashSalesCents)} → expected ${money(drawer.openTotalCents + drawer.cashSalesCents)}`}
+          footer={
+            <div className="row end wrap g-2">
+              <Button
+                variant="ghost"
+                icon="arrowLeft"
+                onClick={() => { setClosing(false); setCounts({}); }}
+              >
+                Back to selling
+              </Button>
+              <Button variant="primary" size="lg" icon="lock" loading={busy} onClick={closeDrawer}>
+                Finish count and close
+              </Button>
+            </div>
+          }
+        >
+          <div className="stack g-4">
+            {countForm}
+            {drawerErr ? <Note tone="error">{drawerErr}</Note> : null}
           </div>
-          {drawerErr && <p className="err">{drawerErr}</p>}
-        </div>
+        </Card>
       )}
 
       {tab === "register" && !closeReport && drawer && !closing && receipt && (
-        <div className="card" style={{ textAlign: "center" }}>
-          <h2 className="display" style={{ fontSize: 22, color: "var(--green)" }}>SALE COMPLETE — #{receipt.number}</h2>
-          <div style={{ textAlign: "left", maxWidth: 340, margin: "12px auto" }}>
-            {receipt.lines.map((l) => (
-              <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "4px 0" }}>
-                <span>{l.quantity}× {l.name}</span><b>{money((l.basePriceCents || l.priceCents) * l.quantity)}</b>
+        <Card
+          title={`Sale complete — ticket #${receipt.number}`}
+          subtitle={`Vendors notified, inventory updated.${autoPrint ? " Receipt sent to the printer." : ""}`}
+          actions={<Badge tone="success" icon="checkCircle">Paid · {receipt.paymentMethod === "CASH" ? "Cash" : "Card"}</Badge>}
+          footer={
+            <div className="row end wrap g-2">
+              <Button variant="ghost" icon="print" onClick={() => printSale(receipt.id)}>
+                Reprint receipt
+              </Button>
+              <Button
+                variant="primary"
+                size="lg"
+                iconRight="arrowRight"
+                onClick={() => { setReceipt(null); setCustQ(""); setCust(null); setRedeem(false); setCustMsg(""); setAttachQ(""); setAttachMsg(""); setCardConfirm(false); }}
+              >
+                Next customer
+              </Button>
+            </div>
+          }
+        >
+          <div className="stack g-4 content-narrow" style={{ margin: "0 auto" }}>
+            <div className="stack g-1">
+              {receipt.lines.map((l) => (
+                <div key={l.sku} className="row between g-3 t-body">
+                  <span className="truncate">{l.quantity}× {l.name}</span>
+                  <b className="num shrink0">{money((l.basePriceCents || l.priceCents) * l.quantity)}</b>
+                </div>
+              ))}
+            </div>
+
+            <hr className="divider" />
+
+            <div className="stack g-1 t-body">
+              <div className="row between g-3">
+                <span>Subtotal</span>
+                <b className="num">{money(receipt.subtotalCents + (receipt.saleSavingsCents || 0))}</b>
               </div>
-            ))}
-            <div style={{ borderTop: "2px solid var(--border)", marginTop: 6, paddingTop: 6, fontSize: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><b>{money(receipt.subtotalCents + (receipt.saleSavingsCents || 0))}</b></div>
               {typeof receipt.saleSavingsCents === "number" && receipt.saleSavingsCents > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", color: "var(--red)" }}><span>🏷️ Sale savings</span><b>&minus;{money(receipt.saleSavingsCents)}</b></div>
+                <div className="row between g-3 t-danger">
+                  <span className="row g-1"><Icon name="tag" size={13} />Sale savings</span>
+                  <b className="num">&minus;{money(receipt.saleSavingsCents)}</b>
+                </div>
               )}
               {typeof receipt.cardAdjustCents === "number" && receipt.cardAdjustCents > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between" }}><span>Non-cash adjustment</span><b>{money(receipt.cardAdjustCents)}</b></div>
+                <div className="row between g-3">
+                  <span>Non-cash adjustment</span>
+                  <b className="num">{money(receipt.cardAdjustCents)}</b>
+                </div>
               )}
-              <div style={{ display: "flex", justifyContent: "space-between" }}><span>Tax ({receipt.taxRate}%)</span><b>{money(receipt.taxCents)}</b></div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18 }} className="display">
-                <span>TOTAL ({receipt.paymentMethod}{receipt.cardName ? ` — ${receipt.cardName}` : ""})</span><span>{money(receipt.totalCents)}</span>
+              <div className="row between g-3">
+                <span>Tax ({receipt.taxRate}%)</span>
+                <b className="num">{money(receipt.taxCents)}</b>
+              </div>
+              <div className="row between g-3 mt-2" style={{ alignItems: "baseline" }}>
+                <span className="t-label">
+                  Total · {receipt.paymentMethod === "CASH" ? "Cash" : "Card"}
+                  {receipt.cardName ? ` · ${receipt.cardName}` : ""}
+                </span>
+                <span className="display num" style={{ fontSize: "var(--fs-2xl)" }}>{money(receipt.totalCents)}</span>
               </div>
             </div>
-          </div>
-          {typeof receipt.discountCents === "number" && receipt.discountCents > 0 && (
-            <p style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>⭐ $5 reward applied</p>
-          )}
-          {receipt.customerContact ? (
-            <p style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>⭐ {receipt.customerPoints} points · {receipt.customerContact}{receipt.customerContact.includes("@") ? " · receipt emailed" : ""}</p>
-          ) : (
-            <div style={{ maxWidth: 340, margin: "8px auto" }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <input placeholder="Email or phone for receipt & rewards" value={attachQ} onChange={(e) => setAttachQ(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && attachCustomer()} />
-                <button className="btn small" style={{ flex: "0 0 auto" }} onClick={attachCustomer}>ADD</button>
+
+            {typeof receipt.discountCents === "number" && receipt.discountCents > 0 && (
+              <Note tone="success" title="Reward applied">$5 came off this sale for 100 points.</Note>
+            )}
+
+            {receipt.customerContact ? (
+              <Note tone="success" title={`${receipt.customerPoints} points`}>
+                {receipt.customerContact}
+                {receipt.customerContact.includes("@") ? " · receipt emailed" : ""}
+              </Note>
+            ) : (
+              <div className="stack g-2">
+                <Field
+                  label="Receipt and rewards"
+                  hint="Optional — an email gets the receipt, either one earns points."
+                >
+                  {(p) => (
+                    <div className="row g-2">
+                      <Input
+                        {...p}
+                        className="grow"
+                        placeholder="Email or phone"
+                        value={attachQ}
+                        onChange={(e) => setAttachQ(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") attachCustomer(); }}
+                      />
+                      <Button variant="secondary" icon="star" onClick={attachCustomer} disabled={!attachQ.trim()}>
+                        Add
+                      </Button>
+                    </div>
+                  )}
+                </Field>
+                {attachMsg ? (
+                  <Note tone="error">{attachMsg}</Note>
+                ) : null}
               </div>
-              {attachMsg && <p className={attachMsg.includes("⭐") ? "ok" : "err"} style={{ marginTop: 6 }}>{attachMsg}</p>}
-            </div>
-          )}
-          <p style={{ fontSize: 12, color: "var(--ash)" }}>
-            Vendors notified, inventory updated.{autoPrint ? " Receipt sent to the printer." : ""}
-          </p>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 10 }}>
-            <button className="btn" onClick={() => { setReceipt(null); setCustQ(""); setCust(null); setRedeem(false); setCustMsg(""); setAttachQ(""); setAttachMsg(""); setCardConfirm(false); }}>NEXT CUSTOMER →</button>
-            <button className="btn small ghost" onClick={() => printSale(receipt.id)}>REPRINT</button>
+            )}
           </div>
-        </div>
+        </Card>
       )}
 
       {tab === "register" && !closeReport && drawer && !closing && !receipt && (
-        <>
-          <div style={{ display: "flex", gap: 0, border: "3px solid var(--ink)", borderRadius: 14, overflow: "hidden", marginBottom: 14, flexWrap: "wrap", background: "var(--cream)" }}>
-            <div style={{ flex: "1 1 140px", padding: "10px 12px", borderRight: "2px solid var(--border)" }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700 }}>SIGNED IN</div>
-              <div className="display" style={{ fontSize: 15 }}>{drawer.employee}</div>
-            </div>
-            <div style={{ flex: "1 1 160px", padding: "10px 12px", background: "var(--ink)", color: "var(--cream)" }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700 }}>DRAWER NOW (start + cash)</div>
-              <div className="display" style={{ fontSize: 20 }}>{money(drawer.openTotalCents + drawer.cashSalesCents)}</div>
-            </div>
+        <div className="stack g-4">
+          <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
+            <Stat
+              label="Signed in"
+              value={drawer.employee}
+              sub={`Drawer opened ${fmtTime(drawer.openedAt)}`}
+              icon="user"
+            />
+            <Stat
+              feature
+              label="In the drawer now"
+              value={money(drawer.openTotalCents + drawer.cashSalesCents)}
+              sub={`${money(drawer.openTotalCents)} start + ${money(drawer.cashSalesCents)} cash sales`}
+              icon="cash"
+            />
           </div>
-          <div style={{ marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
-            <button className="btn small ghost" onClick={() => { setClosing(true); setCounts({}); }}>CLOSE DRAWER (COUNT OUT)</button>
-            <span style={{ flex: "1 1 120px", minWidth: 110 }}>
-              <label style={{ margin: "0 0 4px" }}>⏱ Timeclock — who</label>
-              <select value={punchName || employees[0]?.name || ""} onChange={(e) => setPunchName(e.target.value)}>
-                {employees.map((e) => <option key={e.id}>{e.name}</option>)}
-              </select>
-            </span>
-            <span style={{ flex: "0 1 90px" }}>
-              <label style={{ margin: "0 0 4px" }}>PIN</label>
-              <input type="password" inputMode="numeric" value={punchPin} onChange={(e) => setPunchPin(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && punch()} />
-            </span>
-            <button className="btn small" onClick={punch}>PUNCH</button>
-          </div>
-          {punchMsg && <p className={punchMsg.includes("clocked") ? "ok" : "err"} style={{ marginBottom: 10 }}>{punchMsg}</p>}
 
-          <div className="card" style={{ marginBottom: 14 }}>
-            <label htmlFor="scan">Scan or type a code, then Enter</label>
-            <input id="scan" ref={scanRef} value={scan} autoComplete="off"
-              onChange={(e) => setScan(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doScan()}
-              placeholder="V01-0001" style={{ fontSize: 20, fontFamily: "monospace" }} />
-            {scanErr && <p className="err">{scanErr}</p>}
-
-            <label style={{ marginTop: 12 }}>No scanner? Search by item name or code</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="honey / V02 / cutting board" />
-            {search.trim() && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
-                {searchHits.map((i) => (
-                  <button key={i.id} className="btn small ghost" onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}>
-                    {i.sku} · {i.name} · {money(i.priceCents)}{i.quantity === 0 ? " · OUT" : ""}
-                  </button>
-                ))}
-                {searchHits.length === 0 && <span style={{ fontSize: 13, color: "var(--ash)" }}>No matches.</span>}
+          <Card
+            title="Time clock"
+            subtitle="Punch a shift in or out without leaving the register."
+            actions={
+              <Button
+                variant="secondary"
+                icon="lock"
+                onClick={() => { setClosing(true); setCounts({}); }}
+              >
+                Close drawer (count out)
+              </Button>
+            }
+          >
+            <div className="stack g-3">
+              <div className="row wrap g-2" style={{ alignItems: "flex-end" }}>
+                <Field label="Who's punching" className="grow">
+                  {(p) => (
+                    <Select
+                      {...p}
+                      value={punchName || employees[0]?.name || ""}
+                      onChange={(e) => setPunchName(e.target.value)}
+                    >
+                      {employees.map((e) => <option key={e.id}>{e.name}</option>)}
+                    </Select>
+                  )}
+                </Field>
+                <Field label="PIN" className="shrink0">
+                  {(p) => (
+                    <Input
+                      {...p}
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={punchPin}
+                      style={{ width: 120 }}
+                      onChange={(e) => setPunchPin(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") punch(); }}
+                    />
+                  )}
+                </Field>
+                <Button variant="secondary" icon="clock" onClick={punch}>Punch</Button>
               </div>
-            )}
-
-            <label style={{ marginTop: 12 }}>Or browse a vendor&rsquo;s whole line</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {[...new Map(floor.map((i) => [i.vendorCode, i.vendorName])).entries()].map(([code, name]) => (
-                <button key={code} className={`btn small ${openVendor === code ? "" : "ghost"}`} onClick={() => setOpenVendor(openVendor === code ? null : code)}>
-                  {code} {name}
-                </button>
-              ))}
+              {punchMsg ? (
+                <Note tone={punchMsg.includes("clocked") ? "success" : "error"}>{punchMsg}</Note>
+              ) : null}
             </div>
-            {openVendor && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
-                {floor.filter((i) => i.vendorCode === openVendor).map((i) => (
-                  <button key={i.id} className="btn small ghost" onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}>
-                    {i.name} · {money(i.priceCents)}{i.quantity === 0 ? " · OUT" : ""}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          </Card>
 
-          <div className="card">
-            {cart.length === 0 && <p style={{ color: "var(--ash)", fontSize: 14 }}>Ticket is empty — scan, search, or tap an item.</p>}
-            {cart.map((l) => (
-              <div key={l.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid var(--border)", gap: 8, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{l.name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{l.vendorName} · {l.sku} · {money(l.basePriceCents || l.priceCents)} each{(l.basePriceCents || l.priceCents) > l.priceCents && <span style={{ color: "var(--red)", fontWeight: 800 }}> · 🏷️ ON SALE −{money(((l.basePriceCents || 0) - l.priceCents))} each</span>}</div>
+          <Card title="Ring up items" subtitle="Scan, search, or tap a vendor's line.">
+            <div className="stack g-5">
+              <Field
+                label="Scan or type a code, then press Enter"
+                error={scanErr || undefined}
+                hint="The cursor stays here between items, so a scanner just works."
+              >
+                {(p) => (
+                  <Input
+                    {...p}
+                    ref={scanRef}
+                    className="mono"
+                    value={scan}
+                    autoComplete="off"
+                    placeholder="V01-0001"
+                    style={{ height: 64, fontSize: "var(--fs-xl)", letterSpacing: "0.04em" }}
+                    onChange={(e) => setScan(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") doScan(); }}
+                  />
+                )}
+              </Field>
+
+              <div className="stack g-2">
+                <Field label="No scanner? Search by item name or code">
+                  {(p) => (
+                    <SearchInput
+                      {...p}
+                      value={search}
+                      onValueChange={setSearch}
+                      placeholder="honey / V02 / cutting board"
+                      aria-label="Search the floor by item name or code"
+                    />
+                  )}
+                </Field>
+                {search.trim() ? (
+                  !overview ? (
+                    <div className="row wrap g-2" aria-busy="true">
+                      {[0, 1, 2].map((i) => <Skeleton key={i} width={180} height={44} radius="var(--r-md)" />)}
+                    </div>
+                  ) : searchHits.length === 0 ? (
+                    <EmptyState
+                      icon="search"
+                      title="No matches on the floor"
+                      body="Try part of the item name, or the vendor code like V02."
+                    />
+                  ) : (
+                    <div className="row wrap g-2">
+                      {searchHits.map((i) => (
+                        <Button
+                          key={i.id}
+                          variant="secondary"
+                          size="lg"
+                          icon="plus"
+                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}
+                        >
+                          <span className="mono t-xs">{i.sku}</span>
+                          <span className="truncate">{i.name}</span>
+                          <span className="num">{money(i.priceCents)}</span>
+                          {i.quantity === 0 ? <Badge tone="warn">Out</Badge> : null}
+                        </Button>
+                      ))}
+                    </div>
+                  )
+                ) : null}
+              </div>
+
+              <div className="stack g-2">
+                <span className="t-label">Or browse a vendor&rsquo;s whole line</span>
+                {!overview ? (
+                  <div className="row wrap g-2" aria-busy="true">
+                    {[0, 1, 2, 3].map((i) => <Skeleton key={i} width={140} height={40} radius="var(--r-md)" />)}
+                  </div>
+                ) : floor.length === 0 ? (
+                  <EmptyState
+                    icon="grid"
+                    title="Nothing on the floor yet"
+                    body="Once vendors have stock checked in, their lines show up here to tap."
+                  />
+                ) : (
+                  <div className="row wrap g-2">
+                    {[...new Map(floor.map((i) => [i.vendorCode, i.vendorName])).entries()].map(([code, name]) => (
+                      <Button
+                        key={code}
+                        variant={openVendor === code ? "primary" : "secondary"}
+                        icon="store"
+                        aria-pressed={openVendor === code}
+                        onClick={() => setOpenVendor(openVendor === code ? null : code)}
+                      >
+                        <span className="mono t-xs">{code}</span>
+                        <span className="truncate">{name}</span>
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                {openVendor ? (
+                  floor.filter((i) => i.vendorCode === openVendor).length === 0 ? (
+                    <EmptyState
+                      icon="box"
+                      title="This vendor has nothing on the floor"
+                      body="Everything of theirs is sold or checked out."
+                    />
+                  ) : (
+                    <div className="row wrap g-2">
+                      {floor.filter((i) => i.vendorCode === openVendor).map((i) => (
+                        <Button
+                          key={i.id}
+                          variant="secondary"
+                          size="lg"
+                          icon="plus"
+                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}
+                        >
+                          <span className="truncate">{i.name}</span>
+                          <span className="num">{money(i.priceCents)}</span>
+                          {i.quantity === 0 ? <Badge tone="warn">Out</Badge> : null}
+                        </Button>
+                      ))}
+                    </div>
+                  )
+                ) : null}
+              </div>
+            </div>
+          </Card>
+
+          <Card
+            title="Ticket"
+            subtitle={cart.length ? `${plural(cart.reduce((n, l) => n + l.quantity, 0), "item")} on this sale` : undefined}
+            actions={
+              cart.length > 0 ? (
+                <Button
+                  variant="dangerSoft"
+                  icon="trash"
+                  onClick={() => { setCart([]); setCardConfirm(false); }}
+                >
+                  Clear ticket
+                </Button>
+              ) : undefined
+            }
+          >
+            {cart.length === 0 ? (
+              <EmptyState
+                icon="receipt"
+                title="Ticket is empty"
+                body="Scan a tag, search by name, or tap a vendor's line above to start the sale."
+              />
+            ) : (
+              <div className="stack g-4">
+                <div className="stack">
+                  {cart.map((l) => {
+                    const each = l.basePriceCents || l.priceCents;
+                    const onSale = each > l.priceCents;
+                    return (
+                      <div
+                        key={l.sku}
+                        className="row between wrap g-3"
+                        style={{ padding: "var(--sp-3) 0", borderBottom: "1px solid var(--border-subtle)" }}
+                      >
+                        <div className="grow">
+                          <div className="t-card truncate">{l.name}</div>
+                          <div className="t-xs t-muted row wrap g-1">
+                            <span>{l.vendorName}</span>
+                            <span aria-hidden>·</span>
+                            <span className="mono">{l.sku}</span>
+                            <span aria-hidden>·</span>
+                            <span className="num">{money(each)} each</span>
+                            {onSale ? (
+                              <Badge tone="danger" icon="tag">
+                                On sale &minus;{money(each - l.priceCents)} each
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="row g-2 shrink0">
+                          <IconButton
+                            icon="minus"
+                            label={`One fewer ${l.name}`}
+                            variant="secondary"
+                            onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}
+                          />
+                          <b className="num" style={{ minWidth: 40, textAlign: "center", fontSize: "var(--fs-md)" }}>
+                            {l.quantity}
+                          </b>
+                          <IconButton
+                            icon="plus"
+                            label={`One more ${l.name}`}
+                            variant="secondary"
+                            onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: x.quantity + 1 } : x))}
+                          />
+                          <b className="num" style={{ minWidth: 76, textAlign: "right" }}>
+                            {money(each * l.quantity)}
+                          </b>
+                          <IconButton
+                            icon="trash"
+                            label={`Remove ${l.name} from the ticket`}
+                            variant="dangerSoft"
+                            onClick={() => setCart((c) => c.filter((x) => x.sku !== l.sku))}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button className="btn small ghost" onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}>−</button>
-                  <b>{l.quantity}</b>
-                  <button className="btn small ghost" onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: x.quantity + 1 } : x))}>+</button>
-                  <b style={{ minWidth: 64, textAlign: "right" }}>{money((l.basePriceCents || l.priceCents) * l.quantity)}</b>
-                  <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "var(--red)" }} onClick={() => setCart((c) => c.filter((x) => x.sku !== l.sku))}>✕</button>
-                </div>
-              </div>
-            ))}
-            {cart.length > 0 && (
-              <>
-                <div style={{ textAlign: "right", marginTop: 12, fontSize: 15 }}>
+
+                <div className="stack g-1" style={{ alignItems: "flex-end" }}>
                   {(() => { const sv = cart.reduce((n, l) => n + Math.max(0, ((l.basePriceCents || l.priceCents) - l.priceCents)) * l.quantity, 0); return sv > 0 ? (
                     <>
-                      <div>Subtotal: <b>{money(subtotal + sv)}</b></div>
-                      <div style={{ color: "var(--red)", fontWeight: 700 }}>🏷️ SALE DISCOUNT: <b>−{money(sv)}</b></div>
+                      <div className="t-body">Subtotal <b className="num">{money(subtotal + sv)}</b></div>
+                      <div className="t-body t-danger row g-1">
+                        <Icon name="tag" size={13} />Sale discount <b className="num">&minus;{money(sv)}</b>
+                      </div>
                     </>
                   ) : (
-                    <div>Subtotal: <b>{money(subtotal)}</b></div>
+                    <div className="t-body">Subtotal <b className="num">{money(subtotal)}</b></div>
                   ); })()}
-                  <div>Tax ({taxRate}%): <b>{money(taxCents)}</b></div>
-                  <div className="display" style={{ fontSize: 26 }}>TOTAL: {money(total)}</div>
-                </div>
-                <label>Customer name for CARD (the Stripe reader will fill this automatically in phase 2)</label>
-                <input value={cardName} onChange={(e) => setCardName(e.target.value)} placeholder="J. Whitaker" />
-                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                </div>
-                <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", margin: "10px 0" }}>
-                  <b style={{ fontSize: 12.5 }}>⭐ REWARDS &amp; EMAIL RECEIPT (optional)</b>
-                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                    <input placeholder="Customer email or phone" value={custQ} onChange={(e) => { setCustQ(e.target.value); setCust(null); setRedeem(false); }}
-                      onKeyDown={(e) => e.key === "Enter" && lookupCust()} />
-                    <button className="btn small ghost" style={{ flex: "0 0 auto" }} onClick={lookupCust}>LOOK UP</button>
+                  <div className="t-body">Tax ({taxRate}%) <b className="num">{money(taxCents)}</b></div>
+                  <div className="row g-3 mt-1" style={{ alignItems: "baseline" }}>
+                    <span className="t-label">Total</span>
+                    <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>
                   </div>
-                  {cust && (
-                    <div style={{ fontSize: 12.5, marginTop: 6 }}>
-                      <b style={{ color: "var(--green)" }}>⭐ {cust.points} points</b>{cust.email ? ` · ${cust.email}` : ""}{cust.phone ? ` · ${cust.phone}` : ""}
+                </div>
+
+                <div className="card card-pad-sm stack g-3">
+                  <span className="t-label row g-1"><Icon name="star" size={12} />Rewards and email receipt — optional</span>
+                  <Field label="Customer email or phone">
+                    {(p) => (
+                      <div className="row g-2">
+                        <Input
+                          {...p}
+                          className="grow"
+                          placeholder="them@example.com or 405 555 0134"
+                          value={custQ}
+                          onChange={(e) => { setCustQ(e.target.value); setCust(null); setRedeem(false); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") lookupCust(); }}
+                        />
+                        <Button variant="secondary" icon="search" onClick={lookupCust} disabled={!custQ.trim()}>
+                          Look up
+                        </Button>
+                      </div>
+                    )}
+                  </Field>
+                  {cust ? (
+                    <div className="stack g-2">
+                      <div className="row wrap g-2">
+                        <Badge tone="success" icon="star">{cust.points} points</Badge>
+                        {cust.email ? <span className="t-sm t-muted truncate">{cust.email}</span> : null}
+                        {cust.phone ? <span className="t-sm t-muted">{fmtPhone(cust.phone)}</span> : null}
+                      </div>
                       {cust.points >= 100 && (
-                        <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, cursor: "pointer", fontWeight: 700 }}>
-                          <input type="checkbox" checked={redeem} onChange={(e) => setRedeem(e.target.checked)} style={{ width: "auto" }} />
-                          REDEEM $5 OFF (100 pts)
-                        </label>
+                        <Checkbox
+                          checked={redeem}
+                          onCheckedChange={setRedeem}
+                          label="Redeem $5 off"
+                          hint="Spends 100 of their points on this sale."
+                        />
                       )}
                     </div>
-                  )}
-                  {custMsg && <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 4 }}>{custMsg}</p>}
+                  ) : null}
+                  {custMsg ? <p className="t-xs t-muted">{custMsg}</p> : null}
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button className="btn" style={{ flex: 1 }} disabled={busy || cardConfirm} onClick={() => completeSale("CASH")}>💵 CASH</button>
-                  <button className="btn" style={{ flex: 1 }} disabled={busy || cardConfirm} onClick={() => setCardConfirm(true)}>💳 CARD</button>
+
+                <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
+                  <Button
+                    variant="primary"
+                    size="xl"
+                    block
+                    icon="cash"
+                    loading={busy && !cardConfirm}
+                    disabled={busy || cardConfirm}
+                    onClick={() => completeSale("CASH")}
+                  >
+                    Cash
+                  </Button>
+                  <Button
+                    variant="dark"
+                    size="xl"
+                    block
+                    icon="card"
+                    disabled={busy || cardConfirm}
+                    onClick={() => setCardConfirm(true)}
+                  >
+                    Card
+                  </Button>
                 </div>
+
                 {cardConfirm && (() => {
                   const adjPct = Number(cardAdj) || 0;
                   const adj = Math.round((subtotal * adjPct) / 100);
@@ -1143,128 +2046,395 @@ export default function AdminPage() {
                   const disc = redeem ? Math.min(500, subtotal + adj + t) : 0;
                   const chargeTotal = subtotal + adj + t - disc;
                   return (
-                    <div style={{ border: "2px solid #16a34a", borderRadius: 14, background: "#f0fdf4", padding: "14px", marginTop: 10, textAlign: "center" }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#15803d" }}>CHARGE THE CARD TERMINAL:</div>
-                      <div className="display" style={{ fontSize: 34 }}>{money(chargeTotal)}</div>
-                      {adj > 0 && <div style={{ fontSize: 11.5, color: "var(--ash)" }}>includes {money(adj)} non-cash adjustment</div>}
-                      {disc > 0 && <div style={{ fontSize: 11.5, color: "#15803d", fontWeight: 700 }}>⭐ $5 reward applied</div>}
-                      <p style={{ fontSize: 12, color: "var(--ash)", margin: "8px 0" }}>Run the card. Approved on the terminal? Then book it below — nothing is recorded until you do.</p>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={async () => { await completeSale("CARD"); setCardConfirm(false); }}>✅ PAYMENT APPROVED — BOOK SALE</button>
-                        <button className="btn small ghost" disabled={busy} onClick={() => setCardConfirm(false)}>❌ DECLINED / BACK</button>
+                    <div
+                      className="card card-pad stack g-3"
+                      style={{ background: "var(--accent-soft)", borderColor: "var(--accent-border)" }}
+                    >
+                      <div className="stack g-1">
+                        <span className="t-label t-accent">Charge the card terminal</span>
+                        <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(chargeTotal)}</span>
+                        {adj > 0 ? (
+                          <span className="t-xs t-muted">Includes {money(adj)} non-cash adjustment.</span>
+                        ) : null}
+                        {disc > 0 ? (
+                          <span className="t-xs t-accent row g-1"><Icon name="star" size={12} />$5 reward applied.</span>
+                        ) : null}
+                      </div>
+
+                      <Field
+                        label="Approval code or last 4"
+                        hint="Optional, but it's the only record tying this ticket to the terminal — worth typing."
+                      >
+                        {(p) => (
+                          <Input
+                            {...p}
+                            className="mono"
+                            value={cardName}
+                            placeholder="APPR 004571 · 4242"
+                            autoComplete="off"
+                            onChange={(e) => setCardName(e.target.value)}
+                          />
+                        )}
+                      </Field>
+
+                      <Note tone="info">
+                        Run the card on the terminal first. Nothing is recorded here until you book it.
+                      </Note>
+
+                      <div className="row wrap g-2">
+                        <Button
+                          variant="primary"
+                          size="xl"
+                          className="grow"
+                          icon="checkCircle"
+                          loading={busy}
+                          onClick={async () => { await completeSale("CARD"); setCardConfirm(false); }}
+                        >
+                          Payment approved — book the sale
+                        </Button>
+                        <Button variant="ghost" size="lg" icon="close" disabled={busy} onClick={() => setCardConfirm(false)}>
+                          Declined or go back
+                        </Button>
                       </div>
                     </div>
                   );
                 })()}
-                <button className="btn small ghost" style={{ marginTop: 10 }} onClick={() => { setCart([]); setCardConfirm(false); }}>CLEAR TICKET</button>
-              </>
+              </div>
             )}
-          </div>
+          </Card>
 
           {refundTarget && (
-            <div className="card" style={{ marginTop: 16, borderWidth: 2 }}>
-              <h2 className="display" style={{ fontSize: 16 }}>REFUND — TICKET #{refundTarget.ticket.number} ({refundTarget.ticket.paymentMethod})</h2>
-              <table className="grid" style={{ marginTop: 8 }}>
-                <thead><tr><th>Item</th><th style={{ textAlign: "right" }}>Sold</th><th style={{ textAlign: "right" }}>Already refunded</th><th style={{ textAlign: "right" }}>Refund qty</th></tr></thead>
-                <tbody>
-                  {refundTarget.lines.map((l) => {
-                    const left = l.quantity - (refundTarget.refunded[l.id] || 0);
-                    return (
-                      <tr key={l.id}>
-                        <td>{l.name} · {money(l.priceCents)}</td>
-                        <td style={{ textAlign: "right" }}>{l.quantity}</td>
-                        <td style={{ textAlign: "right" }}>{refundTarget.refunded[l.id] || 0}</td>
-                        <td style={{ textAlign: "right" }}>
-                          {left > 0 ? (
-                            <input type="number" min={0} max={left} value={refundQty[l.id] ?? 0}
-                              onChange={(e) => setRefundQty((q) => ({ ...q, [l.id]: Math.max(0, Math.min(left, Math.round(Number(e.target.value) || 0))) }))}
-                              style={{ width: 70, textAlign: "right", padding: "5px 7px" }} />
-                          ) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, cursor: "pointer" }}>
-                <input type="checkbox" checked={refundRestock} onChange={(e) => setRefundRestock(e.target.checked)} style={{ width: "auto" }} />
-                Put the item(s) back on the floor (uncheck if damaged/unsellable)
-              </label>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <button className="btn" style={{ flex: 1 }} onClick={submitRefund}>RECORD REFUND</button>
-                <button className="btn small ghost" onClick={() => setRefundTarget(null)}>CANCEL</button>
+            <Modal
+              open
+              onClose={() => setRefundTarget(null)}
+              width="lg"
+              title={`Refund ticket #${refundTarget.ticket.number}`}
+              description={`Paid by ${refundTarget.ticket.paymentMethod === "CASH" ? "cash" : "card"} · ${money(refundTarget.ticket.totalCents)} · ${refundTarget.ticket.dateStr} ${refundTarget.ticket.timeStr}`}
+              footer={
+                <>
+                  <Button variant="ghost" onClick={() => setRefundTarget(null)}>Keep the sale</Button>
+                  <Button
+                    variant="danger"
+                    icon="refresh"
+                    disabled={!Object.values(refundQty).some((q) => q > 0)}
+                    onClick={submitRefund}
+                  >
+                    Record the refund
+                  </Button>
+                </>
+              }
+            >
+              <div className="stack g-4">
+                <DataTable
+                  rows={refundTarget.lines}
+                  rowKey={(l) => l.id}
+                  mobileCards
+                  caption={`Items on ticket #${refundTarget.ticket.number}`}
+                  columns={[
+                    {
+                      key: "item",
+                      header: "Item",
+                      primary: true,
+                      cell: (l) => (
+                        <span>
+                          {l.name} <span className="t-muted num">· {money(l.priceCents)}</span>
+                        </span>
+                      ),
+                    },
+                    { key: "sold", header: "Sold", align: "right", cell: (l) => l.quantity },
+                    {
+                      key: "already",
+                      header: "Already refunded",
+                      align: "right",
+                      cell: (l) => refundTarget.refunded[l.id] || 0,
+                    },
+                    {
+                      key: "qty",
+                      header: "Refund qty",
+                      align: "right",
+                      cell: (l) => {
+                        const left = l.quantity - (refundTarget.refunded[l.id] || 0);
+                        if (left <= 0) return <span className="t-muted">—</span>;
+                        return (
+                          <Field label={<span className="sr-only">Refund quantity for {l.name}</span>}>
+                            {(p) => (
+                              <Input
+                                {...p}
+                                type="number"
+                                min={0}
+                                max={left}
+                                inputMode="numeric"
+                                value={refundQty[l.id] ?? 0}
+                                style={{ width: 88, textAlign: "right", marginLeft: "auto" }}
+                                onChange={(e) => setRefundQty((q) => ({ ...q, [l.id]: Math.max(0, Math.min(left, Math.round(Number(e.target.value) || 0))) }))}
+                              />
+                            )}
+                          </Field>
+                        );
+                      },
+                    },
+                  ]}
+                  empty={
+                    <EmptyState
+                      icon="receipt"
+                      title="Nothing left to refund"
+                      body="Every line on this ticket has already been refunded."
+                    />
+                  }
+                />
+
+                <Checkbox
+                  checked={refundRestock}
+                  onCheckedChange={setRefundRestock}
+                  label="Put the items back on the floor"
+                  hint="Uncheck if they came back damaged or unsellable."
+                />
+
+                <Note tone="warn">
+                  {refundTarget.ticket.paymentMethod === "CASH"
+                    ? "You'll hand the money back out of the drawer — this only records it."
+                    : "You'll reverse the charge on the card machine — this only records it."}
+                </Note>
+
+                {refundMsg ? <Note tone="error">{refundMsg}</Note> : null}
               </div>
-              {refundMsg && <p className="err">{refundMsg}</p>}
-            </div>
+            </Modal>
           )}
 
-          <div className="card" style={{ marginTop: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-              <h2 className="display" style={{ fontSize: 16 }}>TICKETS — LAST 30 DAYS</h2>
-              <button className="btn small ghost" onClick={toggleAutoPrint}>AUTO-PRINT: {autoPrint ? "ON" : "OFF"}</button>
-            </div>
-            <label>Search by receipt #, date, vendor, or card customer name</label>
-            <input value={ticketQ} onChange={(e) => setTicketQ(e.target.value)} placeholder="1041 / Sep 8 / honey / Whitaker" />
-            <div style={{ overflowX: "auto", marginTop: 8 }}>
-              <table className="grid">
-                <thead><tr><th>#</th><th>Date</th><th>Pay</th><th>Vendors</th><th style={{ textAlign: "right" }}>Total</th><th></th></tr></thead>
-                <tbody>
-                  {tickets.map((t) => (
-                    <tr key={t.id} style={t.status === "VOIDED" ? { opacity: 0.45, textDecoration: "line-through" } : undefined}>
-                      <td style={{ fontWeight: 700 }}>{t.number}{t.status !== "COMPLETE" ? ` · ${t.status.replace("_", " ")}` : ""}</td>
-                      <td>{t.dateStr} {t.timeStr}</td>
-                      <td>{t.paymentMethod}{t.cardName ? ` — ${t.cardName}` : ""}</td>
-                      <td>{t.vendorCodes.join(" ")}</td>
-                      <td style={{ textAlign: "right" }}>{money(t.totalCents)}</td>
-                      <td style={{ whiteSpace: "nowrap" }}>
-                        <button className="btn small ghost" onClick={() => printSale(t.id)}>REPRINT</button>{" "}
-                        {t.status !== "VOIDED" && t.status !== "REFUNDED" && (
+          <Card
+            title="Tickets"
+            subtitle="Every sale rung up in the last 30 days"
+            actions={
+              <Button
+                variant="ghost"
+                icon="print"
+                aria-pressed={autoPrint}
+                onClick={toggleAutoPrint}
+              >
+                Auto-print {autoPrint ? "on" : "off"}
+              </Button>
+            }
+          >
+            <div className="stack g-4">
+              <Field
+                label="Search tickets"
+                hint="By receipt number, date, vendor, or the name on the card."
+              >
+                {(p) => (
+                  <SearchInput
+                    {...p}
+                    value={ticketQ}
+                    onValueChange={setTicketQ}
+                    placeholder="1041 / Sep 8 / honey / Whitaker"
+                    aria-label="Search tickets"
+                  />
+                )}
+              </Field>
+
+              <DataTable
+                rows={tickets}
+                rowKey={(t) => t.id}
+                loading={!overview && tickets.length === 0}
+                skeletonRows={6}
+                mobileCards
+                defaultSort={{ key: "number", dir: "desc" }}
+                caption="Tickets from the last 30 days"
+                columns={[
+                  {
+                    key: "number",
+                    header: "Ticket",
+                    primary: true,
+                    sortBy: (t) => t.number,
+                    cell: (t) => (
+                      <span className="row g-2">
+                        <span
+                          className="num"
+                          style={{ fontWeight: 620, textDecoration: t.status === "VOIDED" ? "line-through" : undefined }}
+                        >
+                          #{t.number}
+                        </span>
+                        {t.status !== "COMPLETE" ? (
+                          <Badge tone={t.status === "VOIDED" ? "danger" : "warn"}>
+                            {t.status === "VOIDED" ? "Voided" : t.status === "REFUNDED" ? "Refunded" : "Part refunded"}
+                          </Badge>
+                        ) : null}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: "date",
+                    header: "Date",
+                    cell: (t) => <span className="t-sm">{t.dateStr} {t.timeStr}</span>,
+                  },
+                  {
+                    key: "pay",
+                    header: "Paid by",
+                    sortBy: (t) => t.paymentMethod,
+                    cell: (t) => (
+                      <span className="row g-2 wrap">
+                        <Badge tone="neutral" icon={t.paymentMethod === "CASH" ? "cash" : "card"}>
+                          {t.paymentMethod === "CASH" ? "Cash" : "Card"}
+                        </Badge>
+                        {t.cardName ? <span className="t-sm t-muted truncate">{t.cardName}</span> : null}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: "vendors",
+                    header: "Vendors",
+                    cell: (t) => <span className="mono t-xs">{t.vendorCodes.join(" ")}</span>,
+                  },
+                  {
+                    key: "total",
+                    header: "Total",
+                    align: "right",
+                    sortBy: (t) => t.totalCents,
+                    cell: (t) => money(t.totalCents),
+                  },
+                  {
+                    key: "actions",
+                    header: <span className="sr-only">Actions</span>,
+                    align: "right",
+                    cell: (t) => (
+                      <span className="row end g-1 wrap">
+                        <IconButton icon="print" label={`Reprint ticket #${t.number}`} size="sm" onClick={() => printSale(t.id)} />
+                        {t.status !== "VOIDED" && t.status !== "REFUNDED" ? (
                           <>
-                            <button className="btn small ghost" onClick={() => openRefund(t)}>REFUND</button>{" "}
-                            <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "var(--red)" }} onClick={() => voidSale(t)}>VOID</button>
+                            <Button variant="ghost" size="sm" icon="refresh" onClick={() => openRefund(t)}>Refund</Button>
+                            <Button variant="dangerSoft" size="sm" icon="close" onClick={() => voidSale(t)}>Void</Button>
                           </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {tickets.length === 0 && <tr><td colSpan={6}>No tickets match.</td></tr>}
-                </tbody>
-              </table>
+                        ) : null}
+                      </span>
+                    ),
+                  },
+                ]}
+                empty={
+                  ticketQ.trim() ? (
+                    <EmptyState
+                      icon="search"
+                      title="No tickets match that search"
+                      body="Try just the receipt number, or a vendor code like V02."
+                      action={<Button variant="secondary" icon="close" onClick={() => setTicketQ("")}>Clear the search</Button>}
+                    />
+                  ) : (
+                    <EmptyState
+                      icon="receipt"
+                      title="No sales in the last 30 days"
+                      body="Tickets show up here the moment you ring one up."
+                    />
+                  )
+                }
+              />
             </div>
-          </div>
-        </>
+          </Card>
+        </div>
       )}
 
       {tab === "time" && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>TIMECLOCK{staffName ? ` — ${staffName.toUpperCase()}` : ""}</h2>
+        <div className="stack g-4">
           {role === "admin" && !staffName ? (
-            <p style={{ fontSize: 13, color: "var(--ash)" }}>Clocking in/out happens under each employee&rsquo;s own sign-in. Hours, punch fixes, and payroll live in the TEAM tab.</p>
+            <Card title="Time clock" subtitle="Hours for the whole team">
+              <Note tone="info" title="Punches happen under each employee's own sign-in">
+                Staff clock in and out from their own sign-in on this page. Hours, punch fixes, and
+                payroll live in Team &amp; payroll.
+              </Note>
+            </Card>
           ) : (
             <>
-              {timeData?.open ? (
-                <>
-                  <p style={{ fontSize: 14 }}>Clocked in since <b>{new Date(timeData.open.clockIn).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</b></p>
-                  <div style={{ marginTop: 10 }}><button className="btn" onClick={() => clock("out")}>⏱ CLOCK OUT</button></div>
-                </>
-              ) : (
-                <div style={{ marginTop: 4 }}><button className="btn" onClick={() => clock("in")}>⏱ CLOCK IN</button></div>
-              )}
-              {timeMsg && <p className="err">{timeMsg}</p>}
-              <h3 className="display" style={{ fontSize: 15, margin: "16px 0 6px" }}>LAST 14 DAYS</h3>
-              <table className="grid">
-                <thead><tr><th>Day</th><th>In</th><th>Out</th><th style={{ textAlign: "right" }}>Hours</th></tr></thead>
-                <tbody>
-                  {(timeData?.entries || []).map((e) => (
-                    <tr key={e.id}>
-                      <td>{e.dayStr}</td><td>{e.inStr}</td><td>{e.outStr || <b>OPEN</b>}</td>
-                      <td style={{ textAlign: "right" }}>{e.hours !== null ? e.hours.toFixed(2) : "—"}</td>
-                    </tr>
-                  ))}
-                  {(!timeData || timeData.entries.length === 0) && <tr><td colSpan={4}>No punches yet.</td></tr>}
-                </tbody>
-              </table>
-              <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 8 }}>Forgot a punch? Tell the admin — they can fix it in TEAM.</p>
+              {/* The shift state is the whole point of this screen, so it leads —
+                  one tile you can read across the room and one big button. */}
+              <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
+                <Stat
+                  feature
+                  label={timeData?.open ? "On the clock" : "Not clocked in"}
+                  value={timeData?.open ? fmtTime(timeData.open.clockIn) : "—"}
+                  sub={timeData?.open ? "Shift started" : "Punch in when you start your shift"}
+                  icon="clock"
+                />
+                <Stat
+                  label="Last 14 days"
+                  value={`${(timeData?.entries || []).reduce((s, e) => s + (e.hours || 0), 0).toFixed(2)} hrs`}
+                  sub={`Across ${plural((timeData?.entries || []).length, "punch", "punches")}`}
+                  icon="chart"
+                />
+              </div>
+
+              <Card
+                title={staffName ? `Time clock — ${staffName}` : "Time clock"}
+                subtitle="One tap in, one tap out. Your hours roll straight into payroll."
+              >
+                <div className="stack g-3">
+                  {timeData?.open ? (
+                    <Button
+                      size="xl"
+                      block
+                      variant="danger"
+                      icon="clock"
+                      loading={clockBusy}
+                      onClick={async () => {
+                        setClockBusy(true);
+                        try { await clock("out"); } finally { setClockBusy(false); }
+                      }}
+                    >
+                      Clock out
+                    </Button>
+                  ) : (
+                    <Button
+                      size="xl"
+                      block
+                      variant="primary"
+                      icon="clock"
+                      loading={clockBusy}
+                      onClick={async () => {
+                        setClockBusy(true);
+                        try { await clock("in"); } finally { setClockBusy(false); }
+                      }}
+                    >
+                      Clock in
+                    </Button>
+                  )}
+                  {timeMsg ? <Note tone="error">{timeMsg}</Note> : null}
+                </div>
+              </Card>
+
+              <Card
+                title="Recent shifts"
+                subtitle="The last 14 days of punches"
+                flush
+                footer={<span className="t-xs t-muted">Forgot a punch? Tell the admin — they can fix it in Team &amp; payroll.</span>}
+              >
+                <DataTable
+                  rows={timeData?.entries || []}
+                  columns={[
+                    { key: "day", header: "Day", primary: true, sortBy: (e) => e.dayStr, cell: (e) => <b>{e.dayStr}</b> },
+                    { key: "in", header: "In", sortBy: (e) => e.inStr, cell: (e) => e.inStr },
+                    {
+                      key: "out",
+                      header: "Out",
+                      cell: (e) => (e.outStr ? e.outStr : <Badge tone="warn" dot>Still open</Badge>),
+                    },
+                    {
+                      key: "hours",
+                      header: "Hours",
+                      align: "right",
+                      sortBy: (e) => e.hours ?? -1,
+                      cell: (e) => <span className="num">{e.hours !== null ? e.hours.toFixed(2) : "—"}</span>,
+                    },
+                  ]}
+                  rowKey={(e) => e.id}
+                  loading={!timeData}
+                  skeletonRows={4}
+                  mobileCards
+                  caption="Your punches over the last 14 days"
+                  empty={
+                    <EmptyState
+                      icon="clock"
+                      title="No punches yet"
+                      body="Clock in above and your shift shows up here."
+                    />
+                  }
+                />
+              </Card>
             </>
           )}
         </div>
@@ -1272,819 +2442,2975 @@ export default function AdminPage() {
 
       {tab === "team" && role === "admin" && (
         <>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>PAYROLL — PICK A PAY PERIOD</h2>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ flex: 1, minWidth: 140 }}><label>From</label><input type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} /></span>
-              <span style={{ flex: 1, minWidth: 140 }}><label>To</label><input type="date" value={payTo} onChange={(e) => setPayTo(e.target.value)} /></span>
+          <Card
+            className="mb-4"
+            title="Payroll run"
+            subtitle="Hours come straight off the time clock. Pick the period you're paying for."
+          >
+            <div className="stack g-4">
+              <div className="grid-auto" style={{ ["--min" as string]: "180px" }}>
+                <Field label="From" hint="First day of the pay period.">
+                  {(p) => <Input {...p} type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} />}
+                </Field>
+                <Field label="To" hint="Last day, counted in full.">
+                  {(p) => <Input {...p} type="date" value={payTo} onChange={(e) => setPayTo(e.target.value)} />}
+                </Field>
+              </div>
+
+              <div className="row wrap g-2">
+                <Button
+                  icon="chart"
+                  loading={pending === "payroll"}
+                  onClick={async () => {
+                    setPending("payroll");
+                    try { await runPayroll(); } finally { setPending(""); }
+                  }}
+                >
+                  Run payroll report
+                </Button>
+                {payroll ? (
+                  <Button variant="ghost" icon="close" onClick={() => { setPayroll(null); setTeamMsg(""); }}>
+                    Clear results
+                  </Button>
+                ) : null}
+              </div>
+
+              {teamMsg ? <Note tone="error" title="That didn't go through">{teamMsg}</Note> : null}
+
+              {payroll ? (
+                <div className="stack g-3">
+                  <DataTable
+                    rows={payroll}
+                    columns={[
+                      {
+                        key: "name",
+                        header: "Employee",
+                        primary: true,
+                        sortBy: (r) => r.name,
+                        cell: (r) => (
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <b className="truncate">{r.name}</b>
+                            {r.openEntries > 0 ? (
+                              <Badge tone="warn" dot>Still clocked in</Badge>
+                            ) : null}
+                          </div>
+                        ),
+                      },
+                      { key: "hours", header: "Hours", align: "right", sortBy: (r) => r.hours, cell: (r) => <span className="num">{r.hours.toFixed(2)}</span> },
+                      { key: "rate", header: "Rate", align: "right", hideBelow: 760, sortBy: (r) => r.payRateCents, cell: (r) => <span className="num">{money(r.payRateCents)}/hr</span> },
+                      { key: "gross", header: "Gross", align: "right", sortBy: (r) => r.grossCents, cell: (r) => <span className="num">{money(r.grossCents)}</span> },
+                      { key: "ded", header: "Deductions", align: "right", sortBy: (r) => r.dedCents, cell: (r) => <span className="num">{r.dedCents > 0 ? `− ${money(r.dedCents)}` : "—"}</span> },
+                      { key: "net", header: "Net", align: "right", sortBy: (r) => r.netCents, cell: (r) => <b className="num">{money(r.netCents)}</b> },
+                    ]}
+                    rowKey={(r) => r.id}
+                    loading={pending === "payroll"}
+                    skeletonRows={4}
+                    mobileCards
+                    caption={`Payroll ${payFrom} to ${payTo}`}
+                    defaultSort={{ key: "net", dir: "desc" }}
+                    empty={
+                      <EmptyState
+                        icon="clock"
+                        title="Nobody worked in that range"
+                        body="No clocked hours fell between those two dates. Try a wider period."
+                      />
+                    }
+                  />
+
+                  {payroll.length > 0 ? (
+                    <div className="row between wrap g-3" style={{ padding: "var(--sp-3) 0 0", borderTop: "1px solid var(--border)" }}>
+                      <span className="t-label">
+                        Totals — {plural(payroll.length, "person", "people")}
+                      </span>
+                      <span className="row wrap g-4">
+                        <span className="t-sm">
+                          <span className="t-muted">Hours </span>
+                          <b className="num">{payroll.reduce((s, r) => s + r.hours, 0).toFixed(2)}</b>
+                        </span>
+                        <span className="t-sm">
+                          <span className="t-muted">Gross </span>
+                          <b className="num">{money(payroll.reduce((s, r) => s + r.grossCents, 0))}</b>
+                        </span>
+                        <span className="t-sm">
+                          <span className="t-muted">Deductions </span>
+                          <b className="num">{money(payroll.reduce((s, r) => s + r.dedCents, 0))}</b>
+                        </span>
+                        <span className="t-sm">
+                          <span className="t-muted">Net </span>
+                          <b className="num">{money(payroll.reduce((s, r) => s + r.netCents, 0))}</b>
+                        </span>
+                      </span>
+                    </div>
+                  ) : null}
+
+                  <Note tone="info" title="This is the timesheet side only">
+                    Gross = hours × rate. Net = gross − the recurring deductions on each person&rsquo;s record.
+                    Withholding is yours to compute at Eldridge.
+                  </Note>
+                </div>
+              ) : null}
             </div>
-            <div style={{ marginTop: 10 }}><button className="btn small" onClick={runPayroll}>RUN PAYROLL REPORT</button></div>
-            {payroll && (
-              <div style={{ overflowX: "auto", marginTop: 12 }}>
-                <table className="grid">
-                  <thead><tr><th>Employee</th><th style={{ textAlign: "right" }}>Hours</th><th style={{ textAlign: "right" }}>Rate</th><th style={{ textAlign: "right" }}>Gross</th><th style={{ textAlign: "right" }}>Deductions</th><th style={{ textAlign: "right" }}>Net</th></tr></thead>
-                  <tbody>
-                    {payroll.map((r) => (
-                      <tr key={r.id}>
-                        <td>{r.name}{r.openEntries > 0 ? " ⚠ open punch" : ""}</td>
-                        <td style={{ textAlign: "right" }}>{r.hours.toFixed(2)}</td>
-                        <td style={{ textAlign: "right" }}>{money(r.payRateCents)}/hr</td>
-                        <td style={{ textAlign: "right" }}>{money(r.grossCents)}</td>
-                        <td style={{ textAlign: "right" }}>{money(r.dedCents)}</td>
-                        <td style={{ textAlign: "right", fontWeight: 700 }}>{money(r.netCents)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 8 }}>
-                  Gross = hours × rate. Net = gross − the recurring deductions below. Withholding is yours to compute at Eldridge — this is the timesheet side.
-                </p>
-              </div>
-            )}
-            {teamMsg && <p className="err">{teamMsg}</p>}
-          </div>
+          </Card>
 
-          {team.map((m) => (
-            <div className="card" key={m.id} style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-                <h2 className="display" style={{ fontSize: 16 }}>{m.name.toUpperCase()}</h2>
-                <button className="btn small ghost" onClick={() => {
-                  const r = prompt(`Hourly pay rate for ${m.name} (dollars):`, (m.payRateCents / 100).toFixed(2));
-                  if (r !== null) patchTeam({ employeeId: m.id, payRateDollars: r });
-                }}>RATE: {money(m.payRateCents)}/HR</button>
-              </div>
+          {/* The roster used to print every person's whole file inline, so the
+              page was a wall of forms. It's a list now; the detail lives in a
+              slide-over, one person at a time. */}
+          <Card
+            title="Team"
+            subtitle={team.length > 0 ? `${plural(team.length, "person", "people")} on payroll` : undefined}
+          >
+            <DataTable
+              rows={team}
+              columns={[
+                {
+                  key: "name",
+                  header: "Employee",
+                  primary: true,
+                  sortBy: (m) => m.name,
+                  cell: (m) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <b className="truncate">{m.name}</b>
+                      <span className="t-xs t-muted truncate">
+                        {m.w4.filingStatus || "No W-4 filing status on file"}
+                      </span>
+                    </div>
+                  ),
+                },
+                {
+                  key: "rate",
+                  header: "Pay rate",
+                  align: "right",
+                  sortBy: (m) => m.payRateCents,
+                  cell: (m) =>
+                    m.payRateCents > 0
+                      ? <span className="num">{money(m.payRateCents)}/hr</span>
+                      : <Badge tone="warn" dot>Not set</Badge>,
+                },
+                {
+                  key: "deductions",
+                  header: "Deductions",
+                  align: "right",
+                  hideBelow: 760,
+                  sortBy: (m) => m.deductions.reduce((s, d) => s + d.amountCents, 0),
+                  cell: (m) =>
+                    m.deductions.length === 0
+                      ? <span className="t-muted">None</span>
+                      : <span className="num">{money(m.deductions.reduce((s, d) => s + d.amountCents, 0))}</span>,
+                },
+                {
+                  key: "docs",
+                  header: "Documents",
+                  align: "right",
+                  hideBelow: 900,
+                  sortBy: (m) => m.docs.length,
+                  cell: (m) =>
+                    m.docs.length === 0
+                      ? <Badge tone="warn" dot>Nothing on file</Badge>
+                      : <span className="num">{plural(m.docs.length, "file")}</span>,
+                },
+              ]}
+              rowKey={(m) => m.id}
+              loading={!overview && team.length === 0}
+              skeletonRows={4}
+              mobileCards
+              caption="Employees, pay rates, deductions and documents"
+              onRowClick={(m) => { setDocKind("W4"); setTeamOpen(m.id); }}
+              empty={
+                <EmptyState
+                  icon="users"
+                  title="Nobody on the team yet"
+                  body="Add someone under Settings → Register employees. They show up here with their pay rate, W-4 and documents."
+                />
+              }
+            />
+          </Card>
 
-              <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>W-4 ON FILE</h3>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ flex: 1, minWidth: 130 }}>
-                  <label>Filing status</label>
-                  <select value={m.w4.filingStatus || ""} onChange={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, filingStatus: e.target.value } })}>
-                    <option value="">—</option>
-                    <option>Single or MFS</option>
-                    <option>Married filing jointly</option>
-                    <option>Head of household</option>
-                  </select>
-                </span>
-                <span style={{ flex: 1, minWidth: 110 }}>
-                  <label>Step 3 dependents $</label>
-                  <input defaultValue={m.w4.dependentsDollars || ""} onBlur={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, dependentsDollars: e.target.value } })} />
-                </span>
-                <span style={{ flex: 1, minWidth: 110 }}>
-                  <label>4(c) extra withholding $</label>
-                  <input defaultValue={m.w4.extraWithholdingDollars || ""} onBlur={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, extraWithholdingDollars: e.target.value } })} />
-                </span>
-              </div>
+          {/* Employee detail slide-over — pay rate, W-4, deductions, documents. */}
+          {(() => {
+            const m = team.find((x) => x.id === teamOpen);
+            if (!m) return null;
+            const dedTotal = m.deductions.reduce((s, d) => s + d.amountCents, 0);
+            return (
+              <Panel
+                open
+                onClose={() => setTeamOpen(null)}
+                title={m.name}
+                subtitle={m.payRateCents > 0 ? `${money(m.payRateCents)} an hour` : "No pay rate set yet"}
+              >
+                <div className="stack g-5">
+                  {teamMsg ? <Note tone="error" title="That didn't go through">{teamMsg}</Note> : null}
 
-              <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>RECURRING DEDUCTIONS (PER PAY PERIOD)</h3>
-              <ul style={{ margin: "4px 0" }}>
-                {m.deductions.map((d) => (
-                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-                    <span>{d.name}</span>
-                    <span>{money(d.amountCents)} <button className="btn small ghost" onClick={() => dropDeduction(d.id)}>✕</button></span>
-                  </li>
-                ))}
-                {m.deductions.length === 0 && <li style={{ fontSize: 12, color: "var(--ash)" }}>None.</li>}
-              </ul>
-              <button className="btn small ghost" onClick={() => addDeduction(m.id)}>+ ADD DEDUCTION</button>
+                  <div className="stack g-2">
+                    <p className="t-label">Pay rate</p>
+                    <div className="row between wrap g-2">
+                      <span className="t-body num">
+                        {m.payRateCents > 0 ? `${money(m.payRateCents)} / hour` : "Not set"}
+                      </span>
+                      <Button
+                        size="sm"
+                        icon="edit"
+                        loading={pending === `rate-${m.id}`}
+                        onClick={async () => {
+                          const cents = await dialog.money({
+                            title: `Hourly pay rate for ${m.name}`,
+                            body: "Payroll multiplies this by the hours on their time clock.",
+                            label: "Rate per hour",
+                            defaultCents: m.payRateCents,
+                            confirmLabel: "Save rate",
+                          });
+                          if (cents === null) return;
+                          setPending(`rate-${m.id}`);
+                          try {
+                            await patchTeam({ employeeId: m.id, payRateDollars: String(cents / 100) });
+                          } finally { setPending(""); }
+                        }}
+                      >
+                        Change rate
+                      </Button>
+                    </div>
+                  </div>
 
-              <h3 className="display" style={{ fontSize: 13, margin: "12px 0 4px" }}>DOCUMENTS (W-4 / I-9 / ID)</h3>
-              <ul style={{ margin: "4px 0" }}>
-                {m.docs.map((d) => (
-                  <li key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", fontSize: 13, gap: 8 }}>
-                    <span>[{d.kind}] {d.filename}</span>
-                    <span style={{ whiteSpace: "nowrap" }}>
-                      <a className="btn small ghost" href={`/api/admin/team/docs/${d.id}`} target="_blank" rel="noopener">VIEW</a>{" "}
-                      <button className="btn small ghost" onClick={() => dropDoc(d.id)}>✕</button>
-                    </span>
-                  </li>
-                ))}
-                {m.docs.length === 0 && <li style={{ fontSize: 12, color: "var(--ash)" }}>Nothing uploaded.</li>}
-              </ul>
-              <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
-                <span style={{ minWidth: 110 }}>
-                  <label>Type</label>
-                  <select id={`kind-${m.id}`}>
-                    <option>W4</option><option>I9</option><option>ID</option><option>OTHER</option>
-                  </select>
-                </span>
-                <span style={{ flex: 1, minWidth: 180 }}>
-                  <label>File (image or PDF, 5 MB max)</label>
-                  <input type="file" accept="image/*,application/pdf" onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    const kindEl = document.getElementById(`kind-${m.id}`) as HTMLSelectElement | null;
-                    if (f) uploadDoc(m.id, kindEl?.value || "OTHER", f);
-                    e.target.value = "";
-                  }} />
-                </span>
-              </div>
-            </div>
-          ))}
+                  <div className="stack g-3">
+                    <div className="stack g-1">
+                      <p className="t-label">W-4 on file</p>
+                      <p className="t-xs t-muted">
+                        Saved for your records. Nothing here changes what payroll calculates.
+                      </p>
+                    </div>
+                    <Field label="Filing status" hint="From step 1(c) of their W-4.">
+                      {(p) => (
+                        <Select
+                          {...p}
+                          value={m.w4.filingStatus || ""}
+                          onChange={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, filingStatus: e.target.value } })}
+                        >
+                          <option value="">Not recorded</option>
+                          <option>Single or MFS</option>
+                          <option>Married filing jointly</option>
+                          <option>Head of household</option>
+                        </Select>
+                      )}
+                    </Field>
+                    <div className="grid-auto" style={{ ["--min" as string]: "160px" }}>
+                      <Field label="Step 3 dependents ($)" hint="Total claimed on step 3.">
+                        {(p) => (
+                          <Input
+                            {...p}
+                            key={`dep-${m.id}`}
+                            inputMode="decimal"
+                            defaultValue={m.w4.dependentsDollars || ""}
+                            placeholder="0"
+                            onBlur={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, dependentsDollars: e.target.value } })}
+                          />
+                        )}
+                      </Field>
+                      <Field label="Step 4(c) extra withholding ($)" hint="Extra they asked to hold per period.">
+                        {(p) => (
+                          <Input
+                            {...p}
+                            key={`extra-${m.id}`}
+                            inputMode="decimal"
+                            defaultValue={m.w4.extraWithholdingDollars || ""}
+                            placeholder="0"
+                            onBlur={(e) => patchTeam({ employeeId: m.id, w4: { ...m.w4, extraWithholdingDollars: e.target.value } })}
+                          />
+                        )}
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="stack g-2">
+                    <div className="row between wrap g-2">
+                      <p className="t-label">Recurring deductions</p>
+                      <Button size="sm" variant="ghost" icon="plus" onClick={() => addDeduction(m.id, m.name)}>
+                        Add deduction
+                      </Button>
+                    </div>
+                    {m.deductions.length === 0 ? (
+                      <EmptyState
+                        icon="minus"
+                        title="No deductions"
+                        body="Anything you add comes off this person's gross every pay period."
+                      />
+                    ) : (
+                      <>
+                        <ul className="stack g-1" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                          {m.deductions.map((d) => (
+                            <li
+                              key={d.id}
+                              className="row between g-2"
+                              style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border)" }}
+                            >
+                              <span className="t-sm truncate">{d.name}</span>
+                              <span className="row g-2 shrink0">
+                                <span className="num t-sm">{money(d.amountCents)}</span>
+                                <IconButton
+                                  icon="trash"
+                                  label={`Remove the ${d.name} deduction`}
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => dropDeduction(d.id, d.name)}
+                                />
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="t-xs t-muted">
+                          {money(dedTotal)} comes off every pay period.
+                        </p>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="stack g-2">
+                    <div className="stack g-1">
+                      <p className="t-label">Documents</p>
+                      <p className="t-xs t-muted">W-4, I-9, photo ID — anything you need to keep on file.</p>
+                    </div>
+                    {m.docs.length === 0 ? (
+                      <EmptyState
+                        icon="clipboard"
+                        title="Nothing uploaded"
+                        body="Add their W-4 and I-9 here so they're in one place."
+                      />
+                    ) : (
+                      <ul className="stack g-1" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                        {m.docs.map((d) => (
+                          <li
+                            key={d.id}
+                            className="row between g-2"
+                            style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border)" }}
+                          >
+                            <span className="stack g-1" style={{ minWidth: 0 }}>
+                              <span className="t-sm truncate">{d.filename}</span>
+                              <span className="t-xs t-muted">{d.kind} · added {fmtDate(d.createdAt)}</span>
+                            </span>
+                            <span className="row g-1 shrink0">
+                              <LinkButton
+                                href={`/api/admin/team/docs/${d.id}`}
+                                variant="ghost"
+                                size="sm"
+                                icon="eye"
+                                external
+                              >
+                                View
+                              </LinkButton>
+                              <IconButton
+                                icon="trash"
+                                label={`Delete ${d.filename}`}
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => dropDoc(d.id, d.filename)}
+                              />
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    <div className="grid-auto mt-2" style={{ ["--min" as string]: "160px" }}>
+                      <Field label="Document type" hint="Filed under this label.">
+                        {(p) => (
+                          <Select {...p} value={docKind} onChange={(e) => setDocKind(e.target.value)}>
+                            <option value="W4">W-4</option>
+                            <option value="I9">I-9</option>
+                            <option value="ID">Photo ID</option>
+                            <option value="OTHER">Other</option>
+                          </Select>
+                        )}
+                      </Field>
+                      <Field label="File" hint="Image or PDF, 5 MB max.">
+                        {(p) => (
+                          <Input
+                            {...p}
+                            type="file"
+                            accept="image/*,application/pdf"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) uploadDoc(m.id, docKind || "OTHER", f);
+                              e.target.value = "";
+                            }}
+                          />
+                        )}
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+            );
+          })()}
         </>
       )}
 
       {tab === "reports" && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>SALES REPORTS</h2>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
-            {[["day", "TODAY"], ["week", "WEEK"], ["month", "MONTH"], ["quarter", "QUARTER"], ["year", "YEAR"], ["custom", "CUSTOM"]].map(([k, lbl]) => (
-              <button key={k} className={`btn small ${repPeriod === k ? "" : "ghost"}`} onClick={() => setRepPeriod(k)}>{lbl}</button>
-            ))}
-          </div>
-          {repPeriod === "custom" && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ flex: 1, minWidth: 140 }}><label>From</label><input type="date" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} /></span>
-              <span style={{ flex: 1, minWidth: 140 }}><label>To</label><input type="date" value={repTo} onChange={(e) => setRepTo(e.target.value)} /></span>
-            </div>
-          )}
-          <label>Scope</label>
-          <select value={repVendor} onChange={(e) => setRepVendor(e.target.value)}>
-            <option value="all">WHOLE SHOP</option>
-            {vendors.map((v) => <option key={v.id} value={v.id}>{v.code} — {v.businessName}</option>)}
-          </select>
-
-          {report && (
-            <div style={{ marginTop: 14 }}>
-              {repVendor === "all" ? (
-                <>
-                  <table className="grid">
-                    <tbody>
-                      <tr><td>Gross sales (pre-tax)</td><td style={{ textAlign: "right" }}>{money(report.gross)}</td></tr>
-                      <tr><td>Tickets</td><td style={{ textAlign: "right" }}>{report.tickets}</td></tr>
-                      {(report.refundTotal || 0) > 0 && <tr><td>Refunds given back</td><td style={{ textAlign: "right" }}>−{money(report.refundTotal || 0)}</td></tr>}
-                      <tr><td>Cash taken (drawer + bank)</td><td style={{ textAlign: "right", fontWeight: 700 }}>{money(report.cash)}</td></tr>
-                      <tr><td>Card taken</td><td style={{ textAlign: "right" }}>{money(report.card)}</td></tr>
-                    </tbody>
-                  </table>
-                  <h3 className="display" style={{ fontSize: 15, margin: "14px 0 6px" }}>SALES TAX — WHAT YOU OWE FOR THIS PERIOD</h3>
-                  <table className="grid">
-                    <tbody>
-                      <tr><td>Taxable sales</td><td style={{ textAlign: "right" }}>{money(report.gross)}</td></tr>
-                      <tr><td style={{ fontWeight: 700 }}>TAX COLLECTED — REMIT TO OTC</td><td style={{ textAlign: "right", fontWeight: 700 }}>{money(report.tax)}</td></tr>
-                    </tbody>
-                  </table>
-                  <h3 className="display" style={{ fontSize: 15, margin: "14px 0 6px" }}>BY VENDOR</h3>
-                  <table className="grid">
-                    <thead><tr><th>Vendor</th><th style={{ textAlign: "right" }}>Gross</th><th style={{ textAlign: "right" }}>Share</th></tr></thead>
-                    <tbody>
-                      {report.byVendor.map((r) => (
-                        <tr key={r.vendor?.code}><td>{r.vendor?.code} {r.vendor?.businessName}</td>
-                          <td style={{ textAlign: "right" }}>{money(r.cents)}</td>
-                          <td style={{ textAlign: "right" }}>{report.vGross ? Math.round((r.cents / report.vGross) * 100) : 0}%</td></tr>
-                      ))}
-                      {report.byVendor.length === 0 && <tr><td colSpan={3}>No sales in this period.</td></tr>}
-                    </tbody>
-                  </table>
-                </>
-              ) : (
-                <table className="grid">
-                  <tbody>
-                    <tr><td>Vendor gross</td><td style={{ textAlign: "right" }}>{money(report.vGross)}</td></tr>
-                    <tr><td>Their net (after commission)</td><td style={{ textAlign: "right", fontWeight: 700 }}>{money(report.vNet)}</td></tr>
-                    <tr><td>Units sold</td><td style={{ textAlign: "right" }}>{report.units}</td></tr>
-                    <tr><td>Tickets containing their items</td><td style={{ textAlign: "right" }}>{report.tickets}</td></tr>
-                  </tbody>
-                </table>
-              )}
-              <h3 className="display" style={{ fontSize: 15, margin: "14px 0 6px" }}>BY ITEM</h3>
-              <table className="grid">
-                <thead><tr><th>Item</th><th style={{ textAlign: "right" }}>Units</th><th style={{ textAlign: "right" }}>Gross</th></tr></thead>
-                <tbody>
-                  {report.byItem.map((r) => (
-                    <tr key={r.name}><td>{r.name}</td><td style={{ textAlign: "right" }}>{r.q}</td><td style={{ textAlign: "right" }}>{money(r.c)}</td></tr>
-                  ))}
-                  {report.byItem.length === 0 && <tr><td colSpan={3}>—</td></tr>}
-                </tbody>
-              </table>
-              <h3 className="display" style={{ fontSize: 15, margin: "14px 0 6px" }}>BY HOUR</h3>
-              <table className="grid">
-                <thead><tr><th>Hour</th><th style={{ textAlign: "right" }}>Gross</th></tr></thead>
-                <tbody>
-                  {Array.from({ length: 14 }, (_, k) => k + 7).map((hh) => {
-                    const c = report.byHour[String(hh)] || 0;
-                    if (!c) return null;
-                    const hr = ((hh + 11) % 12 + 1) + (hh >= 12 ? "P" : "A");
-                    return <tr key={hh}><td>{hr}</td><td style={{ textAlign: "right" }}>{money(c)}</td></tr>;
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === "bank" && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <h2 className="display" style={{ fontSize: 18 }}>RENT SETTLEMENT 🧾</h2>
-          <p style={{ fontSize: 12.5, color: "var(--ash)" }}>Vendors whose sales balance doesn&rsquo;t cover rent. CHARGE CARD bills their card on file for the amount due <b>plus a 3% card-processing adjustment on the charged amount only</b> — both itemized on their statement and emailed to them. No card on file? They add one in their portal under MONEY.</p>
-          {!settle && <p style={{ fontSize: 13 }}>Loading…</p>}
-          {settle && settle.filter((r) => r.dueCents > 0).length === 0 && <p className="ok">Everyone&rsquo;s covered — no outstanding rent. 🎉</p>}
-          {settle && settle.filter((r) => r.dueCents > 0).map((r) => (
-            <div key={r.vendorId} style={{ borderTop: "1px solid var(--border)", padding: "10px 0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 13.5 }}>
-                <b>{r.boothLabel} · {r.businessName}</b> <span style={{ color: "var(--ash)", fontSize: 12 }}>({r.code})</span><br />
-                <span style={{ fontSize: 12.5 }}>rent {money(r.monthlyRentCents)}/mo · balance <b style={{ color: "var(--red)" }}>{money(r.balanceCents)}</b> → due <b>{money(r.dueCents)}</b> + 3% {money(r.feeCents)} = <b>{money(r.chargeTotalCents)}</b></span>
-              </span>
-              {r.hasCard ? (
-                <button className="btn small" disabled={busy} onClick={async () => {
-                  if (!confirm(`Charge ${r.businessName}'s card ····${r.cardLast4} ${money(r.chargeTotalCents)} (${money(r.dueCents)} rent + ${money(r.feeCents)} processing)?`)) return;
-                  setBusy(true);
+        <div className="stack g-4">
+          {/* Controls first, then the numbers they produce. The old screen
+              buried the period buttons in a wall of tables. */}
+          <Card
+            title="Sales reports"
+            subtitle="Pick a period and a scope — every number below moves together."
+            actions={
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="download"
+                disabled={!report}
+                onClick={() => {
+                  if (!report) return;
+                  const scope = repVendor === "all"
+                    ? "Whole shop"
+                    : (() => {
+                        const v = vendors.find((x) => x.id === repVendor);
+                        return v ? `${v.code} — ${v.businessName}` : "Vendor";
+                      })();
                   try {
-                    const res = await fetch("/api/admin/settlement", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vendorId: r.vendorId }) });
-                    const d = await res.json();
-                    alert(res.ok ? `Charged ${money(d.chargeTotalCents)} ✓ — balance settled, statement updated, vendor emailed.` : d.error || "Charge failed.");
-                    const rr = await fetch("/api/admin/settlement");
-                    if (rr.ok) setSettle((await rr.json()).rows);
-                  } finally { setBusy(false); }
-                }}>💳 CHARGE CARD ····{r.cardLast4}</button>
-              ) : (
-                <span style={{ fontSize: 12, color: "var(--ash)" }}>no card on file</span>
-              )}
-            </div>
-          ))}
-          {settle && settle.some((r) => r.dueCents === 0) && (
-            <p style={{ fontSize: 11.5, color: "var(--ash)", marginTop: 8 }}>Covered: {settle.filter((r) => r.dueCents === 0).map((r) => r.code).join(", ")}</p>
-          )}
-        </div>
-      )}
+                    downloadReportCsv(report, scope);
+                    toast.success("Report exported", "The CSV is in your downloads folder.");
+                  } catch (e) {
+                    toast.error("Couldn't build the export", e instanceof Error ? e.message : "Try again.");
+                  }
+                }}
+              >
+                Export CSV
+              </Button>
+            }
+          >
+            <div className="stack g-4">
+              <Segmented
+                label="Reporting period"
+                value={repPeriod}
+                onChange={setRepPeriod}
+                options={[
+                  { value: "day", label: "Today" },
+                  { value: "week", label: "Week" },
+                  { value: "month", label: "Month" },
+                  { value: "quarter", label: "Quarter" },
+                  { value: "year", label: "Year" },
+                  { value: "custom", label: "Custom" },
+                ]}
+              />
 
-      {tab === "bank" && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>HEADED TO THE BANK — STRIPE</h2>
-          {!bank && <p style={{ color: "var(--ash)" }}>Loading…</p>}
-          {bank && !bank.configured && (
-            <p style={{ fontSize: 13, color: "var(--ash)" }}>
-              Not connected yet — add <b>STRIPE_SECRET_KEY</b> (from your Daily Bread Stripe account) to this project&rsquo;s Vercel environment variables and redeploy. Once the Stripe card reader lands in phase 2, this tab shows exactly what&rsquo;s on its way to the bank.
-            </p>
-          )}
-          {bank && bank.configured && bank.error && <p className="err">{bank.error}</p>}
-          {bank && bank.configured && !bank.error && (
+              {repPeriod === "custom" ? (
+                <div className="row wrap g-3">
+                  <Field label="From" className="grow">
+                    {(p) => <Input {...p} type="date" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} />}
+                  </Field>
+                  <Field label="To" className="grow">
+                    {(p) => <Input {...p} type="date" value={repTo} onChange={(e) => setRepTo(e.target.value)} />}
+                  </Field>
+                </div>
+              ) : null}
+
+              <Field label="Scope" hint="The whole shop, or one vendor's slice of it.">
+                {(p) => (
+                  <Select {...p} value={repVendor} onChange={(e) => setRepVendor(e.target.value)}>
+                    <option value="all">Whole shop</option>
+                    {vendors.map((v) => <option key={v.id} value={v.id}>{v.code} — {v.businessName}</option>)}
+                  </Select>
+                )}
+              </Field>
+
+              {report ? (
+                <p className="t-xs t-muted">
+                  Covering {fmtDate(report.start)} – {fmtDate(report.end)}.
+                </p>
+              ) : null}
+            </div>
+          </Card>
+
+          {!report ? (
+            <SkeletonStats count={4} />
+          ) : (
             <>
-              <table className="grid">
-                <tbody>
-                  <tr><td style={{ fontWeight: 700 }}>ON ITS WAY (pending)</td><td style={{ textAlign: "right", fontWeight: 700 }}>{money(bank.pending || 0)}</td></tr>
-                  <tr><td>Available for payout</td><td style={{ textAlign: "right" }}>{money(bank.available || 0)}</td></tr>
-                </tbody>
-              </table>
-              <h3 className="display" style={{ fontSize: 15, margin: "14px 0 6px" }}>RECENT DEPOSITS</h3>
-              <table className="grid">
-                <thead><tr><th>Arrives</th><th>Status</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
-                <tbody>
-                  {(bank.payouts || []).map((p) => (
-                    <tr key={p.id}>
-                      <td>{new Date(p.arrival).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</td>
-                      <td>{p.status.toUpperCase()}</td>
-                      <td style={{ textAlign: "right" }}>{money(p.amount)}</td>
-                    </tr>
-                  ))}
-                  {(!bank.payouts || bank.payouts.length === 0) && <tr><td colSpan={3}>No payouts yet.</td></tr>}
-                </tbody>
-              </table>
-              <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 8 }}>
-                Heads up: this reads the shared Stripe account, so until the market gets its own card reader these numbers include Daily Bread&rsquo;s card money too.
-              </p>
+              <div className="grid-auto" style={{ ["--min" as string]: "180px" }}>
+                {repVendor === "all" ? (
+                  <>
+                    <Stat feature label="Gross sales" value={money(report.gross)} sub="Before tax" icon="dollar" />
+                    <Stat label="Tax collected" value={money(report.tax)} sub="Remit to the OTC" icon="receipt" />
+                    <Stat label="Cash taken" value={money(report.cash)} sub="Drawer + bank" icon="cash" />
+                    <Stat label="Card taken" value={money(report.card)} sub="Net of refunds" icon="card" />
+                    <Stat label="Tickets" value={String(report.tickets)} sub="Sales rung up" icon="receipt" />
+                    <Stat label="Units sold" value={String(report.units)} sub="Items off the floor" icon="box" />
+                    <Stat label="Vendor net" value={money(report.vNet)} sub={`${money(report.vGross)} gross, after commission`} icon="store" />
+                    {(report.refundTotal || 0) > 0 ? (
+                      <Stat label="Refunds given back" value={`−${money(report.refundTotal || 0)}`} sub="Already deducted above" icon="refresh" />
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <Stat feature label="Vendor gross" value={money(report.vGross)} sub="Before commission" icon="dollar" />
+                    <Stat label="Their net" value={money(report.vNet)} sub="After commission" icon="store" />
+                    <Stat label="Units sold" value={String(report.units)} icon="box" />
+                    <Stat label="Tickets" value={String(report.tickets)} sub="Containing their items" icon="receipt" />
+                  </>
+                )}
+              </div>
+
+              {repVendor === "all" ? (
+                <Card
+                  title="By vendor"
+                  subtitle="Gross sales and each vendor's share of the floor"
+                  flush
+                >
+                  <DataTable
+                    rows={report.byVendor}
+                    columns={[
+                      {
+                        key: "vendor",
+                        header: "Vendor",
+                        primary: true,
+                        sortBy: (r) => r.vendor?.businessName || "",
+                        cell: (r) => (
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <b className="truncate">{r.vendor?.businessName || "Unknown vendor"}</b>
+                            <span className="t-xs t-muted mono">{r.vendor?.code}</span>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: "gross",
+                        header: "Gross",
+                        align: "right",
+                        sortBy: (r) => r.cents,
+                        cell: (r) => <span className="num">{money(r.cents)}</span>,
+                      },
+                      {
+                        key: "share",
+                        header: "Share",
+                        align: "right",
+                        sortBy: (r) => r.cents,
+                        cell: (r) => (
+                          <span className="num t-muted">{report.vGross ? Math.round((r.cents / report.vGross) * 100) : 0}%</span>
+                        ),
+                      },
+                    ]}
+                    rowKey={(r) => r.vendor?.code || r.vendor?.businessName || String(r.cents)}
+                    defaultSort={{ key: "gross", dir: "desc" }}
+                    mobileCards
+                    caption="Gross sales by vendor for the selected period"
+                    empty={
+                      <EmptyState
+                        icon="store"
+                        title="No vendor sales in this period"
+                        body="Try a wider period, or check that sales were rung up against a vendor code."
+                      />
+                    }
+                  />
+                </Card>
+              ) : null}
+
+              <Card title="By item" subtitle="What actually moved" flush>
+                <DataTable
+                  rows={report.byItem}
+                  columns={[
+                    {
+                      key: "name",
+                      header: "Item",
+                      primary: true,
+                      sortBy: (r) => r.name,
+                      cell: (r) => <span className="truncate">{r.name}</span>,
+                    },
+                    {
+                      key: "units",
+                      header: "Units",
+                      align: "right",
+                      sortBy: (r) => r.q,
+                      cell: (r) => <span className="num">{r.q}</span>,
+                    },
+                    {
+                      key: "gross",
+                      header: "Gross",
+                      align: "right",
+                      sortBy: (r) => r.c,
+                      cell: (r) => <span className="num">{money(r.c)}</span>,
+                    },
+                  ]}
+                  rowKey={(r) => r.name}
+                  defaultSort={{ key: "gross", dir: "desc" }}
+                  mobileCards
+                  caption="Units and gross sales by item for the selected period"
+                  empty={
+                    <EmptyState
+                      icon="box"
+                      title="Nothing sold in this period"
+                      body="Once items ring up at the register they're listed here, best sellers first."
+                    />
+                  }
+                />
+              </Card>
+
+              <Card title="By hour" subtitle="When the money came through the door">
+                {(() => {
+                  /* A hand-rolled bar chart: 14 divs with percentage heights.
+                     A charting library would be 100× the weight of this. */
+                  const hours = Array.from({ length: 14 }, (_, k) => k + 7);
+                  const bars = hours.map((hh) => ({ hh, cents: report.byHour[String(hh)] || 0 }));
+                  const peak = bars.reduce((m, b) => Math.max(m, b.cents), 0);
+                  if (!peak) {
+                    return (
+                      <EmptyState
+                        icon="clock"
+                        title="No hourly sales yet"
+                        body="Nothing was rung up during opening hours in this period."
+                      />
+                    );
+                  }
+                  const busiest = bars.reduce((a, b) => (b.cents > a.cents ? b : a), bars[0]);
+                  return (
+                    <div className="stack g-3">
+                      <div
+                        className="row g-1"
+                        style={{ height: "11rem", alignItems: "flex-end" }}
+                        aria-hidden="true"
+                      >
+                        {bars.map((b) => (
+                          <div
+                            key={b.hh}
+                            className="stack g-1 grow"
+                            title={`${hourLabel(b.hh)} — ${money(b.cents)}`}
+                            style={{ height: "100%", justifyContent: "flex-end", alignItems: "center" }}
+                          >
+                            <span className="t-xs t-muted num truncate">{b.cents ? money(b.cents) : ""}</span>
+                            <div
+                              style={{
+                                width: "100%",
+                                height: `${b.cents ? Math.max(3, Math.round((b.cents / peak) * 100)) : 1}%`,
+                                minHeight: 2,
+                                borderRadius: "var(--r-sm)",
+                                background: b.cents ? "var(--accent)" : "var(--border)",
+                              }}
+                            />
+                            <span className="t-xs t-muted">{hourShort(b.hh)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Text alternative — screen readers get the numbers, not the bars. */}
+                      <table className="sr-only">
+                        <caption>Gross sales by hour for the selected period</caption>
+                        <tbody>
+                          {bars.filter((b) => b.cents > 0).map((b) => (
+                            <tr key={b.hh}>
+                              <th scope="row">{hourLabel(b.hh)}</th>
+                              <td>{money(b.cents)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <p className="t-xs t-muted">
+                        Busiest hour: <b>{hourLabel(busiest.hh)}</b> at {money(busiest.cents)}. Bars are
+                        scaled against that hour.
+                      </p>
+                    </div>
+                  );
+                })()}
+              </Card>
             </>
           )}
         </div>
       )}
 
-      {tab === "floor" && overview && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>EVERYTHING ON THE FLOOR</h2>
-          <div style={{ overflowX: "auto" }}>
-            <table className="grid">
-              <thead><tr><th>Vendor</th><th>Item</th><th>Code</th><th style={{ textAlign: "right" }}>Price</th><th style={{ textAlign: "right" }}>Qty</th></tr></thead>
-              <tbody>
-                {overview.floor.map((i) => (
-                  <tr key={i.id} style={i.quantity === 0 ? { opacity: 0.45 } : undefined}>
-                    <td>{i.vendorCode} {i.vendorName}</td>
-                    <td style={{ fontWeight: 700 }}>{i.name}</td>
-                    <td style={{ fontFamily: "monospace" }}>{i.sku}</td>
-                    <td style={{ textAlign: "right" }}>{money(i.priceCents)}</td>
-                    <td style={{ textAlign: "right", fontWeight: 700 }}>{i.quantity}</td>
-                  </tr>
-                ))}
-                {overview.floor.length === 0 && <tr><td colSpan={5}>Nothing yet — vendors add items from their portal.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-          <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 10 }}>
-            This month: {money(overview.month.totalCents)} across {overview.month.count} sales · tax collected: <b>{money(overview.month.taxCents)}</b>
-          </p>
+      {tab === "bank" && (() => {
+        const owing = (settle || []).filter((r) => r.dueCents > 0);
+        const covered = (settle || []).filter((r) => r.dueCents === 0);
+        /* Real money leaves the market's Stripe account here, so the confirm
+           itemises rent and the processing fee before anything is charged. */
+        const chargeCard = async (r: NonNullable<typeof settle>[number]) => {
+          const yes = await dialog.confirm({
+            title: `Charge ${r.businessName}'s card?`,
+            body: (
+              <div className="stack g-3">
+                <p>
+                  This bills the card ending {r.cardLast4} straight away for booth {r.boothLabel}&rsquo;s
+                  outstanding rent, settles their balance, and emails them an itemised statement.
+                </p>
+                <DescList
+                  items={[
+                    { label: "Rent due", value: <span className="num">{money(r.dueCents)}</span> },
+                    { label: "Card processing (3%)", value: <span className="num">{money(r.feeCents)}</span> },
+                    { label: "Total charged", value: <b className="num">{money(r.chargeTotalCents)}</b> },
+                  ]}
+                />
+                <p className="t-xs t-muted">Refunds have to be done in Stripe, so check the amount first.</p>
+              </div>
+            ),
+            confirmLabel: `Charge ${money(r.chargeTotalCents)}`,
+            cancelLabel: "Don't charge",
+            tone: "warn",
+          });
+          if (!yes) return;
+          setBusy(true);
+          try {
+            const res = await fetch("/api/admin/settlement", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vendorId: r.vendorId }) });
+            const d = await res.json();
+            if (res.ok) {
+              toast.success(
+                `Charged ${money(d.chargeTotalCents)}`,
+                `${r.businessName}'s balance is settled, the statement is updated, and they've been emailed.`
+              );
+            } else {
+              toast.error("The card wasn't charged", String(d.error || "Stripe rejected the charge. Nothing has been billed."));
+            }
+            const rr = await fetch("/api/admin/settlement");
+            if (rr.ok) setSettle((await rr.json()).rows);
+          } catch (e) {
+            toast.error("The card wasn't charged", e instanceof Error ? e.message : "Network error — nothing has been billed.");
+          } finally { setBusy(false); }
+        };
+        return (
+          <Card
+            className="mb-4"
+            title="Rent settlement"
+            subtitle="Vendors whose sales balance doesn't cover their rent"
+            flush
+            footer={
+              <div className="stack g-2">
+                <span className="t-xs t-muted">
+                  Charging bills the card on file for the amount due <b>plus a 3% card-processing
+                  adjustment on the charged amount only</b> — both itemised on their statement and
+                  emailed to them. No card on file? They add one in their portal under Money.
+                </span>
+                {covered.length > 0 ? (
+                  <span className="t-xs t-muted">Covered: {covered.map((r) => r.code).join(", ")}</span>
+                ) : null}
+              </div>
+            }
+          >
+            <DataTable
+              rows={owing}
+              columns={[
+                {
+                  key: "booth",
+                  header: "Booth",
+                  primary: true,
+                  sortBy: (r) => r.boothLabel,
+                  cell: (r) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <b className="truncate">Booth {r.boothLabel} · {r.businessName}</b>
+                      <span className="t-xs t-muted mono">{r.code}</span>
+                    </div>
+                  ),
+                },
+                {
+                  key: "rent",
+                  header: "Rent",
+                  align: "right",
+                  hideBelow: 900,
+                  sortBy: (r) => r.monthlyRentCents,
+                  cell: (r) => <span className="num">{money(r.monthlyRentCents)}/mo</span>,
+                },
+                {
+                  key: "balance",
+                  header: "Balance",
+                  align: "right",
+                  hideBelow: 760,
+                  sortBy: (r) => r.balanceCents,
+                  cell: (r) => <span className="num t-danger">{money(r.balanceCents)}</span>,
+                },
+                {
+                  key: "charge",
+                  header: "To charge",
+                  align: "right",
+                  sortBy: (r) => r.chargeTotalCents,
+                  cell: (r) => (
+                    <div className="stack g-1" style={{ alignItems: "flex-end" }}>
+                      <b className="num">{money(r.chargeTotalCents)}</b>
+                      <span className="t-xs t-muted num">{money(r.dueCents)} rent + {money(r.feeCents)} fee</span>
+                    </div>
+                  ),
+                },
+                {
+                  key: "card",
+                  header: "Card",
+                  sortBy: (r) => (r.hasCard ? 0 : 1),
+                  cell: (r) =>
+                    r.hasCard ? (
+                      <Badge tone="success" dot>Card on file ····{r.cardLast4}</Badge>
+                    ) : (
+                      <Badge tone="warn" dot>No card on file</Badge>
+                    ),
+                },
+                {
+                  key: "action",
+                  header: "",
+                  align: "right",
+                  mobileLabel: "Action",
+                  cell: (r) =>
+                    r.hasCard ? (
+                      <Button size="sm" icon="card" disabled={busy} onClick={() => chargeCard(r)}>
+                        Charge card
+                      </Button>
+                    ) : (
+                      <span className="t-xs t-muted">Waiting on their card</span>
+                    ),
+                },
+              ]}
+              rowKey={(r) => r.vendorId}
+              loading={!settle}
+              skeletonRows={3}
+              mobileCards
+              caption="Vendors with rent outstanding and the amount that would be charged"
+              empty={
+                <EmptyState
+                  icon="checkCircle"
+                  title="Everyone's covered"
+                  body="No vendor is behind on rent right now — nothing to charge."
+                />
+              }
+            />
+          </Card>
+        );
+      })()}
+
+      {tab === "bank" && (
+        <div className="stack g-4">
+          {!bank ? (
+            <SkeletonStats count={2} />
+          ) : !bank.configured ? (
+            <Note tone="info" title="Stripe isn't connected yet">
+              Add <b>STRIPE_SECRET_KEY</b> (from your Daily Bread Stripe account) to this project&rsquo;s
+              Vercel environment variables and redeploy. Once the Stripe card reader lands in phase 2,
+              this tab shows exactly what&rsquo;s on its way to the bank.
+            </Note>
+          ) : bank.error ? (
+            <Note tone="error" title="Stripe wouldn't answer">{bank.error}</Note>
+          ) : (
+            <>
+              <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
+                <Stat
+                  feature
+                  label="On its way"
+                  value={money(bank.pending || 0)}
+                  sub="Pending — not in the bank yet"
+                  icon="bank"
+                />
+                <Stat
+                  label="Available for payout"
+                  value={money(bank.available || 0)}
+                  sub="Settled and ready to transfer"
+                  icon="dollar"
+                />
+              </div>
+
+              <Card
+                title="Recent deposits"
+                subtitle="What Stripe has sent to the bank"
+                flush
+                footer={
+                  <span className="t-xs t-muted">
+                    Heads up: this reads the shared Stripe account, so until the market gets its own
+                    card reader these numbers include Daily Bread&rsquo;s card money too.
+                  </span>
+                }
+              >
+                <DataTable
+                  rows={bank.payouts || []}
+                  columns={[
+                    {
+                      key: "arrival",
+                      header: "Arrives",
+                      primary: true,
+                      sortBy: (p) => p.arrival,
+                      cell: (p) => <b>{fmtDate(p.arrival)}</b>,
+                    },
+                    {
+                      key: "status",
+                      header: "Status",
+                      sortBy: (p) => p.status,
+                      cell: (p) =>
+                        p.status === "paid" ? (
+                          <Badge tone="success" dot>Paid</Badge>
+                        ) : p.status === "failed" || p.status === "canceled" ? (
+                          <Badge tone="danger" dot>{p.status === "failed" ? "Failed" : "Cancelled"}</Badge>
+                        ) : (
+                          <Badge tone="info" dot>{p.status === "in_transit" ? "In transit" : "Pending"}</Badge>
+                        ),
+                    },
+                    {
+                      key: "amount",
+                      header: "Amount",
+                      align: "right",
+                      sortBy: (p) => p.amount,
+                      cell: (p) => <span className="num">{money(p.amount)}</span>,
+                    },
+                  ]}
+                  rowKey={(p) => p.id}
+                  defaultSort={{ key: "arrival", dir: "desc" }}
+                  mobileCards
+                  caption="Stripe payouts to the market's bank account"
+                  empty={
+                    <EmptyState
+                      icon="bank"
+                      title="No payouts yet"
+                      body="Once card money settles, Stripe's deposits to the bank show up here."
+                    />
+                  }
+                />
+              </Card>
+            </>
+          )}
         </div>
+      )}
+
+      {tab === "floor" && (
+        <FloorStockCard
+          items={overview?.floor || []}
+          loading={!overview}
+          month={overview?.month}
+        />
       )}
 
       {tab === "vendors" && (
         <>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>VENDORS ({vendors.filter((v) => v.active).length} ACTIVE)</h2>
-            <ul style={{ listStyle: "none" }}>
-              {[...vendors].filter((v) => v.active || showInactive).sort((a, b) => Number(!!a.active) - Number(!!b.active) || Number(!!b.portalLocked) - Number(!!a.portalLocked)).map((v) => (
-                <li key={v.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)", opacity: v.active ? 1 : 0.5 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div>
-                      <span className="display" style={{ fontSize: 15 }}>{v.code} · {v.businessName.toUpperCase()}</span>
-                      {v.portalLocked && (
-                        <span style={{ background: "#fffbeb", color: "#b45309", border: "1px solid #fde68a", borderRadius: 999, fontSize: 10, fontWeight: 800, padding: "1px 8px", marginLeft: 6, verticalAlign: "middle" }}>
-                          ⏳ ONBOARDING — {!v.hasSignedContract ? "NEEDS SIGNED CONTRACT" : "NEEDS FIRST RENT PAID"}
-                        </span>
-                      )}
-                      <div style={{ fontSize: 11.5, color: "var(--ash)" }}>
-                        {v.contactName}{v.contactName && " · "}{v.email}{v.phone && ` · ${v.phone}`}
-                        {" · "}{v.commissionPercent}% commission
-                        {" · balance "}<b style={{ color: v.balance >= 0 ? "var(--green)" : "var(--red)" }}>{money(v.balance)}</b>
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                      <button className="btn small ghost" disabled={busy} onClick={() => {
-                        const c = prompt(`Commission % for ${v.businessName}:`, String(v.commissionPercent));
-                        if (c !== null) patchVendor(v.id, { commissionPercent: c });
-                      }}>COMM %</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => ledgerEntry(v, "RENT")}>CHARGE RENT</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => ledgerEntry(v, "PAYOUT")}>RECORD PAYOUT</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => ledgerEntry(v, "ADJUST")}>ADJUST</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => {
-                        if (confirm(`Reset ${v.businessName}'s password?`)) patchVendor(v.id, { resetPassword: true });
-                      }}>RESET PW</button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => patchVendor(v.id, { allowSelfCheckout: !v.allowSelfCheckout })}>
-                        {v.allowSelfCheckout ? "🛒 SELF-CHECKOUT: ON" : "🛒 SELF-CHECKOUT: OFF"}
-                      </button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => patchVendor(v.id, { active: !v.active })}>
-                        {v.active ? "DEACTIVATE" : "REACTIVATE"}
-                      </button>
-                      <button className="btn small ghost" disabled={busy} onClick={() => {
-                        if (editV === v.id) { setEditV(null); return; }
-                        setEditV(v.id);
-                        setEditF({ businessName: v.businessName, contactName: v.contactName || "", email: v.email, phone: v.phone || "" });
-                      }}>✏️ EDIT</button>
-                      {v.applicationId && <a className="btn small ghost" href={`/admin/applications/${v.applicationId}/print`} target="_blank" rel="noopener">📋 APPLICATION</a>}
-                    </div>
-                  </div>
-                  {editV === v.id && (
-                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, background: "#fafafa", padding: "10px 12px", marginTop: 8 }}>
-                      <label>Business name</label>
-                      <input value={editF.businessName} onChange={(e) => setEditF((f) => ({ ...f, businessName: e.target.value }))} />
-                      <label>Contact name</label>
-                      <input value={editF.contactName} onChange={(e) => setEditF((f) => ({ ...f, contactName: e.target.value }))} />
-                      <label>Email (their login + where contracts, guides &amp; alerts go)</label>
-                      <input type="email" value={editF.email} onChange={(e) => setEditF((f) => ({ ...f, email: e.target.value }))} />
-                      <label>Phone</label>
-                      <input value={editF.phone} onChange={(e) => setEditF((f) => ({ ...f, phone: e.target.value }))} />
-                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <button className="btn small" disabled={busy} onClick={async () => {
-                          await patchVendor(v.id, { businessName: editF.businessName.trim(), contactName: editF.contactName.trim(), email: editF.email.trim(), phone: editF.phone.trim() });
-                          setEditV(null);
-                        }}>SAVE</button>
-                        <button className="btn small ghost" onClick={() => setEditV(null)}>CANCEL</button>
-                      </div>
-                    </div>
-                  )}
-                </li>
-              ))}
-              {vendors.length === 0 && <li style={{ color: "var(--ash)", fontSize: 14, paddingTop: 8 }}>No vendors yet — add your first below.</li>}
-              {vendors.some((v) => !v.active) && (
-                <li style={{ paddingTop: 10, listStyle: "none" }}>
-                  <button className="btn small ghost" onClick={() => setShowInactive((x) => !x)}>
-                    {showInactive ? "HIDE" : "SHOW"} DEACTIVATED ({vendors.filter((v) => !v.active).length})
-                  </button>
-                </li>
-              )}
-            </ul>
-          </div>
-
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>VENDOR APPLICATIONS 📋</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>
-              Applications have their own workspace now — review, call notes, viewings, and contracts all happen there. Hopefuls apply at <b>market.dailybreadbaked.com/apply</b>.
-            </p>
-            <a className="btn" href="/admin/applications" style={{ marginTop: 8, maxWidth: 340 }}>
-              📋 OPEN APPLICATIONS{applications.filter((a) => a.status === "PENDING").length > 0 ? ` (${applications.filter((a) => a.status === "PENDING").length} PENDING)` : ""} →
-            </a>
-          </div>
-
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>COMPLAINTS — MARKET OVERSIGHT ⚠️</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>Every complaint filed against any vendor, newest first. Vendors handle replies; this is your accountability view.</p>
-            <ul style={{ margin: "8px 0" }}>
-              {complaints.map((c) => (
-                <li key={c.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
-                    <b>{c.vendor ? `${c.vendor.code} ${c.vendor.businessName}` : "?"} ← {c.customerName}</b>
-                    <span style={{ fontWeight: 700 }}>{c.status}</span>
-                  </div>
-                  <div style={{ fontSize: 11.5, color: "var(--ash)" }}>{c.email} · {c.phone}</div>
-                  {c.messages.map((m, i) => (
-                    <div key={i} style={{ fontSize: 12.5, marginTop: 4, paddingLeft: 8, borderLeft: "2px solid var(--border)" }}>
-                      <b>{m.sender === "CUSTOMER" ? c.customerName : "Vendor"}:</b> {m.body}
-                    </div>
-                  ))}
-                </li>
-              ))}
-              {complaints.length === 0 && <li style={{ fontSize: 13, color: "var(--ash)" }}>No complaints on file. 🎉</li>}
-            </ul>
-          </div>
-
-          <div className="card">
-            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>ADD A VENDOR</h2>
-            <label>Business name</label>
-            <input value={vName} onChange={(e) => setVName(e.target.value)} placeholder="Prairie Rose Candle Co." />
-            <label>Contact name</label>
-            <input value={vContact} onChange={(e) => setVContact(e.target.value)} />
-            <label>Email (their login — welcome email goes here)</label>
-            <input value={vEmail} onChange={(e) => setVEmail(e.target.value)} type="email" />
-            <label>Phone</label>
-            <input value={vPhone} onChange={(e) => setVPhone(e.target.value)} />
-            <label>Commission % (0 for none — change anytime)</label>
-            <input value={vComm} onChange={(e) => setVComm(e.target.value)} type="number" min="0" max="50" step="0.5" />
-            <div style={{ marginTop: 14 }}>
-              <button className="btn" disabled={busy} onClick={addVendor}>ADD VENDOR &amp; SEND WELCOME EMAIL</button>
+          {/* The list used to carry ten buttons on every row, which made it
+              unreadable and impossible to scan. Actions now live in the
+              slide-over; the table is just the facts, sortable. */}
+          <Card
+            className="mb-4"
+            title="Vendors"
+            subtitle={`${plural(vendors.filter((v) => v.active).length, "active vendor")}${vendors.filter((v) => !v.active).length > 0 ? ` · ${vendors.filter((v) => !v.active).length} deactivated` : ""}`}
+            actions={vendors.some((v) => !v.active) ? (
+              <Button size="sm" variant="ghost" icon="eye" onClick={() => setShowInactive((x) => !x)}>
+                {showInactive ? "Hide deactivated" : `Show deactivated (${vendors.filter((v) => !v.active).length})`}
+              </Button>
+            ) : undefined}
+          >
+            <div className="toolbar">
+              <SearchInput
+                className="grow"
+                value={vendorQ}
+                onValueChange={setVendorQ}
+                placeholder="Search code, business, contact, or email…"
+                aria-label="Search vendors"
+              />
             </div>
-            {vMsg && <p className={vMsg.includes("Added") ? "ok" : "err"}>{vMsg}</p>}
-          </div>
+            <DataTable
+              rows={[...vendors]
+                .filter((v) => v.active || showInactive)
+                .filter((v) => {
+                  const q = vendorQ.trim().toLowerCase();
+                  if (!q) return true;
+                  return `${v.code} ${v.businessName} ${v.contactName || ""} ${v.email} ${v.phone || ""}`.toLowerCase().includes(q);
+                })
+                .sort((a, b) => Number(!!a.active) - Number(!!b.active) || Number(!!b.portalLocked) - Number(!!a.portalLocked))}
+              columns={[
+                {
+                  key: "code",
+                  header: "Code",
+                  width: "84px",
+                  sortBy: (v) => v.code,
+                  cell: (v) => <span className="mono">{v.code}</span>,
+                },
+                {
+                  key: "business",
+                  header: "Business",
+                  primary: true,
+                  sortBy: (v) => v.businessName,
+                  cell: (v) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <b className="truncate">{v.businessName}</b>
+                      <span className="t-xs t-muted truncate">
+                        {[v.contactName, v.email].filter(Boolean).join(" · ")}
+                      </span>
+                    </div>
+                  ),
+                },
+                {
+                  key: "commission",
+                  header: "Commission",
+                  align: "right",
+                  hideBelow: 900,
+                  sortBy: (v) => v.commissionPercent,
+                  cell: (v) => <span className="num">{v.commissionPercent}%</span>,
+                },
+                {
+                  key: "balance",
+                  header: "Balance",
+                  align: "right",
+                  sortBy: (v) => v.balance,
+                  cell: (v) => (
+                    <span className={`num ${v.balance >= 0 ? "t-accent" : "t-danger"}`}>{money(v.balance)}</span>
+                  ),
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  sortBy: (v) => (!v.active ? 2 : v.portalLocked ? 1 : 0),
+                  cell: (v) =>
+                    !v.active ? (
+                      <Badge tone="neutral" dot>Deactivated</Badge>
+                    ) : v.portalLocked ? (
+                      <Badge tone="warn" dot>Onboarding</Badge>
+                    ) : (
+                      <Badge tone="success" dot>Active</Badge>
+                    ),
+                },
+              ]}
+              rowKey={(v) => v.id}
+              loading={!overview && vendors.length === 0}
+              skeletonRows={5}
+              mobileCards
+              caption="Vendors, balances, and account status"
+              onRowClick={(v) => { setVendorOpen(v.id); setEditV(null); }}
+              empty={
+                vendorQ.trim() ? (
+                  <EmptyState
+                    icon="search"
+                    title="No vendors match that search"
+                    body="Try a vendor code, business name, contact, or email address."
+                    action={<Button variant="secondary" onClick={() => setVendorQ("")}>Clear search</Button>}
+                  />
+                ) : (
+                  <EmptyState
+                    icon="store"
+                    title="No vendors yet"
+                    body="Add your first vendor below — they'll get a welcome email with a temporary password."
+                  />
+                )
+              }
+            />
+          </Card>
+
+          {/* Vendor detail slide-over — everything you can do to one vendor. */}
+          {(() => {
+            const v = vendors.find((x) => x.id === vendorOpen);
+            if (!v) return null;
+            return (
+              <Panel
+                open
+                onClose={() => { setVendorOpen(null); setEditV(null); }}
+                title={v.businessName}
+                subtitle={`${v.code} · ${v.commissionPercent}% commission`}
+                actions={v.applicationId ? (
+                  <a className="btn btn-ghost btn-sm" href={`/admin/applications/${v.applicationId}/print`} target="_blank" rel="noopener">
+                    <Icon name="clipboard" size={14} /> Application
+                  </a>
+                ) : undefined}
+              >
+                <div className="stack g-5">
+                  <div className="row wrap g-2">
+                    {v.active ? <Badge tone="success" dot>Active</Badge> : <Badge tone="neutral" dot>Deactivated</Badge>}
+                    {v.portalLocked ? <Badge tone="warn" dot>Onboarding</Badge> : null}
+                    <Badge tone={v.allowSelfCheckout ? "info" : "neutral"} dot>
+                      {v.allowSelfCheckout ? "Self-checkout on" : "Self-checkout off"}
+                    </Badge>
+                  </div>
+
+                  {v.portalLocked ? (
+                    <Note tone="warn" title="Their portal is locked until onboarding finishes">
+                      {!v.hasSignedContract
+                        ? "Their booth contract still needs a signature."
+                        : "Their first month's rent hasn't been paid yet."}{" "}
+                      The lock lifts on its own once that's done.
+                    </Note>
+                  ) : null}
+
+                  <DescList
+                    items={[
+                      { label: "Code", value: <span className="mono">{v.code}</span> },
+                      { label: "Contact", value: v.contactName || "—" },
+                      { label: "Email", value: v.email },
+                      { label: "Phone", value: v.phone ? fmtPhone(v.phone) : "—" },
+                      { label: "Commission", value: `${v.commissionPercent}%` },
+                      {
+                        label: "Balance",
+                        value: <span className={`num ${v.balance >= 0 ? "t-accent" : "t-danger"}`}>{money(v.balance)}</span>,
+                      },
+                    ]}
+                  />
+
+                  <div className="stack g-2">
+                    <p className="t-label">Ledger</p>
+                    <div className="row wrap g-2">
+                      <Button size="sm" icon="receipt" disabled={busy} onClick={() => ledgerEntry(v, "RENT")}>Charge rent</Button>
+                      <Button size="sm" icon="cash" disabled={busy} onClick={() => ledgerEntry(v, "PAYOUT")}>Record payout</Button>
+                      <Button size="sm" icon="edit" disabled={busy} onClick={() => ledgerEntry(v, "ADJUST")}>Adjust balance</Button>
+                    </div>
+                  </div>
+
+                  <div className="stack g-2">
+                    <p className="t-label">Account</p>
+                    <div className="row wrap g-2">
+                      <Button
+                        size="sm"
+                        icon="tag"
+                        disabled={busy}
+                        onClick={async () => {
+                          const c = await dialog.prompt({
+                            title: `Commission for ${v.businessName}`,
+                            body: "The market's share of each of their sales. New sales use the new rate; sales already rung up keep the rate they were sold at.",
+                            label: "Commission %",
+                            type: "number",
+                            defaultValue: String(v.commissionPercent),
+                            required: true,
+                            confirmLabel: "Save commission",
+                            validate: (x) => {
+                              const n = Number(x);
+                              return !Number.isFinite(n) || n < 0 || n > 50 ? "Enter a number between 0 and 50." : null;
+                            },
+                          });
+                          if (c !== null) patchVendor(v.id, { commissionPercent: c }, `Commission set to ${c}%`);
+                        }}
+                      >
+                        Change commission
+                      </Button>
+                      <Button
+                        size="sm"
+                        icon="scan"
+                        disabled={busy}
+                        onClick={() => patchVendor(
+                          v.id,
+                          { allowSelfCheckout: !v.allowSelfCheckout },
+                          v.allowSelfCheckout ? "Self-checkout turned off" : "Self-checkout turned on"
+                        )}
+                      >
+                        {v.allowSelfCheckout ? "Turn off self-checkout" : "Turn on self-checkout"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        icon="refresh"
+                        disabled={busy}
+                        onClick={async () => {
+                          const yes = await dialog.confirm({
+                            title: `Reset ${v.businessName}'s password?`,
+                            body: "Their current password stops working straight away. A new temporary one is emailed to them and shown to you once.",
+                            confirmLabel: "Reset password",
+                            cancelLabel: "Keep it",
+                            tone: "warn",
+                          });
+                          if (yes) patchVendor(v.id, { resetPassword: true });
+                        }}
+                      >
+                        Reset password
+                      </Button>
+                      <Button
+                        size="sm"
+                        icon="edit"
+                        disabled={busy}
+                        onClick={() => {
+                          if (editV === v.id) { setEditV(null); return; }
+                          setEditV(v.id);
+                          setEditF({ businessName: v.businessName, contactName: v.contactName || "", email: v.email, phone: v.phone || "" });
+                        }}
+                      >
+                        {editV === v.id ? "Cancel editing" : "Edit details"}
+                      </Button>
+                      {v.active ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          icon="lock"
+                          disabled={busy}
+                          onClick={async () => {
+                            const yes = await dialog.confirm({
+                              title: `Deactivate ${v.businessName}?`,
+                              body: "They lose access to the vendor portal and drop off the list of sellable vendors. Their sales history, balance and items all stay — you can reactivate them any time.",
+                              confirmLabel: "Deactivate vendor",
+                              cancelLabel: "Leave active",
+                              tone: "danger",
+                            });
+                            if (yes) patchVendor(v.id, { active: false }, `${v.businessName} deactivated`);
+                          }}
+                        >
+                          Deactivate
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          icon="unlock"
+                          disabled={busy}
+                          onClick={() => patchVendor(v.id, { active: true }, `${v.businessName} reactivated`)}
+                        >
+                          Reactivate
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {editV === v.id ? (
+                    <div className="stack g-3">
+                      <p className="t-label">Edit details</p>
+                      <Field label="Business name">
+                        {(p) => <Input {...p} value={editF.businessName} onChange={(e) => setEditF((f) => ({ ...f, businessName: e.target.value }))} />}
+                      </Field>
+                      <Field label="Contact name">
+                        {(p) => <Input {...p} value={editF.contactName} onChange={(e) => setEditF((f) => ({ ...f, contactName: e.target.value }))} />}
+                      </Field>
+                      <Field label="Email" hint="Their login, and where contracts, guides and alerts go.">
+                        {(p) => <Input {...p} type="email" value={editF.email} onChange={(e) => setEditF((f) => ({ ...f, email: e.target.value }))} />}
+                      </Field>
+                      <Field label="Phone">
+                        {(p) => <Input {...p} type="tel" value={editF.phone} onChange={(e) => setEditF((f) => ({ ...f, phone: e.target.value }))} />}
+                      </Field>
+                      <div className="row g-2">
+                        <Button
+                          variant="primary"
+                          loading={busy}
+                          onClick={async () => {
+                            await patchVendor(v.id, { businessName: editF.businessName.trim(), contactName: editF.contactName.trim(), email: editF.email.trim(), phone: editF.phone.trim() }, "Vendor details saved");
+                            setEditV(null);
+                          }}
+                        >
+                          Save changes
+                        </Button>
+                        <Button variant="ghost" onClick={() => setEditV(null)}>Cancel</Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </Panel>
+            );
+          })()}
+
+          {/* Applications as a pipeline: pick a stage, scan the list, open one
+              to read it in full and decide. */}
+          <Card
+            className="mb-4"
+            title="Vendor applications"
+            subtitle="Hopefuls apply at market.dailybreadbaked.com/apply. Call notes, viewings and contracts live in the full workspace."
+            actions={
+              <a className="btn btn-secondary btn-sm" href="/admin/applications">
+                <Icon name="inbox" size={14} /> Open workspace
+                {applications.filter((a) => a.status === "PENDING").length > 0
+                  ? ` (${applications.filter((a) => a.status === "PENDING").length} pending)`
+                  : ""}
+              </a>
+            }
+          >
+            <div className="toolbar">
+              <Segmented
+                value={appFilter}
+                onChange={setAppFilter}
+                label="Application status"
+                options={[
+                  { value: "PENDING", label: `Pending (${applications.filter((a) => a.status === "PENDING").length})` },
+                  { value: "ACCEPTED", label: `Accepted (${applications.filter((a) => a.status === "ACCEPTED").length})` },
+                  { value: "DECLINED", label: `Declined (${applications.filter((a) => a.status === "DECLINED").length})` },
+                ]}
+              />
+              <SearchInput
+                className="grow"
+                value={appQ}
+                onValueChange={setAppQ}
+                placeholder="Search business, contact, email, or category…"
+                aria-label="Search applications"
+              />
+            </div>
+            <DataTable
+              rows={applications
+                .filter((a) => a.status === appFilter)
+                .filter((a) => {
+                  const q = appQ.trim().toLowerCase();
+                  if (!q) return true;
+                  return `${a.businessName} ${a.contactName} ${a.email} ${a.phone} ${a.category} ${a.products}`.toLowerCase().includes(q);
+                })}
+              columns={[
+                {
+                  key: "business",
+                  header: "Business",
+                  primary: true,
+                  sortBy: (a) => a.businessName,
+                  cell: (a) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <b className="truncate">{a.businessName}</b>
+                      <span className="t-xs t-muted truncate">{[a.contactName, a.email].filter(Boolean).join(" · ")}</span>
+                    </div>
+                  ),
+                },
+                {
+                  key: "category",
+                  header: "Category",
+                  hideBelow: 900,
+                  sortBy: (a) => a.category,
+                  cell: (a) => a.category || "—",
+                },
+                {
+                  key: "applied",
+                  header: "Applied",
+                  sortBy: (a) => a.createdAt,
+                  cell: (a) => <span title={fmtDateTime(a.createdAt)}>{relTime(a.createdAt)}</span>,
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  sortBy: (a) => a.status,
+                  cell: (a) =>
+                    a.status === "PENDING" ? (
+                      <Badge tone="warn" dot>Pending</Badge>
+                    ) : a.status === "ACCEPTED" ? (
+                      <Badge tone="success" dot>Accepted</Badge>
+                    ) : (
+                      <Badge tone="neutral" dot>Declined</Badge>
+                    ),
+                },
+              ]}
+              rowKey={(a) => a.id}
+              loading={!overview && applications.length === 0}
+              skeletonRows={3}
+              mobileCards
+              caption="Vendor applications by status"
+              defaultSort={{ key: "applied", dir: "desc" }}
+              onRowClick={(a) => setAppOpen(a.id)}
+              empty={
+                appQ.trim() ? (
+                  <EmptyState
+                    icon="search"
+                    title="No applications match that search"
+                    body="Try a business name, contact, email, or category."
+                    action={<Button variant="secondary" onClick={() => setAppQ("")}>Clear search</Button>}
+                  />
+                ) : (
+                  <EmptyState
+                    icon="inbox"
+                    title={
+                      appFilter === "PENDING"
+                        ? "Nothing waiting on you"
+                        : appFilter === "ACCEPTED"
+                          ? "No accepted applications yet"
+                          : "No declined applications"
+                    }
+                    body={
+                      appFilter === "PENDING"
+                        ? "New applications from market.dailybreadbaked.com/apply land here."
+                        : "Switch stages above to see the rest of the pipeline."
+                    }
+                  />
+                )
+              }
+            />
+          </Card>
+
+          {/* Full application, with the decision at the bottom where it belongs. */}
+          {(() => {
+            const a = applications.find((x) => x.id === appOpen);
+            if (!a) return null;
+            return (
+              <Panel
+                open
+                onClose={() => setAppOpen(null)}
+                title={a.businessName}
+                subtitle={`Applied ${fmtDate(a.createdAt)}`}
+                actions={
+                  <a className="btn btn-ghost btn-sm" href={`/admin/applications/${a.id}/print`} target="_blank" rel="noopener">
+                    <Icon name="print" size={14} /> Print
+                  </a>
+                }
+                footer={a.status === "PENDING" ? (
+                  <>
+                    <Button variant="dangerSoft" disabled={busy} onClick={() => decideApplication(a.id, "decline", a.businessName)}>
+                      Decline
+                    </Button>
+                    <Button variant="primary" icon="check" disabled={busy} onClick={() => decideApplication(a.id, "accept", a.businessName)}>
+                      Accept application
+                    </Button>
+                  </>
+                ) : undefined}
+              >
+                <div className="stack g-5">
+                  <div className="row wrap g-2">
+                    {a.status === "PENDING" ? (
+                      <Badge tone="warn" dot>Pending</Badge>
+                    ) : a.status === "ACCEPTED" ? (
+                      <Badge tone="success" dot>Accepted</Badge>
+                    ) : (
+                      <Badge tone="neutral" dot>Declined</Badge>
+                    )}
+                    {a.stage ? <Badge tone="info" dot>Stage: {a.stage.charAt(0) + a.stage.slice(1).toLowerCase()}</Badge> : null}
+                  </div>
+
+                  <DescList
+                    items={[
+                      { label: "Contact", value: a.contactName || "—" },
+                      { label: "Email", value: a.email },
+                      { label: "Phone", value: `${a.phone ? fmtPhone(a.phone) : "—"}${a.phoneType ? ` (${a.phoneType.toLowerCase()})` : ""}` },
+                      { label: "Category", value: a.category || "—" },
+                      { label: "Booth request", value: a.boothRequest || "—" },
+                      { label: "Availability", value: a.availability || "—" },
+                      { label: "Heard from", value: a.heardFrom || "—" },
+                      { label: "Viewing", value: a.viewingAt || "Not booked" },
+                    ]}
+                  />
+
+                  <div className="stack g-3">
+                    <p className="t-label">What they sell</p>
+                    <p className="t-sm">{a.products || "—"}</p>
+                    <DescList
+                      items={[
+                        { label: "Made by them", value: a.madeByYou || "—" },
+                        { label: "Links", value: a.links || "—" },
+                        { label: "Licences", value: a.licenses || "—" },
+                        { label: "Insurance", value: a.insurance || "—" },
+                      ]}
+                    />
+                  </div>
+
+                  {a.notes ? (
+                    <div className="stack g-2">
+                      <p className="t-label">Their notes</p>
+                      <p className="t-sm">{a.notes}</p>
+                    </div>
+                  ) : null}
+
+                  {a.adminNotes ? (
+                    <div className="stack g-2">
+                      <p className="t-label">Your notes</p>
+                      <p className="t-sm">{a.adminNotes}</p>
+                    </div>
+                  ) : null}
+
+                  {a.status === "PENDING" ? (
+                    <Note tone="info">
+                      Accepting emails them a welcome note; declining emails them too, with anything you write in the box.
+                    </Note>
+                  ) : null}
+                </div>
+              </Panel>
+            );
+          })()}
+
+          <Card
+            className="mb-4"
+            title="Complaints"
+            subtitle="Every complaint filed against any vendor, newest first. Vendors handle the replies; this is your oversight view."
+          >
+            {!overview && complaints.length === 0 ? (
+              <div className="stack g-3">
+                <Skeleton height={14} width="45%" />
+                <Skeleton height={14} width="70%" />
+                <Skeleton height={14} width="60%" />
+              </div>
+            ) : complaints.length === 0 ? (
+              <EmptyState
+                icon="message"
+                title="No complaints on file"
+                body="Anything a customer files against a vendor shows up here."
+              />
+            ) : (
+              <ul className="stack g-4" style={{ listStyle: "none" }}>
+                {complaints.map((c) => (
+                  <li key={c.id} className="stack g-2" style={{ paddingBottom: "var(--sp-4)", borderBottom: "1px solid var(--border)" }}>
+                    <div className="row between wrap g-2">
+                      <b>{c.vendor ? `${c.vendor.code} · ${c.vendor.businessName}` : "Unknown vendor"}</b>
+                      <Badge tone={c.status === "CLOSED" ? "neutral" : "warn"} dot>
+                        {c.status.charAt(0) + c.status.slice(1).toLowerCase()}
+                      </Badge>
+                    </div>
+                    <p className="t-xs t-muted">
+                      From {c.customerName} · {c.email}{c.phone ? ` · ${fmtPhone(c.phone)}` : ""}
+                    </p>
+                    {c.messages.map((m, i) => (
+                      <p key={i} className="t-sm" style={{ paddingLeft: "var(--sp-3)", borderLeft: "2px solid var(--border)" }}>
+                        <b>{m.sender === "CUSTOMER" ? c.customerName : "Vendor"}:</b> {m.body}
+                      </p>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card title="Add a vendor" subtitle="They get a welcome email with a temporary password as soon as you save.">
+            <div className="stack g-4 content-narrow">
+              <Field label="Business name" required>
+                {(p) => <Input {...p} value={vName} onChange={(e) => setVName(e.target.value)} placeholder="Prairie Rose Candle Co." />}
+              </Field>
+              <Field label="Contact name">
+                {(p) => <Input {...p} value={vContact} onChange={(e) => setVContact(e.target.value)} />}
+              </Field>
+              <Field label="Email" hint="Their login — the welcome email goes here." required>
+                {(p) => <Input {...p} type="email" value={vEmail} onChange={(e) => setVEmail(e.target.value)} />}
+              </Field>
+              <Field label="Phone">
+                {(p) => <Input {...p} type="tel" value={vPhone} onChange={(e) => setVPhone(e.target.value)} />}
+              </Field>
+              <Field label="Commission %" hint="0 for none — you can change this any time.">
+                {(p) => <Input {...p} value={vComm} onChange={(e) => setVComm(e.target.value)} type="number" min="0" max="50" step="0.5" />}
+              </Field>
+              {vMsg ? <Note tone={vMsg.includes("Added") ? "success" : "error"}>{vMsg}</Note> : null}
+              <div>
+                <Button variant="primary" icon="plus" loading={busy} onClick={addVendor}>
+                  Add vendor and send welcome email
+                </Button>
+              </div>
+            </div>
+          </Card>
         </>
       )}
 
       {tab === "contracts" && (
         <>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>BOOTH CONTRACTS</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)", marginBottom: 8 }}>
-              Rent auto-charges on the 1st of every month at midnight — first and final months prorate by day. Nothing for you to remember.
-            </p>
-            <ul style={{ listStyle: "none" }}>
-              {contracts.map((c) => (
-                <li key={c.id} style={{ padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div>
-                      <span className="display" style={{ fontSize: 15 }}>BOOTH {c.boothLabel.toUpperCase()} · {c.vendor.businessName.toUpperCase()}</span>
-                      {c.vendorSignedAt && c.marketSignedAt ? (
-                        <span style={{ marginLeft: 7, background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>✅ FULLY EXECUTED</span>
-                      ) : c.vendorSignedAt ? (
-                        <span style={{ marginLeft: 7, background: "#fefce8", color: "#a16207", border: "1px solid #fde68a", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>✍️ AWAITING YOUR SIGNATURE</span>
-                      ) : c.marketSignedAt ? (
-                        <span style={{ marginLeft: 7, background: "#fefce8", color: "#a16207", border: "1px solid #fde68a", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>✍️ AWAITING VENDOR</span>
-                      ) : (
-                        <span style={{ marginLeft: 7, background: "#f3f4f6", color: "#6b7280", border: "1px solid var(--border)", borderRadius: 999, fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", padding: "2px 9px", verticalAlign: "middle", whiteSpace: "nowrap" }}>UNSIGNED</span>
-                      )}
-                      <div style={{ fontSize: 11.5, color: "var(--ash)" }}>
-                        {money(c.monthlyRentCents)}/mo · started {new Date(c.startDate).toLocaleDateString()}
-                        {" · "}
-                        <b style={{ color: c.status === "ACTIVE" ? "var(--green)" : c.status === "TERMINATING" ? "var(--red)" : "var(--ash)" }}>
-                          {c.status === "TERMINATING" && c.endDate ? `ENDS ${new Date(c.endDate).toLocaleDateString()}` : c.status}
-                        </b>
-                      </div>
+          <Card
+            className="mb-4"
+            title="Booth contracts"
+            subtitle="Rent auto-charges on the 1st of every month at midnight — first and final months prorate by day. Nothing for you to remember."
+          >
+            <DataTable
+              rows={contracts}
+              columns={[
+                {
+                  key: "booth",
+                  header: "Booth",
+                  primary: true,
+                  sortBy: (c) => c.boothLabel,
+                  cell: (c) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <b className="truncate">Booth {c.boothLabel}</b>
+                      <span className="t-xs t-muted truncate">{c.vendor.businessName}</span>
                     </div>
-                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                      <a className="btn small ghost" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">🖨 PACKET</a>
-                      <button className="btn small ghost" disabled={busy} onClick={async () => {
-                        setBusy(true);
-                        try {
-                          const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_for_signature" }) });
-                          const d = await r.json().catch(() => ({}));
-                          alert(r.ok ? `Signing link emailed to ${d.sentTo} ✓` : d.error || `Couldn't send (${r.status}).`);
-                        } catch (e) {
-                          alert(`Couldn't send — ${e instanceof Error ? e.message : "network error"}`);
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}>📧 SEND FOR SIGNATURE</button>
-                      {!c.vendorSignedAt && (c.viewedAt
-                        ? <b style={{ fontSize: 11, color: "var(--green)", alignSelf: "center" }}>👀 viewed {new Date(c.viewedAt).toLocaleDateString()}</b>
-                        : <b style={{ fontSize: 11, color: "var(--ash)", alignSelf: "center" }}>not opened yet</b>)}
-                      <button className="btn small ghost" disabled={busy} onClick={async () => {
-                        setBusy(true);
-                        try {
-                          const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_setup_guide" }) });
-                          const d = await r.json().catch(() => ({}));
-                          alert(r.ok ? `Setup guide emailed to ${d.sentTo} ✓` : d.error || `Couldn't send (${r.status}).`);
-                        } catch (e) {
-                          alert(`Couldn't send — ${e instanceof Error ? e.message : "network error"}`);
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}>📖 RESEND GUIDE</button>
-                      {(() => { const settled = (c.vendorBalanceCents ?? 0) >= 0 && !!c.vendor.cardLast4; return (
-                        <button className="btn small ghost" disabled={busy || settled} title={settled ? "Rent covered and card on file — nothing to send" : ""} style={settled ? { opacity: 0.45 } : {}} onClick={async () => {
-                          setBusy(true);
-                          try {
-                            const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_rent_link" }) });
-                            const d = await r.json().catch(() => ({}));
-                            alert(r.ok ? `Rent payment link emailed to ${d.sentTo} \u2713` : d.error || `Couldn't send (${r.status}).`);
-                          } catch (e) {
-                            alert(`Couldn't send — ${e instanceof Error ? e.message : "network error"}`);
-                          } finally { setBusy(false); }
-                        }}>{settled ? "✅ RENT PAID · CARD ON FILE" : "💰 SEND RENT PAYMENT LINK"}</button>
-                      ); })()}
-                      {c.status === "ACTIVE" && (
+                  ),
+                },
+                {
+                  key: "rent",
+                  header: "Rent",
+                  align: "right",
+                  sortBy: (c) => c.monthlyRentCents,
+                  cell: (c) => <span className="num">{money(c.monthlyRentCents)}/mo</span>,
+                },
+                {
+                  key: "started",
+                  header: "Started",
+                  hideBelow: 900,
+                  sortBy: (c) => c.startDate,
+                  cell: (c) => fmtDate(c.startDate),
+                },
+                {
+                  key: "signing",
+                  header: "Signatures",
+                  sortBy: (c) => (c.vendorSignedAt && c.marketSignedAt ? 0 : c.vendorSignedAt || c.marketSignedAt ? 1 : 2),
+                  cell: (c) =>
+                    c.vendorSignedAt && c.marketSignedAt ? (
+                      <Badge tone="success" dot>Fully executed</Badge>
+                    ) : c.vendorSignedAt ? (
+                      <Badge tone="warn" dot>Awaiting your signature</Badge>
+                    ) : c.marketSignedAt ? (
+                      <Badge tone="warn" dot>Awaiting vendor</Badge>
+                    ) : (
+                      <Badge tone="neutral" dot>Unsigned</Badge>
+                    ),
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  sortBy: (c) => c.status,
+                  cell: (c) =>
+                    c.status === "ACTIVE" ? (
+                      <Badge tone="success" dot>Active</Badge>
+                    ) : c.status === "TERMINATING" ? (
+                      <Badge tone="danger" dot>{c.endDate ? `Ends ${fmtDate(c.endDate)}` : "Ending"}</Badge>
+                    ) : (
+                      <Badge tone="neutral" dot>Ended</Badge>
+                    ),
+                },
+              ]}
+              rowKey={(c) => c.id}
+              loading={!overview && contracts.length === 0}
+              skeletonRows={4}
+              mobileCards
+              caption="Booth contracts, rent, and signing status"
+              onRowClick={(c) => setContractOpen(c.id)}
+              empty={
+                <EmptyState
+                  icon="contract"
+                  title="No contracts yet"
+                  body="Create the first booth contract below — the vendor gets a link to sign it."
+                />
+              }
+            />
+          </Card>
+
+          {/* Contract detail slide-over — signing, emails, rent, and ending. */}
+          {(() => {
+            const c = contracts.find((x) => x.id === contractOpen);
+            if (!c) return null;
+            const settled = (c.vendorBalanceCents ?? 0) >= 0 && !!c.vendor.cardLast4;
+            const sendMail = async (action: string, what: string) => {
+              setBusy(true);
+              try {
+                const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+                const d = await r.json().catch(() => ({}));
+                if (r.ok) toast.success(`${what} sent`, `Emailed to ${d.sentTo}.`);
+                else toast.error(`Couldn't send the ${what.toLowerCase()}`, String(d.error || `Error ${r.status}.`));
+              } catch (e) {
+                toast.error(`Couldn't send the ${what.toLowerCase()}`, e instanceof Error ? e.message : "Network error.");
+              } finally {
+                setBusy(false);
+              }
+            };
+            return (
+              <Panel
+                open
+                onClose={() => setContractOpen(null)}
+                title={`Booth ${c.boothLabel}`}
+                subtitle={c.vendor.businessName}
+                actions={
+                  <a className="btn btn-ghost btn-sm" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">
+                    <Icon name="print" size={14} /> Packet
+                  </a>
+                }
+              >
+                <div className="stack g-5">
+                  <div className="row wrap g-2">
+                    {c.status === "ACTIVE" ? (
+                      <Badge tone="success" dot>Active</Badge>
+                    ) : c.status === "TERMINATING" ? (
+                      <Badge tone="danger" dot>{c.endDate ? `Ends ${fmtDate(c.endDate)}` : "Ending"}</Badge>
+                    ) : (
+                      <Badge tone="neutral" dot>Ended</Badge>
+                    )}
+                    {c.vendorSignedAt && c.marketSignedAt ? (
+                      <Badge tone="success" dot>Fully executed</Badge>
+                    ) : c.vendorSignedAt ? (
+                      <Badge tone="warn" dot>Awaiting your signature</Badge>
+                    ) : c.marketSignedAt ? (
+                      <Badge tone="warn" dot>Awaiting vendor</Badge>
+                    ) : (
+                      <Badge tone="neutral" dot>Unsigned</Badge>
+                    )}
+                  </div>
+
+                  <DescList
+                    items={[
+                      { label: "Vendor", value: `${c.vendor.code} · ${c.vendor.businessName}` },
+                      { label: "Monthly rent", value: <span className="num">{money(c.monthlyRentCents)}</span> },
+                      { label: "Started", value: fmtDate(c.startDate) },
+                      ...(c.noticeGivenAt ? [{ label: "Notice given", value: fmtDate(c.noticeGivenAt) }] : []),
+                      ...(c.endDate ? [{ label: "Lease ends", value: fmtDate(c.endDate) }] : []),
+                      { label: "Vendor signed", value: c.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
+                      { label: "Market signed", value: c.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
+                      ...(!c.vendorSignedAt
+                        ? [{ label: "Opened by vendor", value: c.viewedAt ? fmtDate(c.viewedAt) : "Not opened yet" }]
+                        : []),
+                      { label: "Card on file", value: c.vendor.cardLast4 ? `•••• ${c.vendor.cardLast4}` : "None" },
+                    ]}
+                  />
+
+                  <div className="stack g-2">
+                    <p className="t-label">Send to the vendor</p>
+                    <div className="row wrap g-2">
+                      <Button size="sm" icon="mail" disabled={busy} onClick={() => sendMail("send_for_signature", "Signing link")}>
+                        Send for signature
+                      </Button>
+                      <Button size="sm" icon="clipboard" disabled={busy} onClick={() => sendMail("send_setup_guide", "Setup guide")}>
+                        Resend setup guide
+                      </Button>
+                      <Button
+                        size="sm"
+                        icon="dollar"
+                        disabled={busy || settled}
+                        title={settled ? "Rent covered and card on file — nothing to send" : undefined}
+                        onClick={() => sendMail("send_rent_link", "Rent payment link")}
+                      >
+                        Send rent payment link
+                      </Button>
+                    </div>
+                    {settled ? (
+                      <p className="t-xs t-muted">Rent is covered and a card is on file — there's nothing to collect.</p>
+                    ) : null}
+                  </div>
+
+                  <div className="stack g-2">
+                    <p className="t-label">Lease</p>
+                    <div className="row wrap g-2">
+                      {c.status === "ACTIVE" ? (
                         <>
-                          <button className="btn small ghost" disabled={busy} onClick={() => {
-                            const r = prompt("New monthly rent (dollars):", String(c.monthlyRentCents / 100));
-                            if (r !== null) fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyRentDollars: r }) }).then(loadAll);
-                          }}>EDIT RENT</button>
-                          <button className="btn small ghost" disabled={busy} onClick={() => giveNotice(c)}>ENTER 30-DAY NOTICE</button>
+                          <Button
+                            size="sm"
+                            icon="edit"
+                            disabled={busy}
+                            onClick={async () => {
+                              const cents = await dialog.money({
+                                title: `Monthly rent — booth ${c.boothLabel}`,
+                                body: "Takes effect on the next monthly charge. It doesn't change rent already posted to their balance.",
+                                label: "Monthly rent",
+                                defaultCents: c.monthlyRentCents,
+                                confirmLabel: "Save rent",
+                              });
+                              if (cents === null) return;
+                              setBusy(true);
+                              try {
+                                const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyRentDollars: String(cents / 100) }) });
+                                const d = await r.json().catch(() => ({}));
+                                if (!r.ok) { toast.error("Couldn't change the rent", String(d.error || `Error ${r.status}.`)); return; }
+                                toast.success(`Rent set to ${money(cents)}/mo`, `Booth ${c.boothLabel} · ${c.vendor.businessName}`);
+                                await loadAll();
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                          >
+                            Edit rent
+                          </Button>
+                          <Button size="sm" icon="calendar" disabled={busy} onClick={() => giveNotice(c)}>
+                            Enter 30-day notice
+                          </Button>
                         </>
-                      )}
-                      {c.status === "TERMINATING" && (
-                        <button className="btn small ghost" disabled={busy} onClick={() => finalStatement(c)}>FINAL STATEMENT</button>
-                      )}
-                      {c.status !== "ENDED" && (
-                        <button className="btn small ghost" style={{ color: "var(--red)", borderColor: "var(--red)" }} disabled={busy} onClick={() => contractAction(c.id, "end_now", "End this contract immediately?")}>END NOW</button>
-                      )}
+                      ) : null}
+                      {c.status === "TERMINATING" ? (
+                        <Button size="sm" icon="receipt" disabled={busy} onClick={() => finalStatement(c)}>
+                          Final statement
+                        </Button>
+                      ) : null}
+                      {c.status !== "ENDED" ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          icon="close"
+                          disabled={busy}
+                          onClick={() => contractAction(
+                            c.id,
+                            "end_now",
+                            {
+                              title: `End booth ${c.boothLabel} today?`,
+                              body: `${c.vendor.businessName}'s lease closes immediately — no 30-day notice, no further rent charges. Their balance and history stay as they are.`,
+                              confirmLabel: "End the contract",
+                              tone: "danger",
+                              typeToConfirm: "END",
+                            },
+                            `Booth ${c.boothLabel} contract ended`
+                          )}
+                        >
+                          End now
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
-                </li>
-              ))}
-              {contracts.length === 0 && <li style={{ color: "var(--ash)", fontSize: 14, paddingTop: 8 }}>No contracts yet.</li>}
-            </ul>
-          </div>
+                </div>
+              </Panel>
+            );
+          })()}
 
-          <div className="card">
-            <h2 className="display" style={{ fontSize: 17, marginBottom: 4 }}>NEW BOOTH CONTRACT</h2>
-            <label>Vendor</label>
-            <select value={cVendor} onChange={(e) => setCVendor(e.target.value)}>
-              <option value="">Choose a vendor…</option>
-              {vendors.filter((v) => v.active).map((v) => (
-                <option key={v.id} value={v.id}>{v.code} — {v.businessName}</option>
-              ))}
-            </select>
-            <label>Booth (e.g. A3, 5, NW Corner)</label>
-            <input value={cBooth} onChange={(e) => setCBooth(e.target.value)} />
-            <label>Booth size — rent prices by the square foot</label>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
-              <button className={`btn small ${cMode === "standard" ? "" : "ghost"}`} onClick={() => {
-                setCMode("standard"); setCW("5"); setCD("5"); setCRent(String(Math.round(25 * rentPerSqft * 100) / 100));
-              }}>STANDARD 5×5 — {money(Math.round(25 * rentPerSqft * 100))}/MO</button>
-              <button className={`btn small ${cMode === "custom" ? "" : "ghost"}`} onClick={() => setCMode("custom")}>CUSTOM SIZE</button>
+          <Card title="New booth contract" subtitle="The first month prorates from the start date; full rent charges on the 1st after that.">
+            <div className="stack g-4 content-narrow">
+              <Field label="Vendor" required>
+                {(p) => (
+                  <Select {...p} value={cVendor} onChange={(e) => setCVendor(e.target.value)}>
+                    <option value="">Choose a vendor…</option>
+                    {vendors.filter((v) => v.active).map((v) => (
+                      <option key={v.id} value={v.id}>{v.code} — {v.businessName}</option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+
+              <Field label="Booth" hint="However you label it on the floor — A3, 5, NW corner." required>
+                {(p) => <Input {...p} value={cBooth} onChange={(e) => setCBooth(e.target.value)} />}
+              </Field>
+
+              <div className="stack g-2">
+                <Segmented
+                  label="Booth size"
+                  value={cMode}
+                  onChange={(m) => {
+                    if (m === "standard") {
+                      setCMode("standard"); setCW("5"); setCD("5"); setCRent(String(Math.round(25 * rentPerSqft * 100) / 100));
+                    } else {
+                      setCMode("custom");
+                    }
+                  }}
+                  options={[
+                    { value: "standard", label: `Standard 5×5 — ${money(Math.round(25 * rentPerSqft * 100))}/mo` },
+                    { value: "custom", label: "Custom size" },
+                  ]}
+                />
+                <p className="t-xs t-muted">Rent prices by the square foot at {money(Math.round(rentPerSqft * 100))}/sqft.</p>
+              </div>
+
+              {cMode === "custom" ? (
+                <div className="stack g-2">
+                  <div className="row wrap g-2">
+                    <Field label="Width (ft)" className="shrink0">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={cW}
+                          onChange={(e) => { setCW(e.target.value); const w = Number(e.target.value) || 0, d = Number(cD) || 0; if (w > 0 && d > 0) setCRent(String(Math.round(w * d * rentPerSqft * 100) / 100)); }}
+                          type="number"
+                          min="1"
+                          step="1"
+                          style={{ width: 96 }}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Depth (ft)" className="shrink0">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={cD}
+                          onChange={(e) => { setCD(e.target.value); const d = Number(e.target.value) || 0, w = Number(cW) || 0; if (w > 0 && d > 0) setCRent(String(Math.round(w * d * rentPerSqft * 100) / 100)); }}
+                          type="number"
+                          min="1"
+                          step="1"
+                          style={{ width: 96 }}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                  <p className="t-sm">
+                    {sqft} sqft → <b className="num">{money(Math.round(suggestedRent * 100))}</b>/mo at {money(Math.round(rentPerSqft * 100))}/sqft
+                  </p>
+                </div>
+              ) : null}
+
+              <Field label="Monthly rent" hint="Auto-filled from the size — change it freely for deals.">
+                {(p) => <Input {...p} value={cRent} onChange={(e) => setCRent(e.target.value)} type="number" min="0" step="5" />}
+              </Field>
+
+              <Field label="Lease start date" hint="The first month prorates from this day." required>
+                {(p) => <Input {...p} value={cStart} onChange={(e) => setCStart(e.target.value)} type="date" />}
+              </Field>
+
+              {cMsg ? <Note tone={cMsg.includes("created") ? "success" : "error"}>{cMsg}</Note> : null}
+
+              <div>
+                <Button variant="primary" icon="contract" loading={busy} onClick={addContract}>
+                  Create contract
+                </Button>
+              </div>
             </div>
-            <div style={{ display: cMode === "custom" ? "flex" : "none", gap: 8, alignItems: "center" }}>
-              <input value={cW} onChange={(e) => { setCW(e.target.value); const w = Number(e.target.value) || 0, d = Number(cD) || 0; if (w > 0 && d > 0) setCRent(String(Math.round(w * d * rentPerSqft * 100) / 100)); }} type="number" min="1" step="1" style={{ width: 80 }} />
-              <b>×</b>
-              <input value={cD} onChange={(e) => { setCD(e.target.value); const d = Number(e.target.value) || 0, w = Number(cW) || 0; if (w > 0 && d > 0) setCRent(String(Math.round(w * d * rentPerSqft * 100) / 100)); }} type="number" min="1" step="1" style={{ width: 80 }} />
-              <span style={{ fontSize: 12.5, fontWeight: 700 }}>= {sqft} sqft → {money(Math.round(suggestedRent * 100))}/mo at ${rentPerSqft}/sqft</span>
-            </div>
-            <label>Monthly rent (auto-filled from size — change it freely for deals)</label>
-            <input value={cRent} onChange={(e) => setCRent(e.target.value)} type="number" min="0" step="5" />
-            <label>Lease start date (first month prorates from this day)</label>
-            <input value={cStart} onChange={(e) => setCStart(e.target.value)} type="date" />
-            <div style={{ marginTop: 14 }}>
-              <button className="btn" disabled={busy} onClick={addContract}>CREATE CONTRACT</button>
-            </div>
-            {cMsg && <p className={cMsg.includes("created") ? "ok" : "err"}>{cMsg}</p>}
-          </div>
+          </Card>
         </>
       )}
 
       {tab === "tents" && role === "admin" && (
         <div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>BOOKING PAUSE</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>Paused = the /tents page hides all dates and takes no bookings (your opened dates stay saved). Flip it off on opening day.</p>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 6 }}>
-              <input type="checkbox" checked={tentPaused} onChange={(e) => setTentPaused(e.target.checked)} style={{ width: "auto" }} />
-              Pause tent bookings
-            </label>
-            <label>Message shown while paused</label>
-            <input value={tentPauseMsg} onChange={(e) => setTentPauseMsg(e.target.value)} placeholder="Tent bookings open with the market — October 15!" />
-            <div style={{ marginTop: 10 }}>
-              <button className="btn small" onClick={() => tentAct({ action: "pause", paused: tentPaused, message: tentPauseMsg })}>SAVE</button>
-            </div>
-          </div>
-
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>OPEN TENT DATES ⛺</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>$25/day · $12.50 deposit online books the spot · $12.50 collected at the front desk at setup. Open the days you want, vendors book at <b>/tents</b>.</p>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ flex: "1 1 130px" }}><label>From</label><input type="date" value={tentFrom} onChange={(e) => setTentFrom(e.target.value)} /></span>
-              <span style={{ flex: "1 1 130px" }}><label>To</label><input type="date" value={tentTo} onChange={(e) => setTentTo(e.target.value)} /></span>
-              <span style={{ flex: "0 0 110px" }}><label>Spots per day</label><input type="number" min="1" max="20" value={tentCap} onChange={(e) => setTentCap(e.target.value)} /></span>
-            </div>
-            <label>Which weekdays in that range</label>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((d, i) => (
-                <button key={d} className={`btn small ${tentDows.includes(i) ? "" : "ghost"}`}
-                  onClick={() => setTentDows((x) => x.includes(i) ? x.filter((n) => n !== i) : [...x, i])}>{d}</button>
-              ))}
-            </div>
-            <div style={{ marginTop: 10 }}><button className="btn small" onClick={openTentRange}>OPEN THESE DATES</button></div>
-            {tentMsg && <p className={tentMsg.includes("✓") ? "ok" : "err"}>{tentMsg}</p>}
-          </div>
-
-          {tentDates.map((d) => {
-            const taken = d.bookings.filter((b) => ["PAID_DEPOSIT", "CHECKED_IN"].includes(b.status)).length;
-            return (
-              <div className="card" key={d.id} style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <b style={{ fontSize: 15 }}>{new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</b>
-                  <span style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 700 }}>{taken}/{d.capacity} booked · {d.open ? "OPEN" : "CLOSED"}</span>
-                    <button className="btn small ghost" onClick={() => tentAct({ action: "toggle", dateId: d.id, open: !d.open })}>{d.open ? "CLOSE" : "RE-OPEN"}</button>
-                    <button className="btn small ghost" onClick={() => tentAct({ action: "weatherDay", dateId: d.id }, "Call a WEATHER DAY? Every paid booking on this date becomes a future-date credit and gets emailed. This also closes the date.")}>⛈ WEATHER DAY</button>
-                  </span>
-                </div>
-                {d.bookings.filter((b) => !["CANCELED", "CREDIT_USED"].includes(b.status)).map((b) => (
-                  <div key={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", padding: "7px 0", borderTop: "1px solid var(--border)", fontSize: 13 }}>
-                    <span>
-                      <b>{b.businessName || b.name}</b> · {b.name} · {b.phone}
-                      <span style={{ fontWeight: 700 }}> · {b.status === "PAID_DEPOSIT" ? "DEPOSIT PAID — $12.50 DUE AT DESK" : b.status === "CHECKED_IN" ? "CHECKED IN ✓" : b.status === "WEATHER_CREDIT" ? "WEATHER CREDIT ISSUED" : b.status}</span>
-                    </span>
-                    <span style={{ display: "flex", gap: 5 }}>
-                      {b.status === "PAID_DEPOSIT" && <button className="btn small" onClick={() => tentAct({ action: "checkin", bookingId: b.id })}>✓ CHECK IN ($12.50)</button>}
-                      {["PAID_DEPOSIT", "RESERVED"].includes(b.status) && <button className="btn small ghost" onClick={() => tentAct({ action: "cancelBooking", bookingId: b.id }, "Cancel this booking? (No automatic refund — handle any refund in Stripe if owed.)")}>CANCEL</button>}
-                    </span>
-                  </div>
-                ))}
-                {d.bookings.filter((b) => !["CANCELED", "CREDIT_USED"].includes(b.status)).length === 0 && (
-                  <p style={{ fontSize: 12.5, color: "var(--ash)", margin: "6px 0 0" }}>No bookings yet.</p>
+          <Card
+            className="mb-4"
+            title="Booking pause"
+            subtitle="The master switch for the public tent page."
+            actions={<Badge tone={tentPaused ? "warn" : "success"} dot>{tentPaused ? "Paused" : "Taking bookings"}</Badge>}
+          >
+            <div className="stack g-3">
+              <Checkbox
+                checked={tentPaused}
+                onCheckedChange={setTentPaused}
+                label="Pause tent bookings"
+                hint="While this is on, /tents hides every date and takes no bookings. The dates you've opened stay saved — turn it back off on opening day."
+              />
+              <Field
+                label="Message shown while paused"
+                hint="Vendors see this in place of the date list."
+              >
+                {(p) => (
+                  <Input
+                    {...p}
+                    value={tentPauseMsg}
+                    onChange={(e) => setTentPauseMsg(e.target.value)}
+                    placeholder="Tent bookings open with the market — October 15!"
+                  />
                 )}
+              </Field>
+              <div>
+                <Button
+                  icon="check"
+                  loading={pending === "tent-pause"}
+                  onClick={async () => {
+                    setPending("tent-pause");
+                    try {
+                      await tentAct({ action: "pause", paused: tentPaused, message: tentPauseMsg });
+                      toast.success(tentPaused ? "Tent bookings paused" : "Tent bookings are open");
+                    } finally { setPending(""); }
+                  }}
+                >
+                  Save
+                </Button>
               </div>
-            );
-          })}
-          {tentDates.length === 0 && <p style={{ textAlign: "center", color: "var(--ash)" }}>No tent dates opened yet — open a range above.</p>}
-        </div>
-      )}
+            </div>
+          </Card>
 
-      {tab === "customers" && role === "admin" && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-            <h2 className="display" style={{ fontSize: 18 }}>CUSTOMERS ⭐</h2>
-            <button className="btn small ghost" onClick={async () => {
-              const r = await fetch("/api/admin/customers");
-              if (r.ok) { const d = await r.json(); setCustomers(d.customers); }
-            }}>REFRESH</button>
-          </div>
-          <p style={{ fontSize: 12.5, color: "var(--ash)" }}>Everyone who&rsquo;s given an email or phone — register, self-checkout, pre-orders, or following a vendor. 1 point per $2; $5 off at 100, redeemed at the register.</p>
-          {customers.length === 0 && <button className="btn small" style={{ marginTop: 8 }} onClick={async () => {
-            const r = await fetch("/api/admin/customers");
-            if (r.ok) { const d = await r.json(); setCustomers(d.customers); }
-          }}>LOAD CUSTOMERS</button>}
-          {customers.length > 0 && (
-            <table className="grid" style={{ marginTop: 10 }}>
-              <thead><tr><th>Contact</th><th>Points</th><th>Sales</th><th>Spent</th><th>Follows</th><th>Alerts</th></tr></thead>
-              <tbody>
-                {customers.map((c) => (
-                  <tr key={c.id}>
-                    <td>{c.email || c.phone}</td>
-                    <td><b>{c.points}</b></td>
-                    <td>{c.saleCount}</td>
-                    <td>{money(c.spentCents)}</td>
-                    <td>{c.follows}</td>
-                    <td>{c.unsubscribed ? "❌ off" : "✅ on"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <Card
+            className="mb-4"
+            title="Open tent dates"
+            subtitle="$25 a day — a $12.50 deposit books the spot online, the other $12.50 is collected at the front desk at setup."
+          >
+            <div className="stack g-4">
+              <div className="grid-auto" style={{ ["--min" as string]: "160px" }}>
+                <Field label="From" hint="First day to consider.">
+                  {(p) => <Input {...p} type="date" value={tentFrom} onChange={(e) => setTentFrom(e.target.value)} />}
+                </Field>
+                <Field label="To" hint="Last day to consider.">
+                  {(p) => <Input {...p} type="date" value={tentTo} onChange={(e) => setTentTo(e.target.value)} />}
+                </Field>
+                <Field label="Spots per day" hint="How many tents fit.">
+                  {(p) => (
+                    <Input
+                      {...p}
+                      type="number"
+                      min="1"
+                      max="20"
+                      inputMode="numeric"
+                      value={tentCap}
+                      onChange={(e) => setTentCap(e.target.value)}
+                    />
+                  )}
+                </Field>
+              </div>
+
+              <div className="stack g-2">
+                <p className="t-label">Which weekdays in that range</p>
+                <div className="row wrap g-2">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => (
+                    <ToggleTile
+                      key={d}
+                      on={tentDows.includes(i)}
+                      onToggle={() => setTentDows((x) => x.includes(i) ? x.filter((n) => n !== i) : [...x, i])}
+                    >
+                      {d}
+                    </ToggleTile>
+                  ))}
+                </div>
+                <p className="t-xs t-muted">
+                  Only the ticked weekdays inside the range get opened, up to 62 dates at a time.
+                  Vendors book them at <span className="mono">/tents</span>.
+                </p>
+              </div>
+
+              <div>
+                <Button
+                  icon="plus"
+                  loading={pending === "tent-open"}
+                  onClick={async () => {
+                    setPending("tent-open");
+                    try { await openTentRange(); } finally { setPending(""); }
+                  }}
+                >
+                  Open these dates
+                </Button>
+              </div>
+
+              {tentMsg ? <Note tone="error" title="Nothing was opened">{tentMsg}</Note> : null}
+            </div>
+          </Card>
+
+          {!overview && tentDates.length === 0 ? (
+            <Card>
+              <div className="stack g-3" aria-hidden>
+                <Skeleton width="40%" height={18} />
+                <Skeleton width="100%" height={13} />
+                <Skeleton width="70%" height={13} />
+              </div>
+            </Card>
+          ) : tentDates.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon="tent"
+                title="No tent dates opened yet"
+                body="Pick a range above and choose the weekdays you want to sell. Vendors can only book dates you've opened."
+              />
+            </Card>
+          ) : (
+            tentDates.map((d) => {
+              const taken = d.bookings.filter((b) => ["PAID_DEPOSIT", "CHECKED_IN"].includes(b.status)).length;
+              const live = d.bookings.filter((b) => !["CANCELED", "CREDIT_USED"].includes(b.status));
+              const left = Math.max(0, d.capacity - taken);
+              return (
+                <Card
+                  key={d.id}
+                  className="mb-3"
+                  title={new Date(d.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                  subtitle={`${taken} of ${plural(d.capacity, "spot")} booked`}
+                  actions={
+                    <>
+                      {!d.open ? (
+                        <Badge tone="neutral" dot>Closed</Badge>
+                      ) : left === 0 ? (
+                        <Badge tone="warn" dot>Full</Badge>
+                      ) : (
+                        <Badge tone="success" dot>{plural(left, "spot")} left</Badge>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={d.open ? "lock" : "unlock"}
+                        onClick={() => tentAct({ action: "toggle", dateId: d.id, open: !d.open })}
+                      >
+                        {d.open ? "Close" : "Re-open"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="dangerSoft"
+                        icon="warning"
+                        onClick={() => tentAct(
+                          { action: "weatherDay", dateId: d.id },
+                          {
+                            title: "Call a weather day?",
+                            body: "Every paid booking on this date turns into a credit toward a future date and the vendor gets an email about it. The date closes too.",
+                            confirmLabel: "Call a weather day",
+                            tone: "warn",
+                          }
+                        )}
+                      >
+                        Weather day
+                      </Button>
+                    </>
+                  }
+                >
+                  {live.length === 0 ? (
+                    <EmptyState
+                      icon="tent"
+                      title="No bookings yet"
+                      body={d.open ? "Vendors can book this date right now." : "This date is closed, so nobody can book it."}
+                    />
+                  ) : (
+                    <ul className="stack g-1" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                      {live.map((b) => (
+                        <li
+                          key={b.id}
+                          className="row-top between wrap g-2"
+                          style={{ padding: "var(--sp-3) 0", borderTop: "1px solid var(--border)" }}
+                        >
+                          <span className="stack g-1 grow" style={{ minWidth: 0 }}>
+                            <b className="truncate">{b.businessName || b.name}</b>
+                            <span className="t-xs t-muted truncate">
+                              {b.name}{b.phone ? ` · ${fmtPhone(b.phone)}` : ""}
+                            </span>
+                            <span>
+                              {b.status === "PAID_DEPOSIT" ? (
+                                <Badge tone="info" dot>Deposit paid · $12.50 due at the desk</Badge>
+                              ) : b.status === "CHECKED_IN" ? (
+                                <Badge tone="success" dot>Checked in</Badge>
+                              ) : b.status === "WEATHER_CREDIT" ? (
+                                <Badge tone="warn" dot>Weather credit issued</Badge>
+                              ) : (
+                                <Badge tone="neutral" dot>
+                                  {b.status.charAt(0) + b.status.slice(1).toLowerCase().replace(/_/g, " ")}
+                                </Badge>
+                              )}
+                            </span>
+                          </span>
+                          <span className="row wrap g-2 shrink0">
+                            {b.status === "PAID_DEPOSIT" && (
+                              <Button
+                                size="sm"
+                                icon="check"
+                                onClick={() => tentAct({ action: "checkin", bookingId: b.id })}
+                              >
+                                Check in ($12.50)
+                              </Button>
+                            )}
+                            {["PAID_DEPOSIT", "RESERVED"].includes(b.status) && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => tentAct(
+                                  { action: "cancelBooking", bookingId: b.id },
+                                  {
+                                    title: `Cancel ${b.businessName || b.name}'s booking?`,
+                                    body: "The spot frees up right away. No refund is sent automatically — if they're owed one, refund it in Stripe.",
+                                    confirmLabel: "Cancel booking",
+                                    tone: "danger",
+                                  }
+                                )}
+                              >
+                                Cancel
+                              </Button>
+                            )}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
+              );
+            })
           )}
         </div>
       )}
 
+      {tab === "customers" && role === "admin" && (
+        <CustomersCard
+          customers={customers}
+          loading={custLoading}
+          error={custErr}
+          onRefresh={loadCustomers}
+        />
+      )}
+
       {tab === "links" && role === "admin" && (
-        <div className="card">
-          <h2 className="display" style={{ fontSize: 18, marginBottom: 8 }}>SITE DIRECTORY — EVERY PAGE</h2>
+        (() => {
+          type LinkRow = { path: string; body: ReactNode; open?: boolean; qr?: string };
 
-          <h3 className="display" style={{ fontSize: 14, margin: "10px 0 4px" }}>PUBLIC — SHARE THESE</h3>
-          <table className="grid"><tbody>
-            <tr><td><a href="/market" target="_blank" rel="noopener">/market</a></td><td>Shopper directory — every vendor + what&rsquo;s on the floor right now. Put this on your website and socials.</td></tr>
-            <tr><td><a href="/apply" target="_blank" rel="noopener">/apply</a></td><td>Vendor application.</td></tr>
-            <tr><td><a href="/tents" target="_blank" rel="noopener">/tents</a></td><td>Outdoor tent booking — $12.50 deposit online, $12.50 at the desk.</td></tr>
-            <tr><td><a href="/rules" target="_blank" rel="noopener">/rules</a></td><td>Market Rules &amp; booth standards — part of every vendor contract. Updates go through me and post instantly.</td></tr>
-            <tr><td><a href="/shop" target="_blank" rel="noopener">/shop</a></td><td>Self-checkout — shoppers scan &amp; pay by card, no cashier. Print signs at <a href="/shop/sign" target="_blank" rel="noopener">/shop/sign</a>.</td></tr>
-            <tr><td>/v/CODE</td><td>Each vendor&rsquo;s public page (reviews + messaging) — their table QR points here.{vendors.length > 0 ? " Yours:" : ""}</td></tr>
-            {vendors.filter((v) => v.active).map((v) => (
-              <tr key={v.id}><td><a href={`/v/${v.code}`} target="_blank" rel="noopener">/v/{v.code}</a></td><td>{v.businessName}</td></tr>
-            ))}
-          </tbody></table>
+          const copyLink = async (path: string) => {
+            const url = typeof window === "undefined" ? path : `${window.location.origin}${path}`;
+            try {
+              await navigator.clipboard.writeText(url);
+              toast.success("Copied", url);
+            } catch {
+              toast.error("Couldn't copy", "Your browser blocked the clipboard — select the address and copy it by hand.");
+            }
+          };
 
-          <h3 className="display" style={{ fontSize: 14, margin: "14px 0 4px" }}>VENDORS</h3>
-          <table className="grid"><tbody>
-            <tr><td><a href="/" target="_blank" rel="noopener">/</a></td><td>Vendor login — the address you give every vendor.</td></tr>
-            <tr><td>/vendor</td><td>Their dashboard (items, balance, inbox, alerts) — where login lands.</td></tr>
-            <tr><td>/vendor/labels</td><td>Their barcode label picker.</td></tr>
-            <tr><td>/vendor/qr</td><td>Their printable table QR card.</td></tr>
-          </tbody></table>
+          const linkList = (rows: LinkRow[]) => (
+            <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {rows.map((r, i) => (
+                <li
+                  key={r.path}
+                  className="row-top between wrap g-3"
+                  style={{ padding: "var(--sp-3) 0", borderTop: i === 0 ? undefined : "1px solid var(--border)" }}
+                >
+                  <span className="stack g-1 grow" style={{ minWidth: 0 }}>
+                    <span className="mono t-sm truncate">{r.path}</span>
+                    <span className="t-xs t-muted">{r.body}</span>
+                  </span>
+                  <span className="row wrap g-1 shrink0">
+                    {r.open ? (
+                      <>
+                        <Button size="sm" variant="ghost" icon="copy" onClick={() => copyLink(r.path)}>
+                          Copy
+                        </Button>
+                        <LinkButton href={r.path} size="sm" variant="secondary" icon="external" external>
+                          Open
+                        </LinkButton>
+                      </>
+                    ) : (
+                      <Badge tone="neutral">Not typed by hand</Badge>
+                    )}
+                    {r.qr ? (
+                      <LinkButton href={r.qr} size="sm" variant="ghost" icon="scan" external>
+                        QR card
+                      </LinkButton>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          );
 
-          <h3 className="display" style={{ fontSize: 14, margin: "14px 0 4px" }}>YOURS</h3>
-          <table className="grid"><tbody>
-            <tr><td><a href="/admin" target="_blank" rel="noopener">/admin</a></td><td>This whole system. Employees log in here too (EMPLOYEE button).</td></tr>
-            <tr><td>/admin/contracts/…/print</td><td>Printable booth contract — reached from the 🖨 on any contract.</td></tr>
-          </tbody></table>
+          const activeVendors = vendors.filter((v) => v.active);
 
-          <h3 className="display" style={{ fontSize: 14, margin: "14px 0 4px" }}>AUTOMATIC — EMAILED, NEVER TYPED</h3>
-          <table className="grid"><tbody>
-            <tr><td>/t/…</td><td>A customer&rsquo;s private message thread (secret link in their email).</td></tr>
-            <tr><td>/pay/…</td><td>A customer&rsquo;s pre-order payment page (secret link in their email).</td></tr>
-          </tbody></table>
+          return (
+            <>
+              <Card
+                className="mb-4"
+                title="Public — share these"
+                subtitle="Anyone can open these without signing in."
+              >
+                {linkList([
+                  { path: "/market", open: true, body: "Shopper directory — every vendor and what's on the floor right now. Put this on your website and socials." },
+                  { path: "/apply", open: true, body: "Vendor application." },
+                  { path: "/tents", open: true, body: "Outdoor tent booking — $12.50 deposit online, $12.50 at the desk." },
+                  { path: "/rules", open: true, body: "Market rules and booth standards — part of every vendor contract. Edits post instantly." },
+                  { path: "/shop", open: true, body: "Self-checkout — shoppers scan and pay by card, no cashier." },
+                  { path: "/shop/sign", open: true, body: "Printable self-checkout signs for the doors and tables." },
+                ])}
+              </Card>
 
-          <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 10 }}>
-            The only three addresses worth memorizing: the bare domain for vendor login, <b>/market</b> for shoppers, <b>/apply</b> for hopefuls. Everything else is a button or an email.
-          </p>
-        </div>
+              <Card
+                className="mb-4"
+                title="Vendor pages"
+                subtitle="One public page per vendor — reviews and messaging. Their table QR points here."
+              >
+                {!overview && activeVendors.length === 0 ? (
+                  <div className="stack g-3" aria-hidden>
+                    <Skeleton width="30%" height={14} />
+                    <Skeleton width="80%" height={13} />
+                    <Skeleton width="60%" height={13} />
+                  </div>
+                ) : activeVendors.length === 0 ? (
+                  <EmptyState
+                    icon="store"
+                    title="No active vendors yet"
+                    body="Every vendor you add gets a page at /v/ plus their code."
+                  />
+                ) : (
+                  linkList(
+                    activeVendors.map((v) => ({
+                      path: `/v/${v.code}`,
+                      open: true,
+                      qr: "/vendor/qr",
+                      body: v.businessName,
+                    }))
+                  )
+                )}
+              </Card>
+
+              <Card
+                className="mb-4"
+                title="For vendors"
+                subtitle="Behind the vendor login — give out the first one, the rest are buttons inside."
+              >
+                {linkList([
+                  { path: "/", open: true, body: "Vendor login — the address you give every vendor." },
+                  { path: "/vendor", body: "Their dashboard: items, balance, inbox, alerts. Where login lands." },
+                  { path: "/vendor/labels", body: "Their barcode label picker." },
+                  { path: "/vendor/qr", qr: "/vendor/qr", body: "Their printable table QR card." },
+                ])}
+              </Card>
+
+              <Card className="mb-4" title="Yours" subtitle="Staff and owner pages.">
+                {linkList([
+                  { path: "/admin", open: true, body: "This whole system. Employees sign in here too, with the employee button." },
+                  { path: "/admin/contracts/…/print", body: "Printable booth contract — reached from the print action on any contract." },
+                ])}
+              </Card>
+
+              <Card
+                className="mb-4"
+                title="Automatic"
+                subtitle="Secret links the system emails out. Nobody types these."
+              >
+                {linkList([
+                  { path: "/t/…", body: "A customer's private message thread." },
+                  { path: "/pay/…", body: "A customer's pre-order payment page." },
+                ])}
+              </Card>
+
+              <Note tone="info" title="Only three are worth memorizing">
+                The bare domain for vendor login, <span className="mono">/market</span> for shoppers,
+                and <span className="mono">/apply</span> for hopefuls. Everything else is a button or an email.
+              </Note>
+            </>
+          );
+        })()
       )}
 
       {tab === "settings" && (
-        <>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>SALES TAX</h2>
-            <label>Rate (%) — combined state + county + city for Noble</label>
-            <input type="number" min="0" max="15" step="0.125" value={taxRate} onChange={(e) => setTaxRate(Number(e.target.value))} />
-            <div style={{ marginTop: 14 }}><button className="btn small" onClick={saveTax}>SAVE</button></div>
-            {settingsMsg && <p className={settingsMsg.includes("✓") ? "ok" : "err"}>{settingsMsg}</p>}
-            <p style={{ fontSize: 12, color: "var(--ash)", marginTop: 12 }}>
-              Verify Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
-            </p>
-          </div>
+        (() => {
+          /* The old screen decided whether a save had worked by searching the
+             message string for a check mark. Successes are toasts now, so these
+             state variables only ever hold an error — if one is set, it failed. */
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>DUAL PRICING 💳</h2>
-            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
-              Posted prices are card prices; cash customers skip the non-cash adjustment. Applied automatically at the register when CARD is tapped (0 turns it off; card networks cap this at 4%). Post the disclosure sign at the door and register: <a href="/admin/dual-pricing-sign" target="_blank" rel="noopener"><b>print the sign</b></a>.
-            </p>
-            <label>Non-cash adjustment (%)</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input type="number" min="0" max="4" step="0.5" value={cardAdj} onChange={(e) => setCardAdj(e.target.value)} style={{ maxWidth: 120 }} />
-              <button className="btn small" onClick={async () => {
-                const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cardAdjustPercent: Number(cardAdj) }) });
-                if (!r.ok) { const d = await r.json(); alert(d.error || "Couldn't save."); }
-              }}>SAVE</button>
-            </div>
-          </div>
+          return (
+            <>
+              <Card
+                className="mb-4"
+                title="Sales tax"
+                subtitle="Charged on every register and self-checkout sale."
+              >
+                <div className="stack g-3">
+                  <Field
+                    label="Rate (%)"
+                    hint="Combined state, county and city rate for Noble. New sales use this; tickets already rung keep the rate they were rung at."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number"
+                        min="0"
+                        max="15"
+                        step="0.125"
+                        inputMode="decimal"
+                        value={taxRate}
+                        onChange={(e) => setTaxRate(Number(e.target.value))}
+                      />
+                    )}
+                  </Field>
+                  <div>
+                    <Button
+                      icon="check"
+                      loading={pending === "tax"}
+                      onClick={async () => {
+                        setPending("tax");
+                        try { await saveTax(); } finally { setPending(""); }
+                      }}
+                    >
+                      Save tax rate
+                    </Button>
+                  </div>
+                  {settingsMsg ? (
+                    <Note tone="error" title="Couldn't save the tax rate">{settingsMsg}</Note>
+                  ) : null}
+                  <Note tone="info">
+                    Check Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
+                  </Note>
+                </div>
+              </Card>
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>SELF-CHECKOUT 🛒</h2>
-            <p style={{ fontSize: 12.5, color: "var(--ash)" }}>
-              Master switch for the whole scan-and-pay page at <b>/shop</b>. Pausing it hides everything and tells shoppers to pay at the register — individual vendors are toggled on their row in the VENDORS tab.
-            </p>
-            <p style={{ fontSize: 13, fontWeight: 700, marginTop: 8 }}>
-              Right now: {scPaused ? "⏸ PAUSED — register only" : "🟢 ON — shoppers can scan & pay"}
-            </p>
-            <div style={{ marginTop: 8 }}>
-              <button className="btn small" onClick={async () => {
-                const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selfCheckoutPaused: !scPaused }) });
-                if (r.ok) setScPaused((p) => !p);
-              }}>{scPaused ? "▶ TURN SELF-CHECKOUT ON" : "⏸ PAUSE SELF-CHECKOUT"}</button>
-            </div>
-          </div>
+              <Card
+                className="mb-4"
+                title="Card adjustment"
+                subtitle="Dual pricing — posted prices are card prices, cash customers pay less."
+              >
+                <div className="stack g-3">
+                  <Field
+                    label="Non-cash adjustment (%)"
+                    hint="Added automatically at the register when a sale is paid by card. 0 turns it off, and the card networks cap it at 4%."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number"
+                        min="0"
+                        max="4"
+                        step="0.5"
+                        inputMode="decimal"
+                        value={cardAdj}
+                        onChange={(e) => setCardAdj(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <div className="row wrap g-2">
+                    <Button
+                      icon="check"
+                      loading={pending === "cardadj"}
+                      onClick={async () => {
+                        setPending("cardadj");
+                        try {
+                          const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cardAdjustPercent: Number(cardAdj) }) });
+                          if (!r.ok) {
+                            const d = await r.json().catch(() => ({}));
+                            toast.error("Couldn't save the card adjustment", String(d.error || ""));
+                            return;
+                          }
+                          toast.success(
+                            "Card adjustment saved",
+                            Number(cardAdj) > 0
+                              ? `Card sales add ${cardAdj}% at the register.`
+                              : "Card and cash prices are the same again."
+                          );
+                        } finally { setPending(""); }
+                      }}
+                    >
+                      Save adjustment
+                    </Button>
+                    <LinkButton href="/admin/dual-pricing-sign" variant="secondary" icon="print" external>
+                      Print the disclosure sign
+                    </LinkButton>
+                  </div>
+                  <Note tone="warn" title="The sign has to be up">
+                    Because cash customers skip the adjustment, the disclosure sign belongs at the door and at the register.
+                  </Note>
+                </div>
+              </Card>
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>ADMIN NOTIFICATIONS 🔔</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>
-              Get a push on this device when: a vendor application comes in 📋 · a complaint is filed ⚠️ · a tent gets booked ⛺ · a pre-order is paid 💳.
-              {adminPushDevices !== null && ` Devices enabled: ${adminPushDevices}.`}
-            </p>
-            <div style={{ marginTop: 8 }}><button className="btn small" onClick={enableAdminPush}>ENABLE ON THIS DEVICE</button></div>
-            {adminPushMsg && <p className={adminPushMsg.includes("✓") ? "ok" : "err"}>{adminPushMsg}</p>}
-          </div>
+              <Card
+                className="mb-4"
+                title="Self-checkout"
+                subtitle="The scan-and-pay page at /shop."
+                actions={<Badge tone={scPaused ? "warn" : "success"} dot>{scPaused ? "Paused" : "On"}</Badge>}
+              >
+                <Checkbox
+                  checked={!scPaused}
+                  onCheckedChange={async () => {
+                    const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selfCheckoutPaused: !scPaused }) });
+                    if (r.ok) {
+                      setScPaused((p) => !p);
+                      toast.success(
+                        scPaused ? "Self-checkout is on" : "Self-checkout paused",
+                        scPaused ? "Shoppers can scan and pay at /shop." : "Shoppers are sent to the register instead."
+                      );
+                    } else {
+                      toast.error("Couldn't change self-checkout", "Nothing was saved — try again in a moment.");
+                    }
+                  }}
+                  label="Let shoppers scan and pay themselves"
+                  hint="Turning this off hides the whole page and tells shoppers to pay at the register. Individual vendors are switched on their own row under Vendors."
+                />
+              </Card>
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>BOOTH RENT RATE</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>Every booth prices at this rate × its square footage. $6/sqft makes the standard 5×5 exactly $150.</p>
-            <label>Rate ($ per square foot per month)</label>
-            <input type="number" min="0.5" step="0.25" value={rentPerSqft} onChange={(e) => setRentPerSqft(Number(e.target.value))} />
-            <p style={{ fontSize: 12, marginTop: 8 }}>
-              At ${rentPerSqft}/sqft: 4×4 = {money(Math.round(16 * rentPerSqft * 100))} · 5×5 = {money(Math.round(25 * rentPerSqft * 100))} · 5×10 = {money(Math.round(50 * rentPerSqft * 100))} · 10×10 = {money(Math.round(100 * rentPerSqft * 100))}
-            </p>
-            <div style={{ marginTop: 10 }}><button className="btn small" onClick={saveRate}>SAVE RATE</button></div>
-            {rateMsg && <p className={rateMsg.includes("✓") ? "ok" : "err"}>{rateMsg}</p>}
-          </div>
+              <Card
+                className="mb-4"
+                title="Booth rent rate"
+                subtitle="Every booth prices at this rate times its square footage."
+              >
+                <div className="stack g-3">
+                  <Field
+                    label="Rate ($ per square foot per month)"
+                    hint="$6 a square foot makes the standard 5 × 5 exactly $150. Changing it only affects rents you set from here on."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number"
+                        min="0.5"
+                        step="0.25"
+                        inputMode="decimal"
+                        value={rentPerSqft}
+                        onChange={(e) => setRentPerSqft(Number(e.target.value))}
+                      />
+                    )}
+                  </Field>
+                  <DescList
+                    items={[
+                      { label: "4 × 4", value: <span className="num">{money(Math.round(16 * rentPerSqft * 100))}/mo</span> },
+                      { label: "5 × 5", value: <span className="num">{money(Math.round(25 * rentPerSqft * 100))}/mo</span> },
+                      { label: "5 × 10", value: <span className="num">{money(Math.round(50 * rentPerSqft * 100))}/mo</span> },
+                      { label: "10 × 10", value: <span className="num">{money(Math.round(100 * rentPerSqft * 100))}/mo</span> },
+                    ]}
+                  />
+                  <div>
+                    <Button
+                      icon="check"
+                      loading={pending === "rate"}
+                      onClick={async () => {
+                        setPending("rate");
+                        try { await saveRate(); } finally { setPending(""); }
+                      }}
+                    >
+                      Save rate
+                    </Button>
+                  </div>
+                  {rateMsg ? (
+                    <Note tone="error" title="Couldn't save the rate">{rateMsg}</Note>
+                  ) : null}
+                </div>
+              </Card>
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>PUBLIC BANNER — /APPLY &amp; /MARKET</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>The black announcement box on the public pages. Edit it, or untick to remove it — no code needed.</p>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 8 }}>
-              <input type="checkbox" checked={banEnabled} onChange={(e) => setBanEnabled(e.target.checked)} style={{ width: "auto" }} />
-              Show the banner
-            </label>
-            <label>Big line</label>
-            <input value={banTitle} onChange={(e) => setBanTitle(e.target.value)} placeholder="COMING SOON" />
-            <label>Second line (date works well here)</label>
-            <input value={banDate} onChange={(e) => setBanDate(e.target.value)} placeholder="EXPECTED GRAND OPENING — OCTOBER 15, 2026 · 8:00 AM" />
-            <label>Small line</label>
-            <input value={banMessage} onChange={(e) => setBanMessage(e.target.value)} placeholder="Apply to get on the vendor list before the doors open." />
-            <div style={{ marginTop: 12 }}><button className="btn small" onClick={saveBanner}>SAVE BANNER</button></div>
-            {banMsg && <p className={banMsg.includes("✓") ? "ok" : "err"}>{banMsg}</p>}
-          </div>
+              <Card
+                className="mb-4"
+                title="Public banner"
+                subtitle="The announcement box on /apply and /market."
+                actions={<Badge tone={banEnabled ? "success" : "neutral"} dot>{banEnabled ? "Showing" : "Hidden"}</Badge>}
+              >
+                <div className="stack g-3">
+                  <Checkbox
+                    checked={banEnabled}
+                    onCheckedChange={setBanEnabled}
+                    label="Show the banner"
+                    hint="Untick and save to take it down. Nothing else on the public pages changes."
+                  />
+                  <Field label="Big line" hint="The headline — two or three words.">
+                    {(p) => <Input {...p} value={banTitle} onChange={(e) => setBanTitle(e.target.value)} placeholder="Coming soon" />}
+                  </Field>
+                  <Field label="Second line" hint="A date reads well here.">
+                    {(p) => <Input {...p} value={banDate} onChange={(e) => setBanDate(e.target.value)} placeholder="Expected grand opening — October 15, 2026 · 8:00 AM" />}
+                  </Field>
+                  <Field label="Small line" hint="One sentence telling people what to do next.">
+                    {(p) => <Input {...p} value={banMessage} onChange={(e) => setBanMessage(e.target.value)} placeholder="Apply to get on the vendor list before the doors open." />}
+                  </Field>
+                  <div>
+                    <Button
+                      icon="check"
+                      loading={pending === "banner"}
+                      onClick={async () => {
+                        setPending("banner");
+                        try { await saveBanner(); } finally { setPending(""); }
+                      }}
+                    >
+                      Save banner
+                    </Button>
+                  </div>
+                  {banMsg ? (
+                    <Note tone="error" title="Couldn't save the banner">{banMsg}</Note>
+                  ) : null}
+                </div>
+              </Card>
 
-          <div className="card">
-            <h2 className="display" style={{ fontSize: 18, marginBottom: 4 }}>REGISTER EMPLOYEES</h2>
-            <p style={{ fontSize: 12, color: "var(--ash)" }}>Anyone who can sign in and open/close the cash drawer.</p>
-            <ul style={{ listStyle: "none", margin: "10px 0" }}>
-              {employees.map((e) => (
-                <li key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid var(--border)" }}>
-                  <b>{e.name}</b>
-                  <button className="btn small ghost" onClick={() => removeEmployee(e)}>REMOVE</button>
-                </li>
-              ))}
-              {employees.length === 0 && <li style={{ color: "var(--ash)", fontSize: 13 }}>None yet — add yourself first.</li>}
-            </ul>
-            <label>Name</label>
-            <input value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} placeholder="Kalie" />
-            <label>PIN (4–6 digits)</label>
-            <input value={newEmpPin} onChange={(e) => setNewEmpPin(e.target.value)} inputMode="numeric" />
-            <div style={{ marginTop: 12 }}><button className="btn small" onClick={addEmployee}>ADD / UPDATE EMPLOYEE</button></div>
-            {empMsg && <p className={empMsg.includes("✓") ? "ok" : "err"}>{empMsg}</p>}
-          </div>
-        </>
+              <Card
+                className="mb-4"
+                title="Register employees"
+                subtitle="Anyone who can sign in and open or close the cash drawer."
+              >
+                <div className="stack g-4">
+                  {!overview && employees.length === 0 ? (
+                    <div className="stack g-2" aria-hidden>
+                      <Skeleton width="45%" height={14} />
+                      <Skeleton width="35%" height={14} />
+                    </div>
+                  ) : employees.length === 0 ? (
+                    <EmptyState
+                      icon="users"
+                      title="Nobody can open the register yet"
+                      body="Add yourself first — you'll need a name and a PIN to sign in at the register."
+                    />
+                  ) : (
+                    <ul className="stack g-1" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                      {employees.map((e) => (
+                        <li
+                          key={e.id}
+                          className="row between g-2"
+                          style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border)" }}
+                        >
+                          <b className="truncate">{e.name}</b>
+                          <Button size="sm" variant="ghost" icon="trash" onClick={() => removeEmployee(e)}>
+                            Remove
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <div className="stack g-3">
+                    <p className="t-label">Add or update someone</p>
+                    <div className="grid-auto" style={{ ["--min" as string]: "180px" }}>
+                      <Field label="Name" hint="Exactly how they'll type it at sign-in.">
+                        {(p) => <Input {...p} value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} placeholder="Kalie" />}
+                      </Field>
+                      <Field label="PIN" hint="4 to 6 digits. Entering an existing name resets that person's PIN.">
+                        {(p) => (
+                          <Input
+                            {...p}
+                            value={newEmpPin}
+                            onChange={(e) => setNewEmpPin(e.target.value)}
+                            inputMode="numeric"
+                            autoComplete="off"
+                          />
+                        )}
+                      </Field>
+                    </div>
+                    <div>
+                      <Button
+                        icon="plus"
+                        loading={pending === "employee"}
+                        onClick={async () => {
+                          setPending("employee");
+                          try { await addEmployee(); } finally { setPending(""); }
+                        }}
+                      >
+                        Save employee
+                      </Button>
+                    </div>
+                    {empMsg ? (
+                      <Note tone="error" title="Couldn't save that employee">{empMsg}</Note>
+                    ) : null}
+                  </div>
+                </div>
+              </Card>
+
+              <Card
+                title="Admin notifications"
+                subtitle={adminPushDevices !== null ? `${plural(adminPushDevices, "device")} set up` : undefined}
+              >
+                <div className="stack g-3">
+                  <p className="t-sm t-secondary">
+                    Get a push on this device when a vendor application comes in, a complaint is filed,
+                    a tent gets booked, or a pre-order is paid.
+                  </p>
+                  <div>
+                    <Button
+                      icon="bell"
+                      loading={pending === "push"}
+                      onClick={async () => {
+                        setPending("push");
+                        try { await enableAdminPush(); } finally { setPending(""); }
+                      }}
+                    >
+                      Enable on this device
+                    </Button>
+                  </div>
+                  {adminPushMsg ? (
+                    <Note tone="warn" title="Not turned on here">{adminPushMsg}</Note>
+                  ) : null}
+                  <Note tone="info" title="On an iPhone">
+                    Share → Add to Home Screen, open the admin app from that icon, then enable. iOS 16.4 or newer.
+                  </Note>
+                </div>
+              </Card>
+            </>
+          );
+        })()
       )}
 
+            </>
+          )}
+        </main>
+      </div>
+
+      {/* --------------------------------------------------- mobile tab bar */}
+      <nav className="tabbar no-print" aria-label="Admin sections">
+        {primaryMobile.map((t) => (
+          <button
+            key={t}
+            type="button"
+            className="tabbar-item"
+            aria-current={tab === t ? "page" : undefined}
+            onClick={() => go(t)}
+          >
+            <span style={{ position: "relative", display: "block" }}>
+              <Icon name={TAB_META[t].icon} size={20} />
+              {navBadge[t] ? (
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute", top: -3, right: -6,
+                    minWidth: 15, height: 15, padding: "0 3px",
+                    borderRadius: "var(--r-full)", background: "var(--danger)",
+                    color: "#fff", fontSize: 9, fontWeight: 700,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  {navBadge[t]}
+                </span>
+              ) : null}
+            </span>
+            <span>{TAB_META[t].label}</span>
+          </button>
+        ))}
+        {moreMobile.length > 0 ? (
+          <button
+            type="button"
+            className="tabbar-item"
+            aria-expanded={moreOpen}
+            aria-current={moreMobile.includes(tab) ? "page" : undefined}
+            onClick={() => setMoreOpen(true)}
+          >
+            <Icon name="more" size={20} />
+            <span>More</span>
+          </button>
+        ) : null}
+      </nav>
+
+      <Modal
+        open={moreOpen}
+        onClose={() => setMoreOpen(false)}
+        title="All sections"
+        width="sm"
+      >
+        <div className="stack g-1">
+          {moreMobile.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className="nav-item"
+              style={{ minHeight: 46 }}
+              aria-current={tab === t ? "page" : undefined}
+              onClick={() => go(t)}
+            >
+              <Icon name={TAB_META[t].icon} size={17} />
+              <span className="truncate">{TAB_META[t].label}</span>
+              {navBadge[t] ? <span className="nav-item-count">{navBadge[t]}</span> : null}
+            </button>
+          ))}
+          <div className="divider mt-2 mb-2" />
+          <button type="button" className="nav-item" style={{ minHeight: 46 }} onClick={staffLogout}>
+            <Icon name="logout" size={17} />
+            <span>Sign out</span>
+          </button>
+        </div>
+      </Modal>
+
       <div id="printzone" ref={printRef}></div>
-    </main>
+    </div>
+  );
+}
+
+/* ==========================================================================
+   Report export + hour labels
+   The CSV is built from the report already in state — no new API surface,
+   no server round-trip, and it matches exactly what's on screen.
+   ========================================================================== */
+
+function hourShort(hh: number) {
+  return `${((hh + 11) % 12) + 1}${hh >= 12 ? "p" : "a"}`;
+}
+
+function hourLabel(hh: number) {
+  return `${((hh + 11) % 12) + 1} ${hh >= 12 ? "PM" : "AM"}`;
+}
+
+function csvCell(v: string | number) {
+  const s = String(v ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadReportCsv(r: Report, scopeLabel: string) {
+  const d = (cents: number) => (cents / 100).toFixed(2);
+  const rows: (string | number)[][] = [
+    ["Sales report"],
+    ["Scope", scopeLabel],
+    ["Period start", r.start],
+    ["Period end", r.end],
+    [],
+    ["Summary", "Amount"],
+    ["Gross sales (pre-tax)", d(r.gross)],
+    ["Tax collected", d(r.tax)],
+    ["Cash taken", d(r.cash)],
+    ["Card taken", d(r.card)],
+    ["Refunds given back", d(r.refundTotal || 0)],
+    ["Tickets", r.tickets],
+    ["Units sold", r.units],
+    ["Vendor gross", d(r.vGross)],
+    ["Vendor net (after commission)", d(r.vNet)],
+    [],
+    ["By vendor", "Code", "Gross"],
+    ...r.byVendor.map((v) => [v.vendor?.businessName || "Unknown vendor", v.vendor?.code || "", d(v.cents)]),
+    [],
+    ["By item", "Units", "Gross"],
+    ...r.byItem.map((i) => [i.name, i.q, d(i.c)]),
+    [],
+    ["By hour", "Gross"],
+    ...Object.keys(r.byHour || {})
+      .sort((a, b) => Number(a) - Number(b))
+      .map((h) => [hourLabel(Number(h)), d(r.byHour[h] || 0)]),
+  ];
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  // The BOM keeps Excel from mangling the dashes in vendor names.
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `sales-report-${r.start}-to-${r.end}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/* ==========================================================================
+   Floor stock
+   Owns its own search box so the filter state lives next to the table that
+   uses it rather than in the page-level pile of hooks.
+   ========================================================================== */
+
+const LOW_STOCK = 3;
+
+function FloorStockCard({
+  items,
+  loading,
+  month,
+}: {
+  items: FloorItem[];
+  loading: boolean;
+  month?: { count: number; totalCents: number; taxCents: number };
+}) {
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const rows = query
+    ? items.filter((i) => `${i.sku} ${i.name} ${i.vendorCode} ${i.vendorName}`.toLowerCase().includes(query))
+    : items;
+
+  const outCount = items.filter((i) => i.quantity === 0).length;
+  const lowCount = items.filter((i) => i.quantity > 0 && i.quantity <= LOW_STOCK).length;
+  const unitCount = items.reduce((s, i) => s + i.quantity, 0);
+
+  const columns: Column<FloorItem>[] = [
+    {
+      key: "item",
+      header: "Item",
+      primary: true,
+      sortBy: (i) => i.name,
+      cell: (i) => (
+        <div className="stack g-1" style={{ minWidth: 0 }}>
+          <b className="truncate">{i.name}</b>
+          <span className="t-xs t-muted mono truncate">{i.sku}</span>
+        </div>
+      ),
+    },
+    {
+      key: "vendor",
+      header: "Vendor",
+      hideBelow: 760,
+      sortBy: (i) => i.vendorName,
+      cell: (i) => (
+        <span className="truncate">
+          <span className="mono t-muted">{i.vendorCode}</span> {i.vendorName}
+        </span>
+      ),
+    },
+    {
+      key: "price",
+      header: "Price",
+      align: "right",
+      sortBy: (i) => i.priceCents,
+      cell: (i) => <span className="num">{money(i.priceCents)}</span>,
+    },
+    {
+      key: "qty",
+      header: "On hand",
+      align: "right",
+      sortBy: (i) => i.quantity,
+      cell: (i) =>
+        i.quantity === 0 ? (
+          <Badge tone="danger" dot>Out of stock</Badge>
+        ) : i.quantity <= LOW_STOCK ? (
+          <Badge tone="warn" dot>Only {i.quantity} left</Badge>
+        ) : (
+          <span className="num">{i.quantity}</span>
+        ),
+    },
+  ];
+
+  return (
+    <Card
+      title="Everything on the floor"
+      subtitle={loading ? "Loading…" : `${plural(items.length, "item")} · ${plural(unitCount, "unit")} on hand`}
+      actions={
+        outCount > 0 || lowCount > 0 ? (
+          <>
+            {lowCount > 0 ? <Badge tone="warn" dot>{lowCount} running low</Badge> : null}
+            {outCount > 0 ? <Badge tone="danger" dot>{outCount} out of stock</Badge> : null}
+          </>
+        ) : undefined
+      }
+      footer={
+        month ? (
+          <span className="t-xs t-muted">
+            This month: {money(month.totalCents)} across {plural(month.count, "sale")} · tax collected{" "}
+            <b>{money(month.taxCents)}</b>
+          </span>
+        ) : undefined
+      }
+    >
+      <div className="toolbar">
+        <SearchInput
+          className="grow"
+          value={q}
+          onValueChange={setQ}
+          placeholder="Search item, code, or vendor…"
+          aria-label="Search floor stock"
+        />
+      </div>
+      <DataTable
+        rows={rows}
+        columns={columns}
+        rowKey={(i) => i.id}
+        loading={loading}
+        skeletonRows={6}
+        mobileCards
+        caption="Every item on the market floor, with price and quantity on hand"
+        empty={
+          query ? (
+            <EmptyState
+              icon="search"
+              title="Nothing matches that search"
+              body="Try part of an item name, a product code, or a vendor code."
+              action={<Button variant="secondary" onClick={() => setQ("")}>Clear search</Button>}
+            />
+          ) : (
+            <EmptyState
+              icon="grid"
+              title="Nothing on the floor yet"
+              body="Vendors add their own items from their portal — anything they list shows up here."
+            />
+          )
+        }
+      />
+    </Card>
+  );
+}
+
+/* ==========================================================================
+   Customers
+   ========================================================================== */
+
+type CustomerRow = {
+  id: string; email: string; phone: string; points: number; unsubscribed: boolean;
+  follows: number; createdAt: string; saleCount: number; spentCents: number;
+};
+
+function CustomersCard({
+  customers,
+  loading,
+  error,
+  onRefresh,
+}: {
+  customers: CustomerRow[];
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const rows = query
+    ? customers.filter((c) => `${c.email || ""} ${c.phone || ""}`.toLowerCase().includes(query))
+    : customers;
+
+  const columns: Column<CustomerRow>[] = [
+    {
+      key: "contact",
+      header: "Contact",
+      primary: true,
+      sortBy: (c) => c.email || c.phone || "",
+      cell: (c) => (
+        <div className="stack g-1" style={{ minWidth: 0 }}>
+          <b className="truncate">{c.email || (c.phone ? fmtPhone(c.phone) : "—")}</b>
+          {c.email && c.phone ? <span className="t-xs t-muted truncate">{fmtPhone(c.phone)}</span> : null}
+        </div>
+      ),
+    },
+    {
+      key: "points",
+      header: "Points",
+      align: "right",
+      sortBy: (c) => c.points,
+      cell: (c) => (
+        <span className={`num ${c.points >= 100 ? "t-accent" : ""}`}>
+          <b>{c.points}</b>
+        </span>
+      ),
+    },
+    {
+      key: "sales",
+      header: "Sales",
+      align: "right",
+      hideBelow: 760,
+      sortBy: (c) => c.saleCount,
+      cell: (c) => <span className="num">{c.saleCount}</span>,
+    },
+    {
+      key: "spent",
+      header: "Spent",
+      align: "right",
+      sortBy: (c) => c.spentCents,
+      cell: (c) => <span className="num">{money(c.spentCents)}</span>,
+    },
+    {
+      key: "follows",
+      header: "Follows",
+      align: "right",
+      hideBelow: 900,
+      sortBy: (c) => c.follows,
+      cell: (c) => <span className="num">{c.follows}</span>,
+    },
+    {
+      key: "alerts",
+      header: "Alerts",
+      sortBy: (c) => (c.unsubscribed ? 1 : 0),
+      cell: (c) =>
+        c.unsubscribed ? <Badge tone="neutral" dot>Unsubscribed</Badge> : <Badge tone="success" dot>Subscribed</Badge>,
+    },
+  ];
+
+  return (
+    <Card
+      title="Customers"
+      subtitle={`${plural(customers.length, "rewards member")} · 1 point per $2, $5 off at 100 points`}
+      actions={
+        <Button size="sm" variant="ghost" icon="refresh" loading={loading} onClick={onRefresh}>
+          Refresh
+        </Button>
+      }
+      footer={
+        <span className="t-xs t-muted">
+          Everyone who&rsquo;s given an email or phone — at the register, at self-checkout, on a
+          pre-order, or by following a vendor. Points are redeemed at the register.
+        </span>
+      }
+    >
+      {error ? (
+        <div className="mb-4">
+          <Note
+            tone="error"
+            title="Couldn't load customers"
+            action={<Button size="sm" variant="secondary" icon="refresh" onClick={onRefresh}>Try again</Button>}
+          >
+            {error}
+          </Note>
+        </div>
+      ) : null}
+      <div className="toolbar">
+        <SearchInput
+          className="grow"
+          value={q}
+          onValueChange={setQ}
+          placeholder="Search email or phone…"
+          aria-label="Search customers"
+        />
+      </div>
+      <DataTable
+        rows={rows}
+        columns={columns}
+        rowKey={(c) => c.id}
+        loading={loading && customers.length === 0}
+        skeletonRows={6}
+        defaultSort={{ key: "spent", dir: "desc" }}
+        mobileCards
+        caption="Rewards members, their points, and what they've spent"
+        empty={
+          query ? (
+            <EmptyState
+              icon="search"
+              title="No customers match that search"
+              body="Try part of an email address or a phone number."
+              action={<Button variant="secondary" onClick={() => setQ("")}>Clear search</Button>}
+            />
+          ) : (
+            <EmptyState
+              icon="star"
+              title="No customers yet"
+              body="Anyone who leaves an email or phone at the register, at self-checkout, or on a pre-order is enrolled automatically."
+            />
+          )
+        }
+      />
+    </Card>
   );
 }
