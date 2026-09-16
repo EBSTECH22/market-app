@@ -13,11 +13,12 @@ import { money, fmtDate, fmtDateShort, fmtDateTime, fmtTime, relTime, isoDate, i
 import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
 import { CashTender } from "@/components/register/CashTender";
+import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
-type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
+type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
-type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number };
+type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string };
 /** Computed server-side in /api/admin/contracts — see src/lib/agreement.ts. */
 type Delivery = {
   state: "DRAFT" | "SENT" | "OPENED" | "SIGNED" | "EXECUTED";
@@ -679,6 +680,8 @@ export default function AdminPage() {
   const [openVendor, setOpenVendor] = useState<string | null>(null);
   const [cardName, setCardName] = useState("");
   const [taxRate, setTaxRate] = useState(9.0);
+  const [foodTaxRate, setFoodTaxRate] = useState(9.0);
+  const [foodTaxInput, setFoodTaxInput] = useState("");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [autoPrint, setAutoPrint] = useState(true);
   const scanRef = useRef<HTMLInputElement>(null);
@@ -819,7 +822,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -1529,12 +1532,12 @@ export default function AdminPage() {
   };
 
   // ---------- register ----------
-  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string }) => {
+  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string; taxClass?: string }) => {
     setScanErr(""); setSearch(""); setOpenVendor(null);
     setCart((c) => {
       const line = c.find((l) => l.sku === item.sku);
       if (line) return c.map((l) => (l.sku === item.sku ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { itemId: item.id, sku: item.sku, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1 }];
+      return [...c, { itemId: item.id, sku: item.sku, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1, taxClass: item.taxClass }];
     });
   };
 
@@ -1543,11 +1546,11 @@ export default function AdminPage() {
     setScan("");
     if (!code) return;
     const inCart = cart.find((l) => l.sku === code);
-    if (inCart) { addItemToCart({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName }); return; }
+    if (inCart) { addItemToCart({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName, taxClass: inCart.taxClass }); return; }
     const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(code)}`);
     const data = await res.json();
     if (!res.ok) { setScanErr(data.error || `Nothing found for ${code}.`); return; }
-    addItemToCart({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName });
+    addItemToCart({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass });
   };
 
   const floor = overview?.floor || [];
@@ -1556,7 +1559,13 @@ export default function AdminPage() {
     : [];
 
   const subtotal = cart.reduce((n, l) => n + l.priceCents * l.quantity, 0);
-  const taxCents = Math.round((subtotal * taxRate) / 100);
+  /* Shared with the server and the kiosk — see lib/tax.ts. Food and general
+     goods carry different rates, so a ticket total can't come from one
+     multiplication any more. */
+  const taxRates = { standardPercent: taxRate, foodPercent: foodTaxRate };
+  const cartTaxLines = cart.map((l) => ({ amountCents: l.priceCents * l.quantity, taxClass: normalizeTaxClass(l.taxClass) }));
+  const taxCents = taxFor(cartTaxLines, taxRates).taxCents;
+  const shownTaxRate = displayRate(cartTaxLines, taxRates);
   const total = subtotal + taxCents;
 
   const printSale = useCallback(async (saleId: string) => {
@@ -1579,7 +1588,10 @@ export default function AdminPage() {
           <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents + (sale.saleSavingsCents || 0))}</span></div>
           ${sale.saleSavingsCents ? `<div style="display:flex;justify-content:space-between"><span>SALE SAVINGS</span><span>-${money(sale.saleSavingsCents)}</span></div>` : ""}
           ${sale.cardAdjustCents ? `<div style="display:flex;justify-content:space-between"><span>NON-CASH ADJ</span><span>${money(sale.cardAdjustCents)}</span></div>` : ""}
-          <div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>
+          ${sale.foodTaxCents && sale.standardTaxCents
+            ? `<div style="display:flex;justify-content:space-between"><span>TAX (GENERAL)</span><span>${money(sale.standardTaxCents)}</span></div>
+          <div style="display:flex;justify-content:space-between"><span>TAX (FOOD)</span><span>${money(sale.foodTaxCents)}</span></div>`
+            : `<div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>`}
           ${sale.discountCents ? `<div style="display:flex;justify-content:space-between"><span>REWARDS</span><span>-${money(sale.discountCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px"><span>TOTAL</span><span>${money(sale.totalCents)}</span></div>
           ${sale.cashTenderedCents ? `<div style="display:flex;justify-content:space-between"><span>CASH</span><span>${money(sale.cashTenderedCents)}</span></div>
@@ -3065,7 +3077,7 @@ export default function AdminPage() {
                           variant="secondary"
                           size="lg"
                           icon="plus"
-                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}
+                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass })}
                         >
                           <span className="mono t-xs">{i.sku}</span>
                           <span className="truncate">{i.name}</span>
@@ -3121,7 +3133,7 @@ export default function AdminPage() {
                           variant="secondary"
                           size="lg"
                           icon="plus"
-                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName })}
+                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass })}
                         >
                           <span className="truncate">{i.name}</span>
                           <span className="num">{money(i.priceCents)}</span>
@@ -3225,7 +3237,7 @@ export default function AdminPage() {
                   ) : (
                     <div className="t-body">Subtotal <b className="num">{money(subtotal)}</b></div>
                   ); })()}
-                  <div className="t-body">Tax ({taxRate}%) <b className="num">{money(taxCents)}</b></div>
+                  <div className="t-body">Tax{shownTaxRate === null ? " (mixed)" : ` (${shownTaxRate}%)`} <b className="num">{money(taxCents)}</b></div>
                   <div className="row g-3 mt-1" style={{ alignItems: "baseline" }}>
                     <span className="t-label">Total</span>
                     <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>
@@ -3308,7 +3320,7 @@ export default function AdminPage() {
                 {cardConfirm && (() => {
                   const adjPct = Number(cardAdj) || 0;
                   const adj = Math.round((subtotal * adjPct) / 100);
-                  const t = Math.round(((subtotal + adj) * taxRate) / 100);
+                  const t = taxFor(cartTaxLines, taxRates, adj).taxCents;
                   const disc = redeem ? Math.min(500, subtotal + adj + t) : 0;
                   const chargeTotal = subtotal + adj + t - disc;
                   return (
@@ -7239,6 +7251,57 @@ export default function AdminPage() {
 
           return (
             <>
+              <Card
+                className="mb-4"
+                title="Food tax rate"
+                subtitle="Oklahoma dropped the state's 4.5% on food and food ingredients in August 2024 but kept the local portion, so groceries are taxed — just lower."
+              >
+                <div className="stack g-3">
+                  <Field
+                    label="Food rate (%)"
+                    hint="Your local-only rate. Leave this equal to the general rate and nothing changes; set it lower and anything a vendor ticked as food is taxed at this rate instead."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number" min="0" max="15" step="0.01" inputMode="decimal"
+                        style={{ maxWidth: 160 }}
+                        value={foodTaxInput}
+                        placeholder={String(taxRate)}
+                        onChange={(e) => setFoodTaxInput(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Note tone="warn">
+                    Confirm this against your own filing before you change it. Until it&rsquo;s set, food is
+                    taxed at the general rate exactly as it is today — nothing changes by deploying.
+                  </Note>
+                  <div>
+                    <Button
+                      variant="primary"
+                      icon="check"
+                      disabled={busy || !foodTaxInput.trim()}
+                      onClick={async () => {
+                        const v = Number(foodTaxInput);
+                        if (!Number.isFinite(v) || v < 0 || v > 15) { toast.error("That's not a rate", "Enter a number between 0 and 15."); return; }
+                        setBusy(true);
+                        try {
+                          const { ok, data } = await safeFetch("/api/admin/settings", {
+                            method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ foodTaxRatePercent: v }),
+                          });
+                          if (!ok) { toast.error("Couldn't save that", String(data.error || "")); return; }
+                          setFoodTaxRate(v);
+                          toast.success("Food tax rate saved", `Food items now charge ${v}%.`);
+                        } finally { setBusy(false); }
+                      }}
+                    >
+                      Save food rate
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+
               <Card
                 className="mb-4"
                 title="Sales tax"

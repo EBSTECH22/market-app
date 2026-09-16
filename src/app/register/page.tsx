@@ -6,6 +6,7 @@ import {
   EmptyState, Skeleton, useToast,
 } from "@/components/ui";
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
+import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
 import { CashTender } from "@/components/register/CashTender";
 
@@ -28,11 +29,11 @@ const IDLE_LOCK_MS = 5 * 60 * 1000;
 
 type FloorItem = {
   id: string; sku: string; name: string; priceCents: number; basePriceCents: number;
-  quantity: number; vendorName: string; vendorCode: string;
+  quantity: number; vendorName: string; vendorCode: string; taxClass?: string;
 };
 type CartLine = {
   itemId: string; sku: string; name: string; vendorName: string;
-  priceCents: number; basePriceCents: number; quantity: number;
+  priceCents: number; basePriceCents: number; quantity: number; taxClass?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number };
 type Receipt = {
@@ -67,6 +68,7 @@ export default function RegisterKiosk() {
   const [search, setSearch] = useState("");
   const [openVendor, setOpenVendor] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(0);
+  const [foodTaxRate, setFoodTaxRate] = useState(0);
 
   const [pay, setPay] = useState<"NONE" | "CASH" | "CARD">("NONE");
   const [cardRef, setCardRef] = useState("");
@@ -84,7 +86,12 @@ export default function RegisterKiosk() {
   const printRef = useRef<HTMLDivElement>(null);
 
   const subtotal = cart.reduce((n, l) => n + l.priceCents * l.quantity, 0);
-  const taxCents = Math.round((subtotal * taxRate) / 100);
+  /* Same library the server uses, so the number on screen and the number that
+     gets booked can't disagree. */
+  const rates = { standardPercent: taxRate, foodPercent: foodTaxRate };
+  const taxLines = cart.map((l) => ({ amountCents: l.priceCents * l.quantity, taxClass: normalizeTaxClass(l.taxClass) }));
+  const taxCents = taxFor(taxLines, rates).taxCents;
+  const shownRate = displayRate(taxLines, rates);
   const total = subtotal + taxCents;
 
   /* ------------------------------------------------------------- session -- */
@@ -168,6 +175,7 @@ export default function RegisterKiosk() {
     if (!r.ok) return;
     const d = await r.json();
     if (typeof d.taxRatePercent === "number") setTaxRate(d.taxRatePercent);
+    if (typeof d.foodTaxRatePercent === "number") setFoodTaxRate(d.foodTaxRatePercent);
   }, []);
 
   useEffect(() => {
@@ -185,12 +193,12 @@ export default function RegisterKiosk() {
 
   /* ---------------------------------------------------------------- cart -- */
 
-  const addItem = (i: { id: string; sku: string; name: string; priceCents: number; basePriceCents: number; vendorName: string }) => {
+  const addItem = (i: { id: string; sku: string; name: string; priceCents: number; basePriceCents: number; vendorName: string; taxClass?: string }) => {
     setScanErr("");
     setCart((c) => {
       const line = c.find((l) => l.sku === i.sku);
       if (line) return c.map((l) => (l.sku === i.sku ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { itemId: i.id, sku: i.sku, name: i.name, vendorName: i.vendorName, priceCents: i.priceCents, basePriceCents: i.basePriceCents, quantity: 1 }];
+      return [...c, { itemId: i.id, sku: i.sku, name: i.name, vendorName: i.vendorName, priceCents: i.priceCents, basePriceCents: i.basePriceCents, quantity: 1, taxClass: i.taxClass }];
     });
   };
 
@@ -202,14 +210,14 @@ export default function RegisterKiosk() {
     setScan("");
     if (!code) return;
     const inCart = cart.find((l) => l.sku === code);
-    if (inCart) { addItem({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName }); return; }
+    if (inCart) { addItem({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName, taxClass: inCart.taxClass }); return; }
     const onFloor = floor.find((i) => i.sku === code);
     if (onFloor) { addItem(onFloor); return; }
     try {
       const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(code)}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setScanErr(String(data.error || `Nothing found for ${code}.`)); return; }
-      addItem({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName });
+      addItem({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass });
     } catch {
       // Raw fetch in the original register threw into nothing on a dropped
       // connection, so a scan during a wifi blip just did nothing at all.
@@ -290,7 +298,10 @@ export default function RegisterKiosk() {
           <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents + (sale.saleSavingsCents || 0))}</span></div>
           ${sale.saleSavingsCents ? `<div style="display:flex;justify-content:space-between"><span>SALE SAVINGS</span><span>-${money(sale.saleSavingsCents)}</span></div>` : ""}
           ${sale.cardAdjustCents ? `<div style="display:flex;justify-content:space-between"><span>NON-CASH ADJ</span><span>${money(sale.cardAdjustCents)}</span></div>` : ""}
-          <div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>
+          ${sale.foodTaxCents && sale.standardTaxCents
+            ? `<div style="display:flex;justify-content:space-between"><span>TAX (GENERAL)</span><span>${money(sale.standardTaxCents)}</span></div>
+          <div style="display:flex;justify-content:space-between"><span>TAX (FOOD)</span><span>${money(sale.foodTaxCents)}</span></div>`
+            : `<div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>`}
           ${sale.discountCents ? `<div style="display:flex;justify-content:space-between"><span>REWARDS</span><span>-${money(sale.discountCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px"><span>TOTAL</span><span>${money(sale.totalCents)}</span></div>
           ${sale.cashTenderedCents ? `<div style="display:flex;justify-content:space-between"><span>CASH</span><span>${money(sale.cashTenderedCents)}</span></div>
@@ -778,7 +789,7 @@ export default function RegisterKiosk() {
 
             <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
               <div className="t-body">Subtotal <b className="num">{money(subtotal)}</b></div>
-              <div className="t-body">Tax ({taxRate}%) <b className="num">{money(taxCents)}</b></div>
+              <div className="t-body">Tax{shownRate === null ? " (mixed)" : ` (${shownRate}%)`} <b className="num">{money(taxCents)}</b></div>
               <div className="row g-3 mt-1" style={{ alignItems: "baseline" }}>
                 <span className="t-label">Total</span>
                 <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>

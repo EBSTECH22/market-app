@@ -43,6 +43,12 @@ model Item {
   salePercent Int      @default(0)
   quantity   Int      @default(0)
   active     Boolean  @default(true)
+  // STANDARD or FOOD. Oklahoma exempts food and food ingredients from the state
+  // portion of sales tax but not the local portion, so groceries are taxed at a
+  // lower rate rather than not at all. Defaults to STANDARD: an item nobody has
+  // classified is taxed at the full rate, which is the safe direction to be
+  // wrong in.
+  taxClass   String   @default("STANDARD")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
@@ -69,6 +75,11 @@ model Sale {
   // register. Empty for every normal sale. `employee` still carries the human
   // label; this is the id you can actually group and report on.
   soldByVendorId String    @default("")
+  // The tax split as charged. Stored rather than recomputed because the rates
+  // in Settings change, and a return filed in March must show what was actually
+  // collected in February.
+  foodTaxCents     Int      @default(0)
+  standardTaxCents Int      @default(0)
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
 
@@ -137,6 +148,9 @@ model SaleLine {
   quantity        Int
   commissionCents Int    @default(0)
   vendorNetCents  Int
+  // Copied from the item at the moment of sale. Reclassifying an item later
+  // must not silently rewrite the tax on tickets already rung and filed.
+  taxClass        String @default("STANDARD")
 }
 
 model LedgerEntry {
@@ -335,6 +349,11 @@ model SelfCart {
   // Short code the customer carries to the register to pay cash. Empty on card
   // carts, cleared once it's been rung.
   registerCode    String    @default("")
+  // The tax split as quoted to the customer. Carried on the cart rather than
+  // recomputed at payment, because the rates in Settings can move between
+  // showing someone a total and them paying it.
+  foodTaxCents     Int      @default(0)
+  standardTaxCents Int      @default(0)
   createdAt       DateTime  @default(now())
   paidAt          DateTime?
 

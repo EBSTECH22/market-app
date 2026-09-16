@@ -10,7 +10,7 @@ import {
 import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
   vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
@@ -137,6 +137,7 @@ export default function VendorDashboard() {
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [qty, setQty] = useState("");
+  const [isFood, setIsFood] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [pwCur, setPwCur] = useState("");
@@ -167,7 +168,7 @@ export default function VendorDashboard() {
   const [tab, setTab] = useHashTab(VENDOR_TABS, "home");
   const [moreOpen, setMoreOpen] = useState(false);
   const [editItem, setEditItem] = useState<string | null>(null);
-  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0" });
+  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0", food: false });
   const [cardMsg, setCardMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [chat, setChat] = useState<{ id: string; vendorId: string; name: string; body: string; createdAt: string }[]>([]);
   const [chatMe, setChatMe] = useState("");
@@ -480,7 +481,7 @@ export default function VendorDashboard() {
     const res = await fetch("/api/vendor/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, priceDollars: price, quantity: qty || 0 }),
+      body: JSON.stringify({ name, priceDollars: price, quantity: qty || 0, taxClass: isFood ? "FOOD" : "STANDARD" }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -489,7 +490,7 @@ export default function VendorDashboard() {
       return;
     }
     toast.success(`${name.trim()} added`, "Print a label for it and it's ready to scan.");
-    setName(""); setPrice(""); setQty("");
+    setName(""); setPrice(""); setQty(""); setIsFood(false);
     await load();
   };
 
@@ -1102,7 +1103,7 @@ export default function VendorDashboard() {
                   caption="Your active items, prices, and floor counts"
                   onRowClick={(it) => {
                     setEditItem(it.id);
-                    setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0) });
+                    setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0), food: String(it.taxClass || "STANDARD").toUpperCase() === "FOOD" });
                   }}
                   empty={
                     <div className="card-body">
@@ -1216,6 +1217,15 @@ export default function VendorDashboard() {
                       )}
                     </Field>
                   </div>
+                  {/* Oklahoma dropped the state's 4.5% on food and food
+                      ingredients in 2024 but kept the local portion, so this
+                      changes the tax the register charges. */}
+                  <Checkbox
+                    checked={isFood}
+                    onCheckedChange={setIsFood}
+                    label="This is a food item"
+                    hint="Groceries are taxed at a lower rate than crafts. Tick this for anything edible — jam, honey, produce, baked goods, spices."
+                  />
                   {err ? <Note tone="error">{err}</Note> : null}
                   <div>
                     <Button type="submit" variant="primary" size="lg" icon="plus" loading={busy}>
@@ -1804,6 +1814,7 @@ export default function VendorDashboard() {
                     priceDollars: editIF.price,
                     quantity: editIF.qty,
                     salePercent: editIF.sale,
+                    taxClass: editIF.food ? "FOOD" : "STANDARD",
                   });
                   if (ok) { toast.success("Item saved", "Changed the name or price? Print fresh labels so the shelf matches the register."); setEditItem(null); }
                 }}
@@ -1868,6 +1879,13 @@ export default function VendorDashboard() {
                 />
               )}
             </Field>
+
+            <Checkbox
+              checked={editIF.food}
+              onCheckedChange={(v) => setEditIF((f) => ({ ...f, food: v }))}
+              label="This is a food item"
+              hint="Groceries are taxed at a lower rate than crafts. Changing this affects future sales only — tickets already rung keep the tax they were charged."
+            />
 
             <Field label="Price (dollars)">
               {(p) => (

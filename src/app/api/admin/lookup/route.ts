@@ -19,5 +19,5 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `${item.vendor.businessName} is deactivated — their items can't be sold. Pull it from the floor.` }, { status: 400 });
   }
   const unit = effectivePriceCents(item);
-  return NextResponse.json({ item: { ...item, priceCents: unit, basePriceCents: item.priceCents, salePercent: item.salePercent } });
+  return NextResponse.json({ item: { ...item, priceCents: unit, taxClass: String(item.taxClass || "STANDARD"), basePriceCents: item.priceCents, salePercent: item.salePercent } });
 }

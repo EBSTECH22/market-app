@@ -4,6 +4,7 @@ import { isStaff } from "@/lib/auth";
 import { runRoute } from "@/lib/handler";
 import { pushToVendor } from "@/lib/push";
 import type { CartLine } from "@/lib/selfcheckout";
+import { normalizeTaxClass } from "@/lib/tax";
 
 export const dynamic = "force-dynamic";
 
@@ -128,6 +129,7 @@ export async function POST(req: NextRequest) {
           itemId: l.itemId, vendorId: l.vendorId, name: l.name,
           priceCents: l.priceCents, quantity: l.quantity,
           commissionCents, vendorNetCents: l.priceCents * l.quantity - commissionCents,
+          taxClass: normalizeTaxClass(l.taxClass),
         };
       });
 
@@ -139,6 +141,8 @@ export async function POST(req: NextRequest) {
           cardName: "",
           subtotalCents: cart.subtotalCents,
           taxCents: cart.taxCents,
+          foodTaxCents: cart.foodTaxCents,
+          standardTaxCents: cart.standardTaxCents,
           totalCents: cart.totalCents,
           paymentMethod: "CASH",
           cashTenderedCents: tendered,

@@ -8,14 +8,16 @@ import {
   SearchInput, Skeleton, useDialog,
 } from "@/components/ui";
 import { money, plural } from "@/lib/format";
+import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; vendorName: string; photoId?: string | null };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; taxClass?: string; vendorName: string; photoId?: string | null };
 type Line = Item & { qty: number };
 
 export default function SelfCheckout() {
   const dialog = useDialog();
   const [items, setItems] = useState<Item[]>([]);
   const [taxRate, setTaxRate] = useState(0);
+  const [foodTaxRate, setFoodTaxRate] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
@@ -35,7 +37,7 @@ export default function SelfCheckout() {
   useEffect(() => {
     const loadShop = () => {
       fetch("/api/public/shop").then(async (r) => {
-        if (r.ok) { const d = await r.json(); setItems(d.items || []); setTaxRate(d.taxRatePercent || 0); setPaused(!!d.paused); setLoadFailed(false); }
+        if (r.ok) { const d = await r.json(); setItems(d.items || []); setTaxRate(d.taxRatePercent || 0); setFoodTaxRate(typeof d.foodTaxRatePercent === "number" ? d.foodTaxRatePercent : (d.taxRatePercent || 0)); setPaused(!!d.paused); setLoadFailed(false); }
         else setLoadFailed(true);
         setLoaded(true);
       }).catch(() => { setLoadFailed(true); setLoaded(true); });
@@ -151,7 +153,11 @@ export default function SelfCheckout() {
   };
 
   const subtotal = cart.reduce((n, l) => n + l.priceCents * l.qty, 0);
-  const tax = Math.round((subtotal * taxRate) / 100);
+  /* Food and general goods carry different rates — same library the server
+     uses, so the screen and the charge can't disagree. */
+  const taxRates = { standardPercent: taxRate, foodPercent: foodTaxRate };
+  const shopTaxLines = cart.map((l) => ({ amountCents: l.priceCents * l.qty, taxClass: normalizeTaxClass(l.taxClass) }));
+  const tax = taxFor(shopTaxLines, taxRates).taxCents;
   const needle = q.trim().toLowerCase();
   const browse = needle ? items.filter((i) => i.name.toLowerCase().includes(needle) || i.vendorName.toLowerCase().includes(needle)) : items;
 

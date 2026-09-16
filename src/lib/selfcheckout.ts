@@ -3,8 +3,14 @@ import { stripe } from "@/lib/stripe";
 import { pushToVendor, pushToAdmin } from "@/lib/push";
 import { sendSelfCheckoutReceiptEmail } from "@/lib/email";
 import { findOrCreateCustomer, pointsFor } from "@/lib/customers";
+import { normalizeTaxClass } from "@/lib/tax";
 
-export type CartLine = { itemId: string; sku: string; name: string; priceCents: number; quantity: number; vendorId: string; vendorName: string };
+export type CartLine = {
+  itemId: string; sku: string; name: string; priceCents: number; quantity: number;
+  vendorId: string; vendorName: string;
+  /** STANDARD or FOOD, snapshotted when the cart was built. Older carts have none. */
+  taxClass?: string;
+};
 
 // Books the sale exactly like a register sale once Stripe confirms payment. Idempotent.
 export async function finalizeSelfCartIfPaid(cartId: string): Promise<boolean> {
@@ -36,6 +42,7 @@ export async function finalizeSelfCartIfPaid(cartId: string): Promise<boolean> {
       return {
         itemId: l.itemId, vendorId: l.vendorId, name: l.name, priceCents: l.priceCents,
         quantity: l.quantity, commissionCents, vendorNetCents: l.priceCents * l.quantity - commissionCents,
+        taxClass: normalizeTaxClass(l.taxClass),
       };
     });
     /* A vendor-rung cart goes through this same finalizer — the only difference
@@ -49,6 +56,7 @@ export async function finalizeSelfCartIfPaid(cartId: string): Promise<boolean> {
         employee: soldBy ? `VENDOR: ${soldBy.businessName}` : "SELF-CHECKOUT",
         soldByVendorId: cart.soldByVendorId || "",
         subtotalCents: cart.subtotalCents, taxCents: cart.taxCents, totalCents: cart.totalCents,
+        foodTaxCents: cart.foodTaxCents, standardTaxCents: cart.standardTaxCents,
         paymentMethod: "CARD", lines: { create: saleLines },
       },
     });

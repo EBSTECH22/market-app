@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { notifyVendorRestock } from "@/lib/customers";
 import { currentVendorId } from "@/lib/auth";
+import { normalizeTaxClass } from "@/lib/tax";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const vendorId = currentVendorId();
@@ -12,7 +13,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const body = await req.json();
   let restock = false;
-  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number } = {};
+  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number; taxClass?: string } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
   if (body.priceDollars !== undefined) {
     const price = Math.round(Number(body.priceDollars) * 100);
@@ -37,6 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (Number.isNaN(pct) || pct < 0 || pct > 90) return NextResponse.json({ error: "Sale must be 0–90%." }, { status: 400 });
     data.salePercent = pct;
   }
+  if (body.taxClass !== undefined) data.taxClass = normalizeTaxClass(body.taxClass);
   if (typeof body.active === "boolean") data.active = body.active;
   if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 

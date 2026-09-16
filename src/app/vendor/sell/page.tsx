@@ -7,6 +7,7 @@ import {
   EmptyState, Skeleton, useToast,
 } from "@/components/ui";
 import { money, plural } from "@/lib/format";
+import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 
 /**
  * A vendor ringing up their own goods, on their own phone, at their own booth.
@@ -23,7 +24,7 @@ import { money, plural } from "@/lib/format";
 
 type Item = {
   id: string; sku: string; name: string; priceCents: number;
-  basePriceCents: number; salePercent: number; quantity: number;
+  basePriceCents: number; salePercent: number; quantity: number; taxClass?: string;
 };
 type Line = { item: Item; qty: number };
 
@@ -35,6 +36,7 @@ export default function VendorSellPage() {
   const [vendorName, setVendorName] = useState("");
   const [items, setItems] = useState<Item[]>([]);
   const [taxRate, setTaxRate] = useState(0);
+  const [foodTaxRate, setFoodTaxRate] = useState(0);
   const [cardReady, setCardReady] = useState(false);
 
   const [q, setQ] = useState("");
@@ -48,8 +50,12 @@ export default function VendorSellPage() {
   const [cartId, setCartId] = useState("");
   const [paid, setPaid] = useState(false);
 
+
   const subtotal = lines.reduce((n, l) => n + l.item.priceCents * l.qty, 0);
-  const taxCents = Math.round((subtotal * taxRate) / 100);
+  const taxRates = { standardPercent: taxRate, foodPercent: foodTaxRate };
+  const taxLines = lines.map((l) => ({ amountCents: l.item.priceCents * l.qty, taxClass: normalizeTaxClass(l.item.taxClass) }));
+  const taxCents = taxFor(taxLines, taxRates).taxCents;
+  const shownTaxRate = displayRate(taxLines, taxRates);
   const total = subtotal + taxCents;
   const count = lines.reduce((n, l) => n + l.qty, 0);
 
@@ -61,6 +67,7 @@ export default function VendorSellPage() {
       if (!r.ok) { setErr(String(d.error || "Couldn't load your items.")); return; }
       setItems(d.items || []);
       setTaxRate(Number(d.taxRatePercent) || 0);
+      setFoodTaxRate(typeof d.foodTaxRatePercent === "number" ? d.foodTaxRatePercent : (Number(d.taxRatePercent) || 0));
       setCardReady(!!d.cardReady);
       setVendorName(String(d.vendor?.businessName || ""));
       setErr("");
@@ -70,6 +77,7 @@ export default function VendorSellPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
 
   const add = (item: Item) => {
     setLines((ls) => {
@@ -115,10 +123,18 @@ export default function VendorSellPage() {
     try {
       const r = await fetch("/api/vendor/sell", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, email: email.trim(), lines: lines.map((l) => ({ itemId: l.item.id, qty: l.qty })) }),
+        body: JSON.stringify({
+          mode, email: email.trim(),
+          lines: lines.map((l) => ({ itemId: l.item.id, qty: l.qty })),
+        }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast.error("Couldn't start the payment", String(d.error || "")); return; }
+      if (!r.ok) {
+        // The gate refusing is a normal outcome, not a crash — say what to do.
+        if (d.gateBlocked) { toast.error("Can't ring this up here", String(d.error || "")); return; }
+        toast.error("Couldn't start the payment", String(d.error || ""));
+        return;
+      }
 
       setCartId(String(d.cartId || ""));
       if (mode === "CASH") {
@@ -319,7 +335,7 @@ export default function VendorSellPage() {
 
             <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
               <div className="t-body">Subtotal <b className="num">{money(subtotal)}</b></div>
-              <div className="t-body">Tax ({taxRate}%) <b className="num">{money(taxCents)}</b></div>
+              <div className="t-body">Tax{shownTaxRate === null ? " (mixed)" : ` (${shownTaxRate}%)`} <b className="num">{money(taxCents)}</b></div>
               <div className="row g-3 mt-1" style={{ alignItems: "baseline" }}>
                 <span className="t-label">Total</span>
                 <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>

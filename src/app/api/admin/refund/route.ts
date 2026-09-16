@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
     }
 
     let refundSubtotal = 0;
+    // Tracked per tax class, because food and general goods were taxed at
+    // different rates on this ticket.
+    let refundFoodBase = 0;
+    let refundStandardBase = 0;
     const applied: { lineId: string; quantity: number }[] = [];
     for (const p of picks) {
       const line = sale.lines.find((l) => l.id === p.lineId);
@@ -59,11 +63,32 @@ export async function POST(req: NextRequest) {
       const q = Math.max(1, Math.round(p.quantity));
       const left = line.quantity - (already[line.id] || 0);
       if (q > left) return NextResponse.json({ error: `Only ${left} of ${line.name} left to refund on this ticket.` }, { status: 400 });
-      refundSubtotal += line.priceCents * q;
+      const amount = line.priceCents * q;
+      refundSubtotal += amount;
+      if (String(line.taxClass || "STANDARD").toUpperCase() === "FOOD") refundFoodBase += amount;
+      else refundStandardBase += amount;
       applied.push({ lineId: line.id, quantity: q });
     }
-    // proportional tax at this ticket's actual rate
-    const refundTax = Math.round((sale.taxCents * refundSubtotal) / (sale.subtotalCents || 1));
+
+    /* Give back the tax that was actually charged on THESE lines.
+       Prorating the whole ticket's tax by subtotal share was exact while every
+       line carried the same rate. With food at a lower rate it isn't: refunding
+       the groceries off a mixed ticket would hand back the ticket's average
+       rate, which is more tax than was ever collected on them, and refunding
+       the crafts would hand back too little. So each class is prorated against
+       its own base and its own recorded tax. */
+    const saleFoodBase = sale.lines
+      .filter((l) => String(l.taxClass || "STANDARD").toUpperCase() === "FOOD")
+      .reduce((n, l) => n + l.priceCents * l.quantity, 0);
+    const saleStandardBase = sale.subtotalCents - saleFoodBase;
+
+    const hasSplit = (sale.foodTaxCents || 0) > 0 || (sale.standardTaxCents || 0) > 0;
+    const refundTax = hasSplit
+      ? Math.round((sale.foodTaxCents * refundFoodBase) / (saleFoodBase || 1)) +
+        Math.round((sale.standardTaxCents * refundStandardBase) / (saleStandardBase || 1))
+      // Tickets rung before the split existed only ever had one rate, so the
+      // old proportional calculation is still the right one for them.
+      : Math.round((sale.taxCents * refundSubtotal) / (sale.subtotalCents || 1));
 
     await db.$transaction(async (tx) => {
       for (const p of applied) {

@@ -6,6 +6,8 @@ import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute } from "@/lib/handler";
 import { randomBytes, randomInt } from "crypto";
 import type { CartLine } from "@/lib/selfcheckout";
+import { getTaxRates } from "@/lib/settings";
+import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
 export const dynamic = "force-dynamic";
 
@@ -80,14 +82,15 @@ export async function GET(req: NextRequest) {
 
     const items = await db.item.findMany({
       where: { vendorId, active: true },
-      select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true },
+      select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, taxClass: true },
       orderBy: { name: "asc" },
     });
-    const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
+    const rates = await getTaxRates();
 
     return NextResponse.json({
       vendor: { businessName: vendor.businessName, code: vendor.code },
-      taxRatePercent: setting ? Number(setting.value) : 0,
+      taxRatePercent: rates.standardPercent,
+      foodTaxRatePercent: rates.foodPercent,
       cardReady: !!stripe,
       items: items.map((i) => ({
         id: i.id, sku: i.sku, name: i.name,
@@ -95,6 +98,7 @@ export async function GET(req: NextRequest) {
         basePriceCents: i.priceCents,
         salePercent: Math.max(0, Math.min(90, i.salePercent || 0)),
         quantity: i.quantity,
+        taxClass: normalizeTaxClass(i.taxClass),
       })),
     });
   });
@@ -140,13 +144,17 @@ export async function POST(req: NextRequest) {
         itemId: item.id, sku: item.sku, name: item.name,
         priceCents: effectivePriceCents(item), quantity: qty,
         vendorId: item.vendorId, vendorName: vendor.businessName,
+        taxClass: normalizeTaxClass(item.taxClass),
       });
     }
 
-    const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
-    const taxRate = setting ? Number(setting.value) : 0;
+    const rates = await getTaxRates();
     const subtotalCents = lines.reduce((n, l) => n + l.priceCents * l.quantity, 0);
-    const taxCents = Math.round((subtotalCents * taxRate) / 100);
+    const split = taxFor(
+      lines.map((l) => ({ amountCents: l.priceCents * l.quantity, taxClass: normalizeTaxClass(l.taxClass) })),
+      rates
+    );
+    const taxCents = split.taxCents;
     const totalCents = subtotalCents + taxCents;
 
     if (mode === "CASH") {
@@ -158,6 +166,7 @@ export async function POST(req: NextRequest) {
           subtotalCents, taxCents, totalCents, email,
           soldByVendorId: vendorId,
           registerCode,
+          foodTaxCents: split.foodTaxCents, standardTaxCents: split.standardTaxCents,
         },
       });
       /* Stock is NOT decremented yet. The sale doesn't exist until cash is
@@ -172,7 +181,11 @@ export async function POST(req: NextRequest) {
 
     const token = randomBytes(16).toString("hex");
     const cart = await db.selfCart.create({
-      data: { token, linesJson: JSON.stringify(lines), subtotalCents, taxCents, totalCents, email, soldByVendorId: vendorId },
+      data: {
+        token, linesJson: JSON.stringify(lines), subtotalCents, taxCents, totalCents, email,
+        soldByVendorId: vendorId,
+        foodTaxCents: split.foodTaxCents, standardTaxCents: split.standardTaxCents,
+      },
     });
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;

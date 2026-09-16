@@ -5,6 +5,8 @@ import { stripe } from "@/lib/stripe";
 import { randomBytes } from "crypto";
 import type { CartLine } from "@/lib/selfcheckout";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
+import { getTaxRates } from "@/lib/settings";
+import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
 export const dynamic = "force-dynamic";
 
@@ -22,13 +24,14 @@ export async function GET() {
   const photoMap = new Map(itemPhotos.map((x) => [x.itemId, x.id]));
   const items = await db.item.findMany({
     where: sellable,
-    select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { businessName: true } } },
+    select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, taxClass: true, vendor: { select: { businessName: true } } },
     orderBy: { name: "asc" },
   });
-  const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
+  const rates = await getTaxRates();
   return NextResponse.json({
-    taxRatePercent: setting ? Number(setting.value) : 0,
-    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
+    taxRatePercent: rates.standardPercent,
+    foodTaxRatePercent: rates.foodPercent,
+    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, taxClass: normalizeTaxClass(i.taxClass), vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
   });
 }
 
@@ -48,7 +51,7 @@ export async function POST(req: NextRequest) {
     }
     if (!item.vendor.allowSelfCheckout) return NextResponse.json({ error: `${item.vendor.businessName} items go through the register — take this one up front. 😊` }, { status: 400 });
     if (item.quantity <= 0) return NextResponse.json({ error: `${item.name} shows sold out — grab a staff member if you're holding one.` }, { status: 400 });
-    return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), basePriceCents: item.priceCents, salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, vendorName: item.vendor.businessName } });
+    return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), basePriceCents: item.priceCents, salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, taxClass: normalizeTaxClass(item.taxClass), vendorName: item.vendor.businessName } });
   }
 
   if (b.action === "checkout") {
@@ -67,18 +70,24 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `${sku} isn't available for self-checkout — remove it or pay at the register.` }, { status: 400 });
       }
       if (item.quantity < qty) return NextResponse.json({ error: `Only ${item.quantity} of ${item.name} left in the system — adjust your quantity.` }, { status: 400 });
-      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName });
+      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName, taxClass: normalizeTaxClass(item.taxClass) });
     }
 
-    const setting = await db.setting.findUnique({ where: { key: "taxRatePercent" } });
-    const taxRate = setting ? Number(setting.value) : 0;
+    const rates = await getTaxRates();
     const subtotalCents = lines.reduce((n, l) => n + l.priceCents * l.quantity, 0);
-    const taxCents = Math.round((subtotalCents * taxRate) / 100);
+    const split = taxFor(
+      lines.map((l) => ({ amountCents: l.priceCents * l.quantity, taxClass: normalizeTaxClass(l.taxClass) })),
+      rates
+    );
+    const taxCents = split.taxCents;
     const totalCents = subtotalCents + taxCents;
 
     const token = randomBytes(16).toString("hex");
     const cart = await db.selfCart.create({
-      data: { token, linesJson: JSON.stringify(lines), subtotalCents, taxCents, totalCents, email },
+      data: {
+        token, linesJson: JSON.stringify(lines), subtotalCents, taxCents, totalCents, email,
+        foodTaxCents: split.foodTaxCents, standardTaxCents: split.standardTaxCents,
+      },
     });
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;

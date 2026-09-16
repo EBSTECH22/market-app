@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { isStaff } from "@/lib/auth";
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
-import { getTaxRatePercent, getCardAdjustPercent } from "@/lib/settings";
+import { getTaxRates, getCardAdjustPercent } from "@/lib/settings";
+import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
 
@@ -32,11 +33,11 @@ export async function POST(req: NextRequest) {
     include: { vendor: true },
   });
 
-  const taxRate = await getTaxRatePercent();
+  const rates = await getTaxRates();
   let subtotal = 0;
   const saleLines: {
     itemId: string; vendorId: string; name: string; basePriceCents: number; priceCents: number; quantity: number;
-    commissionCents: number; vendorNetCents: number;
+    commissionCents: number; vendorNetCents: number; taxClass: string;
   }[] = [];
 
   let saleSavingsCents = 0;
@@ -58,13 +59,24 @@ export async function POST(req: NextRequest) {
       quantity: q,
       commissionCents: commission,
       vendorNetCents: gross - commission,
+      // Snapshotted here, not looked up at report time: reclassifying an item
+      // next month must not change the tax on a ticket already filed.
+      taxClass: normalizeTaxClass(item.taxClass),
     });
   }
 
   // dual pricing: posted prices are card prices; cash skips the non-cash adjustment
   const adjustPercent = await getCardAdjustPercent();
   const cardAdjustCents = paymentMethod === "CARD" && adjustPercent > 0 ? Math.round((subtotal * adjustPercent) / 100) : 0;
-  const taxCents = Math.round(((subtotal + cardAdjustCents) * taxRate) / 100);
+
+  /* Food and standard are taxed at different rates, so the card adjustment has
+     to be spread across both rather than dumped on one — see lib/tax.ts. */
+  const taxSplit = taxFor(
+    saleLines.map((sl) => ({ amountCents: sl.priceCents * sl.quantity, taxClass: normalizeTaxClass(sl.taxClass) })),
+    rates,
+    cardAdjustCents
+  );
+  const taxCents = taxSplit.taxCents;
 
   // rewards: find the customer up front so redemption can discount this sale.
   // This is only a friendly pre-check — the authoritative balance check and the
@@ -174,6 +186,8 @@ export async function POST(req: NextRequest) {
            doesn't add up, and the drawer would never reconcile. */
         cashTenderedCents: tendered,
         changeCents: tendered > 0 ? Math.max(0, tendered - totalCents) : 0,
+        foodTaxCents: taxSplit.foodTaxCents,
+        standardTaxCents: taxSplit.standardTaxCents,
         lines: { create: saleLines },
       },
     });
@@ -257,6 +271,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate: rates.standardPercent, foodTaxCents: taxSplit.foodTaxCents, standardTaxCents: taxSplit.standardTaxCents, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
   });
 }

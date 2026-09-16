@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdmin, isStaff } from "@/lib/auth";
-import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent } from "@/lib/settings";
+import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent } from "@/lib/settings";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 
 export async function GET() {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent() });
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()) });
 }
 
 export async function POST(req: NextRequest) {
@@ -39,6 +39,13 @@ export async function POST(req: NextRequest) {
       update: { value: JSON.stringify(banner) },
     });
     return NextResponse.json({ ok: true, banner });
+  }
+
+  if (body.foodTaxRatePercent !== undefined) {
+    const v = Number(body.foodTaxRatePercent);
+    if (!Number.isFinite(v) || v < 0 || v > 15) return NextResponse.json({ error: "Food tax rate must be between 0 and 15%." }, { status: 400 });
+    await setFoodTaxRatePercent(v);
+    return NextResponse.json({ ok: true, foodTaxRatePercent: v });
   }
 
   if (body.cardAdjustPercent !== undefined) {

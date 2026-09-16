@@ -38,6 +38,7 @@ export async function GET() {
     floor: floor.map((i) => ({
       id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents,
       salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity,
+      taxClass: String(i.taxClass || "STANDARD"),
       vendorName: i.vendor.businessName, vendorCode: i.vendor.code,
     })),
   });
