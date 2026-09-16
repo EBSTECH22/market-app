@@ -36,7 +36,57 @@ export async function GET() {
       });
     }
     rows.sort((a, b) => b.dueCents - a.dueCents);
-    return NextResponse.json({ rows, processingPercent: PROCESSING_PERCENT });
+
+    /* ------------------------------------------------------- rent roll --- */
+    /* What the booths are contracted to bring in each month.
+       Deliberately split three ways rather than given as one number, because
+       "rent I have in contracts" is three different amounts depending on how
+       honest you want to be:
+         - COMMITTED: signed by both sides. Money you can actually count on.
+         - AWAITING SIGNATURE: an agreement is out but nobody has signed it.
+           Rent doesn't post until execution, so counting this as income is how
+           a month's budget ends up short.
+         - ENDING: under notice with an end date. Still coming in now, gone soon.
+       A single total would quietly fold the second into the first. */
+    const rollContracts = await db.contract.findMany({
+      where: { status: { in: ["ACTIVE", "TERMINATING"] } },
+      select: {
+        id: true, boothLabel: true, monthlyRentCents: true, status: true, endDate: true,
+        vendorSignedAt: true, marketSignedAt: true,
+        vendor: { select: { businessName: true, code: true } },
+      },
+      orderBy: { boothLabel: "asc" },
+    });
+
+    const executed = rollContracts.filter((c) => c.vendorSignedAt && c.marketSignedAt);
+    const pending = rollContracts.filter((c) => !(c.vendorSignedAt && c.marketSignedAt));
+    const ending = executed.filter((c) => c.status === "TERMINATING" && c.endDate);
+
+    const sum = (list: { monthlyRentCents: number }[]) => list.reduce((n, c) => n + c.monthlyRentCents, 0);
+
+    const rentRoll = {
+      committedMonthlyCents: sum(executed),
+      committedBooths: executed.length,
+      pendingMonthlyCents: sum(pending),
+      pendingBooths: pending.length,
+      endingMonthlyCents: sum(ending),
+      endingBooths: ending.length,
+      /* What it becomes once the leavers are gone and nothing replaces them —
+         the number worth looking at before deciding you can afford something. */
+      afterEndingMonthlyCents: sum(executed) - sum(ending),
+      booths: rollContracts.map((c) => ({
+        contractId: c.id,
+        boothLabel: c.boothLabel,
+        businessName: c.vendor.businessName,
+        code: c.vendor.code,
+        monthlyRentCents: c.monthlyRentCents,
+        signed: !!(c.vendorSignedAt && c.marketSignedAt),
+        endDate: c.endDate,
+        status: c.status,
+      })),
+    };
+
+    return NextResponse.json({ rows, processingPercent: PROCESSING_PERCENT, rentRoll });
   });
 }
 

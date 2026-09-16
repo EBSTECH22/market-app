@@ -757,6 +757,14 @@ export default function AdminPage() {
      change, nothing on the receipt saying what was handed over. */
   const [cashConfirm, setCashConfirm] = useState(false);
   const [editV, setEditV] = useState<string | null>(null);
+  type RentRoll = {
+    committedMonthlyCents: number; committedBooths: number;
+    pendingMonthlyCents: number; pendingBooths: number;
+    endingMonthlyCents: number; endingBooths: number;
+    afterEndingMonthlyCents: number;
+    booths: { contractId: string; boothLabel: string; businessName: string; code: string; monthlyRentCents: number; signed: boolean; endDate: string | null; status: string }[];
+  };
+  const [rentRoll, setRentRoll] = useState<RentRoll | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
   const [ledger, setLedger] = useState<RentLedger | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<"OWING" | "ALL" | "PAID">("OWING");
@@ -1001,7 +1009,7 @@ export default function AdminPage() {
   useEffect(() => { if (authed && allowed("market") && tab === "customers") loadCustomers(); }, [authed, caps, tab, loadCustomers]);
   useEffect(() => {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
-    if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) setSettle((await r.json()).rows); });
+    if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) { const d = await r.json(); setSettle(d.rows); setRentRoll(d.rentRoll || null); } });
     if (authed && tab === "bank") fetch("/api/admin/rent-ledger").then(async (r) => { if (r.ok) setLedger(await r.json()); });
   }, [authed, tab]);
   useEffect(() => {
@@ -4907,6 +4915,106 @@ export default function AdminPage() {
           {/* Deliberately OUTSIDE the Stripe checks below. Who owes you rent is
               a question about your own ledger, not about Stripe — it must still
               answer when Stripe is misconfigured or refusing to talk. */}
+          {/* What the booths are contracted to bring in, before anything about
+              who has actually paid. */}
+          <Card
+            title="Monthly rent roll"
+            subtitle="What your booths are contracted for each month — not what's been collected."
+          >
+            {!rentRoll ? (
+              <div className="stack g-2" aria-busy="true"><Skeleton height={64} /><Skeleton height={80} /></div>
+            ) : (
+              <div className="stack g-4">
+                <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
+                  <Stat
+                    feature
+                    label="Signed and committed"
+                    value={money(rentRoll.committedMonthlyCents)}
+                    sub={`${plural(rentRoll.committedBooths, "booth")} every month`}
+                    icon="contract"
+                  />
+                  <Stat
+                    label="Waiting on signatures"
+                    value={money(rentRoll.pendingMonthlyCents)}
+                    sub={rentRoll.pendingBooths ? `${plural(rentRoll.pendingBooths, "agreement")} out, unsigned` : "Nothing outstanding"}
+                    icon="alert"
+                  />
+                  {rentRoll.endingBooths > 0 ? (
+                    <Stat
+                      label="Under notice"
+                      value={money(rentRoll.endingMonthlyCents)}
+                      sub={`${plural(rentRoll.endingBooths, "booth")} leaving`}
+                      icon="warning"
+                    />
+                  ) : null}
+                </div>
+
+                {rentRoll.pendingBooths > 0 ? (
+                  <Note tone="warn">
+                    {money(rentRoll.pendingMonthlyCents)} of that is on agreements nobody has signed yet. Rent
+                    doesn&rsquo;t post until both names are on the paper, so it isn&rsquo;t money you have —
+                    it&rsquo;s money you might.
+                  </Note>
+                ) : null}
+
+                {rentRoll.endingBooths > 0 ? (
+                  <Note tone="info">
+                    Once the booths under notice are gone you&rsquo;re at{" "}
+                    <b>{money(rentRoll.afterEndingMonthlyCents)}</b> a month unless they&rsquo;re re-let.
+                  </Note>
+                ) : null}
+
+                <DataTable
+                  rows={rentRoll.booths}
+                  rowKey={(b) => b.contractId}
+                  mobileCards
+                  defaultSort={{ key: "rent", dir: "desc" }}
+                  caption="Every booth and what it's contracted for each month"
+                  columns={[
+                    {
+                      key: "booth",
+                      header: "Booth",
+                      primary: true,
+                      sortBy: (b) => b.boothLabel,
+                      cell: (b) => (
+                        <span className="stack g-1">
+                          <span style={{ fontWeight: 600 }}>Booth {b.boothLabel}</span>
+                          <span className="t-xs t-muted">{b.businessName}</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "state",
+                      header: "Status",
+                      sortBy: (b) => (b.signed ? 0 : 1),
+                      cell: (b) =>
+                        !b.signed ? <Badge tone="warn" dot>Unsigned</Badge>
+                        : b.status === "TERMINATING" ? (
+                          <Badge tone="danger" dot>Ends {b.endDate ? fmtDate(b.endDate) : "soon"}</Badge>
+                        ) : <Badge tone="success" dot>Signed</Badge>,
+                    },
+                    {
+                      key: "rent",
+                      header: "Monthly rent",
+                      align: "right",
+                      sortBy: (b) => b.monthlyRentCents,
+                      cell: (b) => (
+                        <span className={`num ${b.signed ? "" : "t-muted"}`}>{money(b.monthlyRentCents)}</span>
+                      ),
+                    },
+                  ]}
+                  empty={
+                    <EmptyState
+                      icon="contract"
+                      title="No booth agreements yet"
+                      body="Once agreements are signed, what they're worth each month shows up here."
+                    />
+                  }
+                />
+              </div>
+            )}
+          </Card>
+
           <RentLedgerCards
             ledger={ledger}
             filter={ledgerFilter}
