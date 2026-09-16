@@ -85,6 +85,108 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ contract: updated });
   }
 
+  /* ---- the vendor pulled out ------------------------------------------------
+     Distinct from VOIDED (we reissued a corrected agreement) and from ENDED
+     (a lease that ran its course). Nothing here bills again: cron/rent only
+     touches ACTIVE and TERMINATING. */
+  if (action === "mark_withdrawn") {
+    if (contract.status === "WITHDRAWN") {
+      return NextResponse.json({ error: "This one is already marked as backed out." }, { status: 400 });
+    }
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+
+    const agg = await db.ledgerEntry.aggregate({
+      where: { vendorId: contract.vendorId },
+      _sum: { amountCents: true },
+    });
+    const balance = agg._sum.amountCents || 0;
+    const owes = balance < 0 ? -balance : 0;
+
+    /* Rent only posts once BOTH signatures land, so someone who backs out
+       before signing owes nothing and we don't interrupt to ask. We only stop
+       for a decision in the rarer case where money really is outstanding. */
+    const decided = typeof (body as { writeOff?: boolean }).writeOff === "boolean";
+    if (owes > 0 && !decided) {
+      return NextResponse.json({
+        needsDecision: true,
+        owesCents: owes,
+        businessName: vendor?.businessName || "",
+      });
+    }
+
+    const writeOff = (body as { writeOff?: boolean }).writeOff === true;
+    const reason = String((body as { reason?: string }).reason || "").trim().slice(0, 500);
+
+    await db.$transaction(async (tx) => {
+      await tx.contract.update({
+        where: { id: contract.id },
+        data: { status: "WITHDRAWN", endDate: new Date() },
+      });
+
+      // They never started, so the account shouldn't sit in the active lists
+      // or be reachable publicly. Reinstating turns this back on.
+      await tx.vendor.update({
+        where: { id: contract.vendorId },
+        data: { active: false, portalLocked: true },
+      });
+
+      if (owes > 0 && writeOff) {
+        await tx.ledgerEntry.create({
+          data: {
+            vendorId: contract.vendorId,
+            type: "ADJUST",
+            amountCents: owes,
+            note: `Written off — vendor backed out before starting, booth ${contract.boothLabel}`,
+          },
+        });
+      }
+    });
+
+    /* No notes column on Contract and we're not adding one, so the reason goes
+       on their application, which is where the rest of the history lives. If
+       they never applied (added by hand) the reason isn't kept anywhere. */
+    if (reason && vendor) {
+      const app = await db.vendorApplication.findFirst({
+        where: { email: { equals: vendor.email, mode: "insensitive" } },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, adminNotes: true },
+      });
+      if (app) {
+        const stamp = new Date().toLocaleDateString("en-US");
+        const line = `[${stamp}] Backed out: ${reason}`;
+        await db.vendorApplication.update({
+          where: { id: app.id },
+          data: { adminNotes: app.adminNotes ? `${app.adminNotes}\n${line}` : line },
+        }).catch(() => {});
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      wroteOff: owes > 0 && writeOff ? owes : 0,
+      leftOwing: owes > 0 && !writeOff ? owes : 0,
+    });
+  }
+
+  /* ---- they changed their mind again ---------------------------------------- */
+  if (action === "reinstate") {
+    if (contract.status !== "WITHDRAWN") {
+      return NextResponse.json({ error: "That agreement isn't marked as backed out." }, { status: 400 });
+    }
+    await db.$transaction(async (tx) => {
+      await tx.contract.update({
+        where: { id: contract.id },
+        // Back to where it was: signed agreements resume, unsigned ones wait.
+        data: { status: "ACTIVE", endDate: null },
+      });
+      await tx.vendor.update({
+        where: { id: contract.vendorId },
+        data: { active: true },
+      });
+    });
+    return NextResponse.json({ ok: true });
+  }
+
   // ---- nudge an agreement that's been sent but not signed -------------------
   if (action === "send_reminder") {
     const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });

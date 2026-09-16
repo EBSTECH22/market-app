@@ -100,6 +100,20 @@ function InvoiceOpensCell({ v }: { v: Contract["invoiceViews"] }) {
   );
 }
 
+/** One reading of an agreement's status, so the table and the detail panel
+    can't drift apart. WITHDRAWN (they pulled out before starting) and VOIDED
+    (we replaced it with a corrected agreement) both used to fall through to
+    "Ended" — the one thing neither of them is. */
+function ContractStatusBadge({ status, endDate }: { status: string; endDate?: string | null }) {
+  if (status === "ACTIVE") return <Badge tone="success" dot>Active</Badge>;
+  if (status === "TERMINATING") {
+    return <Badge tone="danger" dot>{endDate ? `Ends ${fmtDate(endDate)}` : "Ending"}</Badge>;
+  }
+  if (status === "WITHDRAWN") return <Badge tone="danger" dot>Backed out</Badge>;
+  if (status === "VOIDED") return <Badge tone="neutral" dot>Voided</Badge>;
+  return <Badge tone="neutral" dot>Ended</Badge>;
+}
+
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
@@ -438,6 +452,9 @@ export default function AdminPage() {
   const [vendorQ, setVendorQ] = useState("");
   const [vendorOpen, setVendorOpen] = useState<string | null>(null);
   const [contractOpen, setContractOpen] = useState<string | null>(null);
+  /* Agreements that were backed out never started, so they'd only pad the list
+     you actually work from. Kept one click away rather than thrown out. */
+  const [contractFilter, setContractFilter] = useState<"ACTIVE" | "WITHDRAWN" | "ALL">("ACTIVE");
   /* Invoice open history. Fetched on demand — the agreements list already
      carries the count, and most agreements never need the detail. */
   const [invoiceLogFor, setInvoiceLogFor] = useState<string | null>(null);
@@ -1563,6 +1580,109 @@ export default function AdminPage() {
     } finally { setBusy(false); }
   };
 
+  /* They pulled out before they ever started. That is a different thing from
+     voiding an agreement (we reissued a corrected one) and from ending a lease
+     that ran its term, and it's the distinction the office keeps asking for.
+
+     Rent only posts once BOTH signatures are in, so the overwhelmingly common
+     case — backed out before signing — owes nothing and money never comes up.
+     The server tells us when it does. */
+  const markWithdrawn = async (c: Contract) => {
+    const reason = await dialog.prompt({
+      title: `Did ${c.vendor.businessName} back out?`,
+      body: (
+        <>
+          The agreement is marked as backed out and their vendor account is switched off, so
+          they drop out of Onboarding and stop getting reminder emails about signing. Nothing is
+          deleted &mdash; you can put them back on if they change their mind.
+        </>
+      ),
+      label: "Why did they back out? (optional)",
+      hint: "Internal only. Filed on their application so the history stays in one place.",
+      placeholder: "Went with another market",
+      multiline: true,
+      required: false,
+      confirmLabel: "Mark as backed out",
+      tone: "warn",
+    });
+    // null is "cancel"; an empty string is a deliberate "no reason to record".
+    if (reason === null) return;
+
+    const send = (writeOff?: boolean) =>
+      safeFetch(`/api/admin/contracts/${c.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          typeof writeOff === "boolean"
+            ? { action: "mark_withdrawn", reason, writeOff }
+            : { action: "mark_withdrawn", reason }
+        ),
+      });
+
+    setBusy(true);
+    try {
+      let res = await send();
+      if (!res.ok) { toast.error("That didn't go through", String(res.data.error || "")); return; }
+
+      /* Only reached when rent has already posted against them, which means
+         they signed and then pulled out. Nothing has changed server-side yet. */
+      if (res.data.needsDecision) {
+        const owed = Number(res.data.owesCents) || 0;
+        const who = String(res.data.businessName || c.vendor.businessName);
+        const pick = await dialog.choose({
+          title: `${who} still owes ${money(owed)}`,
+          body: "Nothing has been marked yet. Rent was charged before they pulled out, so say what happens to it.",
+          label: "The outstanding balance",
+          options: [
+            { value: "writeoff", label: `Write off the ${money(owed)} they owe` },
+            { value: "keep", label: `Leave the ${money(owed)} on their account` },
+          ],
+          confirmLabel: "Mark as backed out",
+        });
+        if (pick === null) return;
+        res = await send(pick === "writeoff");
+        if (!res.ok) { toast.error("That didn't go through", String(res.data.error || "")); return; }
+      }
+
+      const wroteOff = Number(res.data.wroteOff) || 0;
+      const leftOwing = Number(res.data.leftOwing) || 0;
+      toast.success(
+        `${c.vendor.businessName} marked as backed out`,
+        wroteOff > 0
+          ? `${money(wroteOff)} written off and their vendor account switched off.`
+          : leftOwing > 0
+            ? `${money(leftOwing)} stays owing on their account. Their vendor account is switched off.`
+            : "Their vendor account is switched off and the signing reminders stop."
+      );
+      setContractOpen(null);
+      await loadAll();
+    } finally { setBusy(false); }
+  };
+
+  /* Changed their mind back. Undoes the status and the account switch — a
+     write-off, being a posted ledger entry, deliberately stays put. */
+  const reinstateContract = async (c: Contract) => {
+    const yes = await dialog.confirm({
+      title: `Put ${c.vendor.businessName} back on?`,
+      body: `Booth ${c.boothLabel}'s agreement goes back to active and their vendor account is switched on again. Anything you wrote off stays written off.`,
+      confirmLabel: "Put them back on",
+      cancelLabel: "Leave it",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${c.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reinstate" }),
+      });
+      if (!ok) { toast.error("That didn't go through", String(data.error || "")); return; }
+      toast.success(
+        `${c.vendor.businessName} is back on`,
+        "Their agreement is active again and the vendor account is switched back on."
+      );
+      await loadAll();
+    } finally { setBusy(false); }
+  };
+
   /* Every recorded open of one invoice. Opening this doesn't add to the log —
      admin previews are never recorded server-side — so looking can't change
      what you're looking at. */
@@ -1849,6 +1969,14 @@ export default function AdminPage() {
 
   const sqft = Math.max(0, (Number(cW) || 0) * (Number(cD) || 0));
   const suggestedRent = Math.round(sqft * rentPerSqft * 100) / 100;
+
+  /* The agreements list, split by whether the vendor pulled out. */
+  const withdrawnContracts = contracts.filter((c) => c.status === "WITHDRAWN");
+  const workingContracts = contracts.filter((c) => c.status !== "WITHDRAWN");
+  const shownContracts =
+    contractFilter === "ALL" ? contracts
+    : contractFilter === "WITHDRAWN" ? withdrawnContracts
+    : workingContracts;
 
   const saveRate = async () => {
     setRateMsg("");
@@ -5814,8 +5942,21 @@ export default function AdminPage() {
             title="Booth agreements"
             subtitle="Rent auto-charges on the 1st of every month at midnight — first and final months prorate by day. Nothing for you to remember."
           >
+            <div className="stack g-3">
+            {/* Backed-out agreements are hidden by default: they never started,
+                so leaving them in the working list is just noise. */}
+            <Segmented
+              label="Which agreements to show"
+              value={contractFilter}
+              onChange={setContractFilter}
+              options={[
+                { value: "ACTIVE", label: `Active (${workingContracts.length})` },
+                { value: "WITHDRAWN", label: `Backed out (${withdrawnContracts.length})` },
+                { value: "ALL", label: `All (${contracts.length})` },
+              ]}
+            />
             <DataTable
-              rows={contracts}
+              rows={shownContracts}
               columns={[
                 {
                   key: "booth",
@@ -5872,14 +6013,7 @@ export default function AdminPage() {
                   key: "status",
                   header: "Status",
                   sortBy: (c) => c.status,
-                  cell: (c) =>
-                    c.status === "ACTIVE" ? (
-                      <Badge tone="success" dot>Active</Badge>
-                    ) : c.status === "TERMINATING" ? (
-                      <Badge tone="danger" dot>{c.endDate ? `Ends ${fmtDate(c.endDate)}` : "Ending"}</Badge>
-                    ) : (
-                      <Badge tone="neutral" dot>Ended</Badge>
-                    ),
+                  cell: (c) => <ContractStatusBadge status={c.status} endDate={c.endDate} />,
                 },
               ]}
               rowKey={(c) => c.id}
@@ -5889,13 +6023,28 @@ export default function AdminPage() {
               caption="Booth agreements, rent, and signing status"
               onRowClick={(c) => setContractOpen(c.id)}
               empty={
-                <EmptyState
-                  icon="contract"
-                  title="No agreements yet"
-                  body="Create the first booth agreement below — the vendor gets a link to sign it."
-                />
+                contractFilter === "WITHDRAWN" ? (
+                  <EmptyState
+                    icon="checkCircle"
+                    title="Nobody has backed out"
+                    body="Every agreement you've raised is still going. Vendors you mark as backed out land here."
+                  />
+                ) : contractFilter === "ACTIVE" && contracts.length > 0 ? (
+                  <EmptyState
+                    icon="contract"
+                    title="Nothing currently running"
+                    body="Every agreement on file has been backed out — switch to Backed out or All to see them."
+                  />
+                ) : (
+                  <EmptyState
+                    icon="contract"
+                    title="No agreements yet"
+                    body="Create the first booth agreement below — the vendor gets a link to sign it."
+                  />
+                )
               }
             />
+            </div>
           </Card>
 
           {/* Agreement detail slide-over — signing, emails, rent, and ending. */}
@@ -5932,13 +6081,7 @@ export default function AdminPage() {
               >
                 <div className="stack g-5">
                   <div className="row wrap g-2">
-                    {c.status === "ACTIVE" ? (
-                      <Badge tone="success" dot>Active</Badge>
-                    ) : c.status === "TERMINATING" ? (
-                      <Badge tone="danger" dot>{c.endDate ? `Ends ${fmtDate(c.endDate)}` : "Ending"}</Badge>
-                    ) : (
-                      <Badge tone="neutral" dot>Ended</Badge>
-                    )}
+                    <ContractStatusBadge status={c.status} endDate={c.endDate} />
                     {c.vendorSignedAt && c.marketSignedAt ? (
                       <Badge tone="success" dot>Fully executed</Badge>
                     ) : c.vendorSignedAt ? (
@@ -5956,7 +6099,11 @@ export default function AdminPage() {
                       { label: "Monthly rent", value: <span className="num">{money(c.monthlyRentCents)}</span> },
                       { label: "Started", value: fmtDate(c.startDate) },
                       ...(c.noticeGivenAt ? [{ label: "Notice given", value: fmtDate(c.noticeGivenAt) }] : []),
-                      ...(c.endDate ? [{ label: "Lease ends", value: fmtDate(c.endDate) }] : []),
+                      /* Backing out stamps endDate too, but "Lease ends" would be
+                         the wrong word for a lease that never began. */
+                      ...(c.endDate
+                        ? [{ label: c.status === "WITHDRAWN" ? "Backed out" : "Lease ends", value: fmtDate(c.endDate) }]
+                        : []),
                       { label: "Vendor signed", value: c.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
                       { label: "Market signed", value: c.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
                       ...(!c.vendorSignedAt
@@ -5983,7 +6130,7 @@ export default function AdminPage() {
                       <Button size="sm" icon="mail" disabled={busy} onClick={() => sendMail("send_for_signature", "Signing link")}>
                         Send for signature
                       </Button>
-                      {!c.vendorSignedAt && c.status !== "ENDED" ? (
+                      {!c.vendorSignedAt && c.status !== "ENDED" && c.status !== "WITHDRAWN" ? (
                         <Button
                           size="sm"
                           icon="bell"
@@ -6059,7 +6206,12 @@ export default function AdminPage() {
                       it. Each of those three states gets its own answer here. */}
                   <div className="stack g-2">
                     <p className="t-label">Terms</p>
-                    {c.status === "ENDED" ? (
+                    {c.status === "WITHDRAWN" ? (
+                      <p className="t-xs t-muted">
+                        They backed out of this one. Put them back on below, or write a fresh
+                        agreement if they return on different terms.
+                      </p>
+                    ) : c.status === "ENDED" ? (
                       <p className="t-xs t-muted">
                         This agreement is closed. Create a new one if they&rsquo;re coming back.
                       </p>
@@ -6112,18 +6264,42 @@ export default function AdminPage() {
                   {c.status !== "ENDED" ? (
                   <div className="stack g-2">
                     <p className="t-label">Lease</p>
-                    <div className="row wrap g-2">
-                      {c.status === "ACTIVE" ? (
-                        <Button size="sm" icon="calendar" disabled={busy} onClick={() => giveNotice(c)}>
-                          Enter 30-day notice
+                    {/* Someone who backed out has one move left — coming back.
+                        Notice periods and final statements are for leases that
+                        actually ran. */}
+                    {c.status === "WITHDRAWN" ? (
+                      <>
+                        <div className="row wrap g-2">
+                          <Button size="sm" icon="refresh" disabled={busy} onClick={() => reinstateContract(c)}>
+                            They&rsquo;re back on
+                          </Button>
+                        </div>
+                        <p className="t-xs t-muted">
+                          This puts the agreement back to active and switches their vendor account
+                          on again.
+                        </p>
+                      </>
+                    ) : (
+                      <div className="row wrap g-2">
+                        {c.status === "ACTIVE" ? (
+                          <Button size="sm" icon="calendar" disabled={busy} onClick={() => giveNotice(c)}>
+                            Enter 30-day notice
+                          </Button>
+                        ) : null}
+                        {c.status === "TERMINATING" ? (
+                          <Button size="sm" icon="receipt" disabled={busy} onClick={() => finalStatement(c)}>
+                            Final statement
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="dangerSoft"
+                          icon="close"
+                          disabled={busy}
+                          onClick={() => markWithdrawn(c)}
+                        >
+                          They backed out
                         </Button>
-                      ) : null}
-                      {c.status === "TERMINATING" ? (
-                        <Button size="sm" icon="receipt" disabled={busy} onClick={() => finalStatement(c)}>
-                          Final statement
-                        </Button>
-                      ) : null}
-                      {c.status !== "ENDED" ? (
                         <Button
                           size="sm"
                           variant="danger"
@@ -6144,8 +6320,8 @@ export default function AdminPage() {
                         >
                           End now
                         </Button>
-                      ) : null}
-                    </div>
+                      </div>
+                    )}
                   </div>
                   ) : null}
                 </div>

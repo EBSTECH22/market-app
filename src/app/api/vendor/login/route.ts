@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
          find their signing link — which reads like their signature failed, and
          sent them to the phone. Say which of the two it actually is. */
       const contract = await db.contract.findFirst({
-        where: { vendorId: vendor.id, status: { notIn: ["VOIDED", "ENDED"] } },
+        where: { vendorId: vendor.id, status: { notIn: ["VOIDED", "ENDED", "WITHDRAWN"] } },
         orderBy: { createdAt: "desc" },
         select: { vendorSignedAt: true, marketSignedAt: true },
       });

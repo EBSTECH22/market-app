@@ -30,6 +30,8 @@ type Agreement = {
   monthlyRentCents: number;
   startDate: string;
   status: string;
+  /** Stamped when they back out — the authoritative withdrawal date. */
+  endDate: string | null;
   vendorSignedAt: string | null;
   marketSignedAt: string | null;
   viewedAt: string | null;
@@ -54,15 +56,18 @@ type App = {
 };
 
 type Counts = Record<Phase, number>;
-const ZERO_COUNTS: Counts = { NEW: 0, IN_PROGRESS: 0, LIVE: 0, DECLINED: 0 };
+const ZERO_COUNTS: Counts = { NEW: 0, IN_PROGRESS: 0, LIVE: 0, WITHDRAWN: 0, DECLINED: 0 };
 
-const PHASES: Phase[] = ["NEW", "IN_PROGRESS", "LIVE", "DECLINED"];
+/* Backed out sits between the people who are selling and the people we turned
+   down, because that's what it is: someone we said yes to who said no. */
+const PHASES: Phase[] = ["NEW", "IN_PROGRESS", "LIVE", "WITHDRAWN", "DECLINED"];
 
 /** Short enough to sit in a segmented control on a phone. */
 const PHASE_SHORT: Record<Phase, string> = {
   NEW: "New",
   IN_PROGRESS: "In progress",
   LIVE: "Selling",
+  WITHDRAWN: "Backed out",
   DECLINED: "Declined",
 };
 
@@ -158,6 +163,27 @@ function waitingText(a: App): string {
   return days === 0
     ? "Their agreement went out today."
     : `Their agreement has been with them ${plural(days, "day")}.`;
+}
+
+/**
+ * When they backed out, and why.
+ *
+ * The date comes from the agreement's `endDate`, which the backend stamps at
+ * the moment of withdrawal — authoritative, and present whether or not anyone
+ * typed a reason. The reason is pulled from the line the backend appends to
+ * their application notes, e.g. `[9/16/2026] Backed out: went with another
+ * market`; no line simply means no reason was given.
+ */
+function backedOut(a: App): { at: Date | null; reason: string } {
+  const raw = a.agreement?.endDate;
+  const at = raw ? new Date(raw) : null;
+  let reason = "";
+  const lines = String(a.adminNotes || "").split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^\[([^\]]+)\]\s*Backed out:\s*(.*)$/.exec(lines[i].trim());
+    if (m) { reason = m[2].trim(); break; }
+  }
+  return { at: at && !Number.isNaN(at.getTime()) ? at : null, reason };
 }
 
 /** One labelled block inside the expanded detail area. */
@@ -406,6 +432,49 @@ export default function ApplicationsPage() {
           Open in vendors
         </LinkButton>
       ),
+    },
+  ];
+
+  /* Deliberately thin — this is a record, not a worklist. If they come back,
+     the work happens on the agreement in Admin → Agreements, not here. */
+  const withdrawnColumns: Column<App>[] = [
+    {
+      key: "business",
+      header: "Business",
+      cell: (a) => a.vendor?.businessName || a.businessName,
+      sortBy: (a) => a.vendor?.businessName || a.businessName,
+      primary: true,
+    },
+    {
+      key: "booth",
+      header: "Booth",
+      cell: (a) =>
+        a.agreement?.boothLabel
+          ? `Booth ${a.agreement.boothLabel}`
+          : <span className="t-muted">No booth was allocated</span>,
+      sortBy: (a) => a.agreement?.boothLabel ?? "",
+    },
+    {
+      key: "when",
+      header: "Backed out",
+      sortBy: (a) => backedOut(a).at?.getTime() ?? 0,
+      cell: (a) => {
+        const { at } = backedOut(a);
+        return at ? fmtDate(at) : <span className="t-muted">Date not recorded</span>;
+      },
+    },
+    {
+      key: "why",
+      header: "Why",
+      mobileLabel: "Why they backed out",
+      cell: (a) => {
+        const { reason } = backedOut(a);
+        if (reason) return <span className="clamp-2">{reason}</span>;
+        if (a.adminNotes) {
+          return <span className="t-sm clamp-2" style={{ whiteSpace: "pre-wrap" }}>{a.adminNotes}</span>;
+        }
+        return <span className="t-muted">No reason recorded</span>;
+      },
     },
   ];
 
@@ -711,6 +780,29 @@ export default function ApplicationsPage() {
     );
   };
 
+  /* ----------------------------------------------------- backed-out list -- */
+
+  /** Kept so you can answer "whatever happened to them?" months later. */
+  const renderWithdrawn = () => (
+    <Card title={PHASE_LABEL.WITHDRAWN} subtitle={plural(rows.length, "vendor")} flush>
+      <DataTable
+        rows={rows}
+        columns={withdrawnColumns}
+        rowKey={(a) => a.id}
+        mobileCards
+        defaultSort={{ key: "when", dir: "desc" }}
+        caption="Vendors who backed out before they started selling"
+        empty={
+          <EmptyState
+            icon="checkCircle"
+            title="Nobody has backed out"
+            body="Everyone you've signed up is still with you. Anyone you mark as backed out is kept here, with the reason, so the record survives."
+          />
+        }
+      />
+    </Card>
+  );
+
   /* ---------------------------------------------------------------- view -- */
 
   const phaseOptions = PHASES.map((p) => ({
@@ -840,6 +932,9 @@ export default function ApplicationsPage() {
               />
             </Card>
           ) : null}
+
+          {/* -------------------------------------- backed out ---------- */}
+          {phase === "WITHDRAWN" ? renderWithdrawn() : null}
 
           {/* ------------------------------------------- declined ------- */}
           {phase === "DECLINED" ? (

@@ -24,6 +24,7 @@ export async function GET() {
     if (!isAdmin()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const vendors = await db.vendor.findMany({
+      // active:false covers vendors who backed out — they leave this list.
       where: { portalLocked: true, active: true },
       select: {
         id: true, code: true, businessName: true, contactName: true,
@@ -35,7 +36,7 @@ export async function GET() {
 
     const ids = vendors.map((v) => v.id);
     const contracts = await db.contract.findMany({
-      where: { vendorId: { in: ids }, status: { notIn: ["VOIDED", "ENDED"] } },
+      where: { vendorId: { in: ids }, status: { notIn: ["VOIDED", "ENDED", "WITHDRAWN"] } },
       orderBy: { createdAt: "desc" },
     });
     const balances = await db.ledgerEntry.groupBy({
@@ -139,7 +140,8 @@ export async function POST(req: NextRequest) {
     const minDays = Number.isFinite(Number(body.minDaysWaiting)) ? Math.max(0, Number(body.minDaysWaiting)) : 0;
 
     const pending = await db.contract.findMany({
-      where: { vendorSignedAt: null, status: { notIn: ["VOIDED", "ENDED"] } },
+      // Never chase someone who has pulled out.
+      where: { vendorSignedAt: null, status: { notIn: ["VOIDED", "ENDED", "WITHDRAWN"] } },
       include: { vendor: { select: { id: true, email: true, businessName: true } } },
       orderBy: { createdAt: "asc" },
     });

@@ -44,6 +44,8 @@ export async function GET() {
     const allVendorIds = vendors.map((v) => v.id);
     const contracts = allVendorIds.length
       ? await db.contract.findMany({
+          // WITHDRAWN is deliberately included — it is what puts someone in the
+          // "Backed out" list rather than making them vanish.
           where: { vendorId: { in: allVendorIds }, status: { notIn: ["VOIDED"] } },
           orderBy: { createdAt: "desc" },
         })
@@ -69,6 +71,7 @@ export async function GET() {
         vendorId: vendor?.id ?? "",
         hasAgreement: !!contract,
         vendorPortalLocked: vendor ? vendor.portalLocked : null,
+        agreementStatus: contract?.status ?? null,
       });
 
       return {
@@ -81,6 +84,9 @@ export async function GET() {
               monthlyRentCents: contract.monthlyRentCents,
               startDate: contract.startDate,
               status: contract.status,
+              // Stamped when they back out, so the UI has a real date instead
+              // of parsing one out of a free-text note.
+              endDate: contract.endDate,
               vendorSignedAt: contract.vendorSignedAt,
               marketSignedAt: contract.marketSignedAt,
               viewedAt: contract.viewedAt,
@@ -98,6 +104,7 @@ export async function GET() {
       NEW: rows.filter((r) => r.phase === "NEW").length,
       IN_PROGRESS: rows.filter((r) => r.phase === "IN_PROGRESS").length,
       LIVE: rows.filter((r) => r.phase === "LIVE").length,
+      WITHDRAWN: rows.filter((r) => r.phase === "WITHDRAWN").length,
       DECLINED: rows.filter((r) => r.phase === "DECLINED").length,
     };
 

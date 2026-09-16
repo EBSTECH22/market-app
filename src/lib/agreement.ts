@@ -75,12 +75,13 @@ export function deliveryFor(c: {
 
 /* ------------------------------------------------------- pipeline phase --- */
 
-export type Phase = "NEW" | "IN_PROGRESS" | "LIVE" | "DECLINED";
+export type Phase = "NEW" | "IN_PROGRESS" | "LIVE" | "WITHDRAWN" | "DECLINED";
 
 export const PHASE_LABEL: Record<Phase, string> = {
   NEW: "New applications",
   IN_PROGRESS: "Agreement in progress",
   LIVE: "Selling at the market",
+  WITHDRAWN: "Backed out",
   DECLINED: "Declined",
 };
 
@@ -96,7 +97,13 @@ export function phaseFor(a: {
   vendorId: string;
   hasAgreement: boolean;
   vendorPortalLocked: boolean | null;
+  /** Status of their most recent agreement, if any. */
+  agreementStatus?: string | null;
 }): Phase {
+  // Checked before DECLINED: someone we accepted who then pulled out is a
+  // different thing from someone we turned down, and it's the one the office
+  // wants to see separately.
+  if (a.agreementStatus === "WITHDRAWN") return "WITHDRAWN";
   if (a.status === "DECLINED") return "DECLINED";
   if (a.vendorId && a.vendorPortalLocked === false) return "LIVE";
   if (a.vendorId || a.hasAgreement) return "IN_PROGRESS";
@@ -109,6 +116,7 @@ export function nextStepFor(
   delivery: Delivery | null,
   owesCents: number
 ): string {
+  if (phase === "WITHDRAWN") return "Backed out before starting";
   if (phase === "DECLINED") return "Declined";
   if (phase === "LIVE") return "Live at the market";
   if (!delivery) return "Create their agreement";
