@@ -589,3 +589,27 @@ export async function sendStaffAccessEmail(
     <p style="font-size:12px;color:#9ca3af;">Pick <b>Owner or manager</b> on the sign-in screen, not Employee — that tab is for the register PIN.</p>`;
   await send(to, `Your sign-in for ${process.env.MARKET_NAME || "Community Harvest"}`, shell(inner));
 }
+
+/**
+ * A vendor's news, to the customers who asked to hear from that vendor.
+ *
+ * Only ever sent to people who explicitly followed this vendor, and never to
+ * anyone who has unsubscribed — the caller filters, and the List-Unsubscribe
+ * header below gives every recipient a one-click way out. This is the one place
+ * in the app where a vendor can reach customers directly, so it is also the one
+ * that most needs to stay welcome.
+ */
+export async function sendVendorNewsEmail(
+  to: string,
+  businessName: string,
+  body: string,
+  vendorUrl: string,
+  unsubscribeUrl: string
+) {
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">News from ${businessName}</h2>
+    <p style="font-size:14px;color:#374151;white-space:pre-wrap;text-align:left;">${body.replace(/</g, "&lt;")}</p>
+    <p style="margin:18px 0;"><a href="${vendorUrl}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">See what they have in</a></p>
+    <p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">You're getting this because you followed ${businessName} at Community Harvest.</p>`;
+  await send(to, `${businessName} — what's new at the market`, shell(inner), { listUnsubscribeUrl: unsubscribeUrl });
+}

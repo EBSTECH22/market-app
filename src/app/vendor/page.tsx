@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePulse } from "@/lib/usePulse";
 import {
-  Icon, Button, IconButton, LinkButton, Field, Input, Textarea, Checkbox,
+  Icon, Button, IconButton, LinkButton, Field, Input, Select, Textarea, Checkbox,
   Modal, Panel, useDialog, useToast, DataTable, Badge, Card, Stat, EmptyState,
   Note, Skeleton, SkeletonStats, PageHeader, type Column, type IconName,
 } from "@/components/ui";
@@ -24,12 +24,13 @@ type Photo = { id: string; kind: string; itemId?: string };
 /* Tabs live in the URL hash so refresh, back/forward and shared links all work.
    They used to sit in plain useState, so a reload always dumped a vendor back
    on Home and there was no way to link anyone to a section. */
-const VENDOR_TABS = ["home", "items", "inbox", "page", "money", "chat", "settings"] as const;
+const VENDOR_TABS = ["home", "items", "insights", "inbox", "page", "money", "chat", "settings"] as const;
 type VendorTab = (typeof VENDOR_TABS)[number];
 
 const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }> = {
   home: { label: "Home", icon: "store", sub: "Your booth at a glance" },
   items: { label: "My items", icon: "box", sub: "Prices, stock, sales, and barcode labels" },
+  insights: { label: "What's working", icon: "chart", sub: "What sells, what's stuck, and what's about to run out" },
   inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
   page: { label: "My page", icon: "star", sub: "Your public page, photos, and market feed posts" },
   money: { label: "Money", icon: "dollar", sub: "Balance, rent, card on file, and your full statement" },
@@ -39,7 +40,7 @@ const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }
 
 /* Phones get the four most-used destinations plus a "More" sheet — seven
    equal tabs across a phone is unreadable and under the 44px target. */
-const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "inbox", "money"];
+const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "insights", "money"];
 const MORE_MOBILE: VendorTab[] = ["page", "chat", "settings"];
 
 const LEDGER_ICON = (type: string): IconName =>
@@ -176,6 +177,29 @@ export default function VendorDashboard() {
   const [chatBody, setChatBody] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [postBody, setPostBody] = useState("");
+  const [notifyFollowers, setNotifyFollowers] = useState(false);
+
+  type ItemStat = {
+    itemId: string; sku: string; name: string; priceCents: number; quantity: number;
+    unitsSold: number; revenueCents: number; daysOnFloor: number; daysSinceLastSale: number | null;
+    sellThroughPercent: number; unitsPerWeek: number; runsOutInDays: number | null;
+    status: "NEW" | "STRONG" | "STEADY" | "SLOW" | "DEAD" | "OUT";
+  };
+  type Stats = {
+    items: ItemStat[];
+    summary: { itemCount: number; unitsSold: number; revenueCents: number; deadCount: number; deadValueCents: number; runningOutCount: number; outOfStockCount: number };
+    runningOut: ItemStat[]; deadStock: ItemStat[]; bestSellers: ItemStat[];
+    busiestLabel: string | null; busiest: { sharePercent: number } | null;
+  };
+  const [stats, setStats] = useState<Stats | null>(null);
+
+  type Statement = {
+    year: number; years: number[];
+    months: { month: number; name: string; salesCents: number; rentCents: number; payoutCents: number; adjustmentCents: number; netCents: number }[];
+    totals: { grossShelfCents: number; commissionCents: number; salesCreditedCents: number; rentCents: number; payoutCents: number; adjustmentCents: number; netCents: number };
+  };
+  const [statement, setStatement] = useState<Statement | null>(null);
+  const [statementYear, setStatementYear] = useState<number | null>(null);
   const [myPosts, setMyPosts] = useState<{ id: string; body: string; photoId: string | null; createdAt: string }[]>([]);
   const dialog = useDialog();
   const toast = useToast();
@@ -188,7 +212,22 @@ export default function VendorDashboard() {
     const r = await fetch("/api/vendor/posts");
     if (r.ok) setMyPosts((await r.json()).posts);
   }, []);
+  const loadStats = useCallback(async () => {
+    const r = await fetch("/api/vendor/stats");
+    if (r.ok) setStats(await r.json());
+  }, []);
+
+  const loadStatement = useCallback(async (year?: number) => {
+    const r = await fetch(`/api/vendor/statement${year ? `?year=${year}` : ""}`);
+    if (r.ok) { const d = await r.json(); setStatement(d); setStatementYear(d.year); }
+  }, []);
+
   useEffect(() => { loadChat(); loadPosts(); }, [loadChat, loadPosts]);
+
+  /* Loaded on demand rather than up front — both scan a vendor's whole sales
+     history, and most visits to the portal are "did anything sell". */
+  useEffect(() => { if (tab === "insights") void loadStats(); }, [tab, loadStats]);
+  useEffect(() => { if (tab === "money" && !statement) void loadStatement(); }, [tab, statement, loadStatement]);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
@@ -621,9 +660,27 @@ export default function VendorDashboard() {
   const publishPost = async () => {
     setBusy(true);
     try {
-      const r = await fetch("/api/vendor/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: postBody }) });
-      if (r.ok) { setPostBody(""); toast.success("Posted to the market feed", "Customers see it on the market page now."); loadPosts(); }
-      else toast.error("Couldn't post that", (await r.json()).error || "Try again.");
+      const r = await fetch("/api/vendor/posts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: postBody, notifyFollowers }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't post that", d.error || "Try again."); return; }
+      setPostBody(""); setNotifyFollowers(false);
+      if (d.error) {
+        // Posted, but the notification was held back — say which happened.
+        toast.success("Posted to the market feed", String(d.error));
+      } else if (typeof d.notified === "number" && notifyFollowers) {
+        toast.success(
+          "Posted and sent",
+          d.notified > 0
+            ? `${d.notified} follower${d.notified === 1 ? "" : "s"} emailed.`
+            : "Nobody follows you with an email address yet — the post is still up."
+        );
+      } else {
+        toast.success("Posted to the market feed", "Customers see it on the market page now.");
+      }
+      loadPosts();
     } finally { setBusy(false); }
   };
 
@@ -1296,6 +1353,127 @@ export default function VendorDashboard() {
           )}
 
           {/* ------------------------------------------------------------ page */}
+          {tab === "insights" && (
+            <div className="stack g-4">
+              {!stats ? (
+                <div className="stack g-3" aria-busy="true">
+                  <Skeleton height={80} radius="var(--r-lg)" />
+                  <Skeleton height={220} radius="var(--r-lg)" />
+                </div>
+              ) : stats.summary.itemCount === 0 ? (
+                <EmptyState
+                  icon="box"
+                  title="Nothing to measure yet"
+                  body="Add some items and put them on the floor. Once they start selling, this page tells you which ones are worth making more of."
+                  action={<Button variant="primary" icon="plus" onClick={() => go("items")}>Add items</Button>}
+                />
+              ) : (
+                <>
+                  <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
+                    <Stat feature label="Sold all time" value={money(stats.summary.revenueCents)} sub={`${plural(stats.summary.unitsSold, "item")} across the counter`} icon="dollar" />
+                    <Stat label="About to run out" value={String(stats.summary.runningOutCount)} sub="Within two weeks" icon="alert" />
+                    <Stat label="Not selling" value={money(stats.summary.deadValueCents)} sub={`${plural(stats.summary.deadCount, "item")} sitting unsold`} icon="warning" />
+                  </div>
+
+                  {/* The most actionable thing on the page goes first: an empty
+                      shelf earns nothing, and a vendor who isn't in the
+                      building can't see one. */}
+                  {stats.runningOut.length > 0 ? (
+                    <Card title="Bring more of these" subtitle="At the rate they're selling, these run out soon.">
+                      <div className="stack g-2">
+                        {stats.runningOut.map((i) => (
+                          <div key={i.itemId} className="row g-3" style={{ alignItems: "center" }}>
+                            <span className="grow truncate" style={{ minWidth: 0 }}>
+                              <b>{i.name}</b>
+                              <span className="t-xs t-muted"> · {plural(i.quantity, "left")}, about {i.unitsPerWeek}/week</span>
+                            </span>
+                            <Badge tone={(i.runsOutInDays ?? 99) <= 5 ? "danger" : "warn"} dot>
+                              {i.runsOutInDays === 0 ? "Gone today" : `~${plural(i.runsOutInDays ?? 0, "day")}`}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ) : null}
+
+                  {stats.bestSellers.length > 0 ? (
+                    <Card title="Your best earners" subtitle="By money made, not units — twenty cheap things isn't a hit.">
+                      <div className="stack g-2">
+                        {stats.bestSellers.map((i, n) => (
+                          <div key={i.itemId} className="row g-3" style={{ alignItems: "center" }}>
+                            <span className="num t-muted" style={{ width: 20 }}>{n + 1}</span>
+                            <span className="grow truncate" style={{ minWidth: 0 }}>
+                              <b>{i.name}</b>
+                              <span className="t-xs t-muted"> · {plural(i.unitsSold, "sold")} · {i.sellThroughPercent}% of what you brought</span>
+                            </span>
+                            <span className="num">{money(i.revenueCents)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ) : null}
+
+                  {stats.deadStock.length > 0 ? (
+                    <Card
+                      title="Taking up space"
+                      subtitle="On the floor two months or more without a single sale. Worth re-pricing, re-photographing, or swapping out."
+                    >
+                      <div className="stack g-2">
+                        {stats.deadStock.map((i) => (
+                          <div key={i.itemId} className="row g-3" style={{ alignItems: "center" }}>
+                            <span className="grow truncate" style={{ minWidth: 0 }}>
+                              <b>{i.name}</b>
+                              <span className="t-xs t-muted"> · {plural(i.daysOnFloor, "day")} on the floor · {plural(i.quantity, "unit")} at {money(i.priceCents)}</span>
+                            </span>
+                            <Badge tone="neutral">{money(i.priceCents * i.quantity)} tied up</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ) : null}
+
+                  {stats.busiestLabel ? (
+                    <Note tone="info" title="Your busiest hour">
+                      <b>{stats.busiestLabel}</b> — {stats.busiest?.sharePercent}% of everything you sell goes out then.
+                      Worth having a full shelf before it.
+                    </Note>
+                  ) : null}
+
+                  <Card title="Every item" subtitle="Sorted by money made.">
+                    <div className="stack g-2">
+                      {stats.items.map((i) => (
+                        <div key={i.itemId} className="row g-3" style={{ alignItems: "center" }}>
+                          <span className="grow truncate" style={{ minWidth: 0 }}>
+                            <b>{i.name}</b>
+                            <span className="t-xs t-muted"> · {plural(i.unitsSold, "sold")} · {plural(i.quantity, "left")}</span>
+                          </span>
+                          <Badge
+                            tone={
+                              i.status === "STRONG" ? "success"
+                              : i.status === "STEADY" ? "info"
+                              : i.status === "OUT" ? "warn"
+                              : i.status === "NEW" ? "neutral"
+                              : i.status === "DEAD" ? "danger" : "warn"
+                            }
+                            dot
+                          >
+                            {i.status === "STRONG" ? "Selling well"
+                              : i.status === "STEADY" ? "Ticking along"
+                              : i.status === "SLOW" ? "Slowed down"
+                              : i.status === "DEAD" ? "Not selling"
+                              : i.status === "OUT" ? "Sold out"
+                              : "Too new to tell"}
+                          </Badge>
+                          <span className="num" style={{ minWidth: 72, textAlign: "right" }}>{money(i.revenueCents)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </>
+              )}
+            </div>
+          )}
+
           {tab === "page" && (
             <div className="stack g-4">
               <Card
@@ -1314,15 +1492,24 @@ export default function VendorDashboard() {
                       />
                     )}
                   </Field>
+                  {/* The vendors who sell most are the ones marketing
+                      themselves, and most won't, because "post on Instagram" is
+                      a job. They already have followers here — one tick does it. */}
+                  <Checkbox
+                    checked={notifyFollowers}
+                    onCheckedChange={setNotifyFollowers}
+                    label="Email the customers who follow me"
+                    hint="Only people who chose to follow you, never the market's whole list. Once a day at most, so nobody mutes you."
+                  />
                   <div>
                     <Button
                       variant="primary"
-                      icon="message"
+                      icon={notifyFollowers ? "mail" : "message"}
                       loading={busy}
                       disabled={!postBody.trim()}
                       onClick={publishPost}
                     >
-                      Post to the feed
+                      {notifyFollowers ? "Post and tell my followers" : "Post to the feed"}
                     </Button>
                   </div>
 
@@ -1500,6 +1687,71 @@ export default function VendorDashboard() {
                 <Stat label="Sold this month" value={money(me.monthSales)} sub={`Your net ${money(me.monthNet)}`} icon="receipt" />
                 <Stat label="Market commission" value={`${me.vendor.commissionPercent}%`} sub="Taken off each sale" icon="chart" />
               </div>
+
+              {/* Every vendor in every market does this with a shoebox in
+                  January. The numbers are already in the ledger. */}
+              <Card
+                title="Year-end statement"
+                subtitle="Everything that moved through the market for you, month by month — the sheet your accountant asks for."
+                actions={
+                  statement ? (
+                    <Select
+                      value={String(statementYear ?? statement.year)}
+                      aria-label="Statement year"
+                      onChange={(e) => { setStatement(null); void loadStatement(Number(e.target.value)); }}
+                    >
+                      {statement.years.map((y) => <option key={y} value={y}>{y}</option>)}
+                    </Select>
+                  ) : undefined
+                }
+              >
+                {!statement ? (
+                  <div className="stack g-2" aria-busy="true"><Skeleton height={18} /><Skeleton height={120} /></div>
+                ) : (
+                  <div className="stack g-4">
+                    <div className="grid-auto" style={{ ["--min" as string]: "170px" }}>
+                      <Stat label="Sold at the counter" value={money(statement.totals.grossShelfCents)} sub="Shelf price, before commission" icon="receipt" />
+                      <Stat label="Market commission" value={money(statement.totals.commissionCents)} sub="Kept by the market" icon="chart" />
+                      <Stat label="Credited to you" value={money(statement.totals.salesCreditedCents)} sub="Your share of sales" icon="dollar" />
+                      <Stat label="Rent charged" value={money(statement.totals.rentCents)} sub="Booth rent for the year" icon="store" />
+                    </div>
+
+                    <div className="stack g-1">
+                      {statement.months
+                        .filter((m) => m.salesCents || m.rentCents || m.payoutCents || m.adjustmentCents)
+                        .map((m) => (
+                          <div key={m.month} className="row g-3" style={{ alignItems: "center" }}>
+                            <span className="grow" style={{ minWidth: 0 }}>{m.name}</span>
+                            <span className="num t-xs t-muted" style={{ minWidth: 90, textAlign: "right" }}>
+                              {money(m.salesCents)} sold
+                            </span>
+                            <span className="num t-xs t-muted" style={{ minWidth: 80, textAlign: "right" }}>
+                              {money(m.rentCents)} rent
+                            </span>
+                          </div>
+                        ))}
+                      {statement.months.every((m) => !m.salesCents && !m.rentCents && !m.payoutCents && !m.adjustmentCents) ? (
+                        <p className="t-sm t-muted">Nothing recorded for {statement.year} yet.</p>
+                      ) : null}
+                    </div>
+
+                    <div className="row wrap g-2">
+                      <LinkButton
+                        href={`/api/vendor/statement?year=${statement.year}&format=csv`}
+                        variant="primary"
+                        icon="download"
+                      >
+                        Download {statement.year} as a spreadsheet
+                      </LinkButton>
+                    </div>
+
+                    <p className="t-xs t-muted">
+                      This is a record of what went through this market for you — it isn&rsquo;t tax advice and
+                      it isn&rsquo;t a 1099. Give it to whoever does your taxes.
+                    </p>
+                  </div>
+                )}
+              </Card>
 
               {me.balance < 0 ? (
                 <Card
