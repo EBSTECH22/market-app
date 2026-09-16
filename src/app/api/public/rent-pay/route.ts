@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
-import { unlockIfRentPaid } from "@/lib/unlock";
-import { notifyRentPaid } from "@/lib/rentpaid";
+import { finalizeRentAndNotify } from "@/lib/rentfinalize";
 import { isAdmin } from "@/lib/auth";
 import { logView } from "@/lib/viewlog";
 import { pushToAdmin } from "@/lib/push";
@@ -27,35 +26,12 @@ export async function GET(req: NextRequest) {
   const { vendor, contract } = found;
 
   const sessionId = req.nextUrl.searchParams.get("session_id") || "";
-  if (sessionId && stripe) {
-    const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["payment_intent"] });
-    const pi = session.payment_intent as { id: string; status: string; payment_method?: string | { id: string }; metadata?: Record<string, string> } | null;
-    if (!pi || pi.status !== "succeeded") return NextResponse.json({ error: "Payment not completed." }, { status: 400 });
-    if (pi.metadata?.vendorId !== vendor.id) return NextResponse.json({ error: "Session mismatch." }, { status: 400 });
-    const marker = `[ck ${pi.id.slice(-10)}]`;
-    const already = await db.ledgerEntry.findFirst({ where: { vendorId: vendor.id, type: "RENT_PAYMENT", note: { contains: marker } } });
-    const pmId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
-    let last4 = "";
-    if (pmId) {
-      const pm = await stripe.paymentMethods.retrieve(pmId);
-      last4 = pm.card?.last4 || "";
-      await db.vendor.update({ where: { id: vendor.id }, data: { stripePmId: pmId, cardLast4: last4 } });
-    }
-    const dueCents = Number(pi.metadata?.dueCents || 0);
-    const feeCents = Number(pi.metadata?.feeCents || 0);
-    if (!already && dueCents > 0) {
-      await db.ledgerEntry.create({
-        data: {
-          vendorId: vendor.id, type: "RENT_PAYMENT", amountCents: dueCents,
-          note: `Rent paid by card ····${last4}: $${((dueCents + feeCents) / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, ${PROCESSING_PERCENT}%) ${marker}`,
-        },
-      });
-      // Inside the !already branch: this page is re-fetched on every reload of
-      // the success screen, and only a NEW payment should notify.
-      await notifyRentPaid(vendor.id, { paidCents: dueCents, feeCents, last4, source: "link" });
-    }
-    try { await unlockIfRentPaid(vendor.id); } catch {}
-  return NextResponse.json({ paid: true, last4, dueCents, feeCents });
+  if (sessionId) {
+    // Shared with the vendor portal and the Stripe webhook so a payment is
+    // recorded identically however it is confirmed.
+    const res = await finalizeRentAndNotify(sessionId, "link", vendor.id);
+    if (!res.ok) return NextResponse.json({ error: res.error }, { status: res.status });
+    return NextResponse.json({ paid: true, last4: res.last4, dueCents: res.dueCents, feeCents: res.feeCents });
   }
 
   const agg = await db.ledgerEntry.aggregate({ where: { vendorId: vendor.id }, _sum: { amountCents: true } });

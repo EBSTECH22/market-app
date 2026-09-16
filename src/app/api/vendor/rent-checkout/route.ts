@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
-import { unlockIfRentPaid } from "@/lib/unlock";
-import { notifyRentPaid } from "@/lib/rentpaid";
+import { finalizeRentAndNotify } from "@/lib/rentfinalize";
 
 export const dynamic = "force-dynamic";
 
@@ -50,41 +49,14 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ url: session.url });
 }
 
-// GET ?session_id= — confirm payment, post it to the ledger, store the saved card
+// GET ?session_id= — confirm payment, post it to the ledger, store the saved card.
+// The work lives in lib/rentfinalize so this, the invoice link, and the Stripe
+// webhook all record a payment exactly the same way.
 export async function GET(req: NextRequest) {
   const vendorId = currentVendorId();
   if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!stripe) return NextResponse.json({ error: "Not configured." }, { status: 500 });
   const sessionId = req.nextUrl.searchParams.get("session_id") || "";
-  const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["payment_intent"] });
-  const pi = session.payment_intent as { id: string; status: string; payment_method?: string | { id: string }; metadata?: Record<string, string> } | null;
-  if (!pi || pi.status !== "succeeded") return NextResponse.json({ error: "Payment not completed." }, { status: 400 });
-  if (pi.metadata?.vendorId !== vendorId) return NextResponse.json({ error: "Session mismatch." }, { status: 400 });
-
-  const marker = `[ck ${pi.id.slice(-10)}]`;
-  const already = await db.ledgerEntry.findFirst({ where: { vendorId, type: "RENT_PAYMENT", note: { contains: marker } } });
-
-  const pmId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
-  let last4 = "";
-  if (pmId) {
-    const pm = await stripe.paymentMethods.retrieve(pmId);
-    last4 = pm.card?.last4 || "";
-    await db.vendor.update({ where: { id: vendorId }, data: { stripePmId: pmId, cardLast4: last4 } });
-  }
-
-  const dueCents = Number(pi.metadata?.dueCents || 0);
-  const feeCents = Number(pi.metadata?.feeCents || 0);
-  if (!already && dueCents > 0) {
-    await db.ledgerEntry.create({
-      data: {
-        vendorId, type: "RENT_PAYMENT", amountCents: dueCents,
-        note: `Rent paid by card ····${last4}: $${((dueCents + feeCents) / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, ${PROCESSING_PERCENT}%) ${marker}`,
-      },
-    });
-    // Only a NEW payment notifies — the marker check above is what makes a
-    // refreshed success page a no-op.
-    await notifyRentPaid(vendorId, { paidCents: dueCents, feeCents, last4, source: "portal" });
-  }
-  try { await unlockIfRentPaid(vendorId); } catch {}
-  return NextResponse.json({ ok: true, last4, dueCents, feeCents });
+  const res = await finalizeRentAndNotify(sessionId, "portal", vendorId);
+  if (!res.ok) return NextResponse.json({ error: res.error }, { status: res.status });
+  return NextResponse.json({ ok: true, last4: res.last4, dueCents: res.dueCents, feeCents: res.feeCents });
 }
