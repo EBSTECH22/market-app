@@ -7203,7 +7203,9 @@ export default function AdminPage() {
 
               <Card className="mb-4" title="Yours" subtitle="Staff and owner pages.">
                 {linkList([
+                  { path: "/register", open: true, body: "Kiosk register — PIN pad, selling, and the drawer, and nothing else. This is the one to bookmark on the till and leave open all day. Locks itself after 5 minutes idle." },
                   { path: "/admin", open: true, body: "This whole system. Employees sign in here too, with the employee button." },
+                  { path: "/admin/applications", open: true, body: "Applications pipeline — call notes, viewings, and creating an agreement from an application." },
                   { path: "/admin/contracts/…/print", body: "Printable booth agreement — reached from the print action on any agreement." },
                 ])}
               </Card>
@@ -7219,9 +7221,10 @@ export default function AdminPage() {
                 ])}
               </Card>
 
-              <Note tone="info" title="Only three are worth memorizing">
+              <Note tone="info" title="Only four are worth memorizing">
                 The bare domain for vendor login, <span className="mono">/market</span> for shoppers,
-                and <span className="mono">/apply</span> for hopefuls. Everything else is a button or an email.
+                <span className="mono">/apply</span> for hopefuls, and <span className="mono">/register</span>{" "}
+                on the till. Everything else is a button or an email.
               </Note>
             </>
           );
