@@ -177,9 +177,11 @@ export default function LabelsPage() {
                 value={format}
                 onChange={setFormat}
                 label="Label size"
+                /* Short labels here — the exact dimensions and what to buy are
+                   spelled out in the note directly below. */
                 options={[
-                  { value: "STANDARD", label: "Standard — 1\" × 2⅝\" (30/sheet)" },
-                  { value: "SMALL", label: "Small — ⅔\" × 1¾\" (60/sheet)" },
+                  { value: "STANDARD", label: "Standard · 30 per sheet" },
+                  { value: "SMALL", label: "Small · 60 per sheet" },
                 ]}
               />
 

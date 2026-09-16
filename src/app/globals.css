@@ -484,6 +484,8 @@ h1, h2, h3, h4 { font-weight: 650; letter-spacing: -0.014em; line-height: 1.25; 
   font-weight: 560;
   line-height: 1;
   white-space: nowrap;
+  /* A long label can never force its parent wider than the screen. */
+  max-width: 100%;
   cursor: pointer;
   user-select: none;
   text-decoration: none;
@@ -504,7 +506,7 @@ h1, h2, h3, h4 { font-weight: 650; letter-spacing: -0.014em; line-height: 1.25; 
 .btn-sm  { --btn-h: 34px; padding: 0 var(--sp-3); font-size: var(--fs-sm); border-radius: var(--r-sm); }
 .btn-lg  { --btn-h: 48px; padding: 0 var(--sp-5); font-size: var(--fs-md); }
 .btn-xl  { --btn-h: 60px; padding: 0 var(--sp-6); font-size: var(--fs-lg); font-weight: 640; border-radius: var(--r-lg); }
-.btn-block { display: flex; width: 100%; }
+.btn-block { display: flex; width: 100%; white-space: normal; line-height: 1.3; }
 
 /* Variants */
 .btn-primary {
@@ -569,9 +571,14 @@ h1, h2, h3, h4 { font-weight: 650; letter-spacing: -0.014em; line-height: 1.25; 
   flex: 0 0 auto;
 }
 
-/* Segmented control, for view switches. */
+/* Segmented control, for view switches.
+   Options wrap onto their own lines rather than running off the screen —
+   short ones ("Today") stay side by side, long ones ("Standard — 1" × 2⅝"")
+   get a full-width row each. */
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 3px;
   gap: 2px;
   background: var(--bg-sunken);
@@ -579,16 +586,22 @@ h1, h2, h3, h4 { font-weight: 650; letter-spacing: -0.014em; line-height: 1.25; 
   border-radius: var(--r-md);
 }
 .segmented > button {
-  height: 30px;
-  padding: 0 var(--sp-3);
+  min-height: 32px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px var(--sp-3);
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
   font-weight: 560;
+  line-height: 1.35;
   border-radius: var(--r-sm);
   cursor: pointer;
-  white-space: nowrap;
+  text-align: center;
+  /* was nowrap, which forced overflow instead of wrapping */
+  white-space: normal;
+  overflow-wrap: break-word;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .segmented > button:hover { color: var(--text); }
@@ -809,6 +822,9 @@ legend { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary)
   font-weight: 600;
   letter-spacing: 0.01em;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid transparent;
   line-height: 1.5;
 }
