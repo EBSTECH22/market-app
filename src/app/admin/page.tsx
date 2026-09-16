@@ -1172,7 +1172,7 @@ export default function AdminPage() {
   type OnbStep = { key: "agreement" | "countersign" | "firstRent"; label: string; done: boolean; detail?: string };
   type OnbContract = {
     id: string; boothLabel: string; monthlyRentCents: number; startDate: string; createdAt: string;
-    sent: boolean; viewedAt: string | null; vendorSignedAt: string | null; marketSignedAt: string | null;
+    sent: boolean; signToken?: string; viewedAt: string | null; vendorSignedAt: string | null; marketSignedAt: string | null;
   };
   type OnbRow = {
     vendorId: string; code: string; businessName: string; contactName: string;
@@ -2141,6 +2141,31 @@ export default function AdminPage() {
   /* Nudge one vendor who hasn't signed. The email spells out that the booth
      isn't held for them yet, so the confirm has to say that too — otherwise the
      operator doesn't know what they're about to send. */
+  /* The signing link, in a form you can paste into a text message.
+     Email is the only way this link has ever left the building, and agreements
+     have been landing in junk — so the fastest route to a signature is often a
+     text, which needs the link itself rather than a Send button. */
+  const signingLinkFor = (token: string) =>
+    typeof window === "undefined" ? `/sign/${token}` : `${window.location.origin}/sign/${token}`;
+
+  const copySigningLink = async (token: string, businessName: string) => {
+    const url = signingLinkFor(token);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Signing link copied", `Paste it into a text to ${businessName}.`);
+    } catch {
+      /* Clipboard access is blocked in plenty of situations — an insecure
+         origin, an embedded browser, a locked-down phone. Showing the link in
+         a dialog they can select beats a toast saying it didn't work. */
+      await dialog.alert({
+        title: `Signing link for ${businessName}`,
+        body: "Your browser blocked the clipboard, so here it is to copy by hand.",
+        copyable: url,
+        confirmLabel: "Done",
+      });
+    }
+  };
+
   const sendAgreementReminder = async (contractId: string, businessName: string) => {
     const yes = await dialog.confirm({
       title: `Remind ${businessName} to sign?`,
@@ -5854,6 +5879,17 @@ export default function AdminPage() {
                             >
                               Send reminder
                             </Button>
+                            {c.signToken ? (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                icon="copy"
+                                disabled={busy}
+                                onClick={() => copySigningLink(c.signToken || "", o.businessName)}
+                              >
+                                Copy signing link
+                              </Button>
+                            ) : null}
                             <Button
                               size="sm"
                               icon="edit"
@@ -6835,6 +6871,31 @@ export default function AdminPage() {
                       <Button size="sm" icon="mail" disabled={busy} onClick={() => sendMail("send_for_signature", "Signing link")}>
                         Send for signature
                       </Button>
+                      {/* Only while there's something to sign. Handing out a
+                          signing link for an executed agreement invites someone
+                          to sign it a second time. */}
+                      {c.signToken && !c.vendorSignedAt && c.status !== "ENDED" && c.status !== "WITHDRAWN" ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            icon="copy"
+                            disabled={busy}
+                            onClick={() => copySigningLink(c.signToken || "", c.vendor.businessName)}
+                          >
+                            Copy signing link
+                          </Button>
+                          <LinkButton
+                            href={`/sign/${c.signToken}`}
+                            size="sm"
+                            variant="ghost"
+                            icon="external"
+                            external
+                          >
+                            Open it
+                          </LinkButton>
+                        </>
+                      ) : null}
                       {!c.vendorSignedAt && c.status !== "ENDED" && c.status !== "WITHDRAWN" ? (
                         <Button
                           size="sm"

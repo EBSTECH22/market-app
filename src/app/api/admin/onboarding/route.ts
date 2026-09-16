@@ -107,6 +107,12 @@ export async function GET() {
               startDate: c.startDate,
               createdAt: c.createdAt,
               sent: !!c.signToken,
+              /* The token, so the screen can hand out a copyable signing link.
+                 It's already the only thing protecting the signing page, and it
+                 goes out in plain text in every email — but this list is
+                 owner/manager only, which is the same audience that can send
+                 it. */
+              signToken: c.signToken || "",
               viewedAt: c.viewedAt,
               vendorSignedAt: c.vendorSignedAt,
               marketSignedAt: c.marketSignedAt,
