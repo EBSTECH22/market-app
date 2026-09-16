@@ -12,6 +12,7 @@ import {
 import { money, fmtDate, fmtDateShort, fmtDateTime, fmtTime, relTime, isoDate, isoDateTime, fmtPhone, plural, dollarsToCents } from "@/lib/format";
 import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
+import { CashTender } from "@/components/register/CashTender";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; vendorName: string; vendorCode: string };
@@ -421,11 +422,12 @@ const STAFF_TABS: readonly AdminTab[] = ["register", "time", "floor"];
    /admin/applications, which was reachable ONLY from a small button buried in
    the Vendors tab. If you didn't already know the page existed, you couldn't
    find it — which is exactly what happened. */
-const NAV: { group: string; items: { id: string; label: string; icon: IconName; href?: string }[] }[] = [
+const NAV: { group: string; items: { id: string; label: string; icon: IconName; href?: string; owner?: boolean }[] }[] = [
   {
     group: "Daily",
     items: [
       { id: "register", label: "Register", icon: "register" },
+      { id: "kiosk", label: "Kiosk mode", icon: "lock", href: "/register" },
       { id: "time", label: "Time clock", icon: "clock" },
       { id: "calendar", label: "Calendar", icon: "calendar" },
       { id: "floor", label: "Floor stock", icon: "grid" },
@@ -441,7 +443,7 @@ const NAV: { group: string; items: { id: string; label: string; icon: IconName; 
   {
     group: "People",
     items: [
-      { id: "applications", label: "Applications", icon: "inbox", href: "/admin/applications" },
+      { id: "applications", label: "Applications", icon: "inbox", href: "/admin/applications", owner: true },
       { id: "vendors", label: "Vendors", icon: "store" },
       { id: "onboarding", label: "Onboarding", icon: "user" },
       { id: "contracts", label: "Agreements", icon: "contract" },
@@ -715,6 +717,9 @@ export default function AdminPage() {
   const [scPaused, setScPaused] = useState(false);
   const [cardAdj, setCardAdj] = useState("0");
   const [cardConfirm, setCardConfirm] = useState(false);
+  /* Cash used to book the instant you pressed the button — no tender, no
+     change, nothing on the receipt saying what was handed over. */
+  const [cashConfirm, setCashConfirm] = useState(false);
   const [editV, setEditV] = useState<string | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
   const [ledger, setLedger] = useState<RentLedger | null>(null);
@@ -1577,6 +1582,8 @@ export default function AdminPage() {
           <div style="display:flex;justify-content:space-between"><span>TAX</span><span>${money(sale.taxCents)}</span></div>
           ${sale.discountCents ? `<div style="display:flex;justify-content:space-between"><span>REWARDS</span><span>-${money(sale.discountCents)}</span></div>` : ""}
           <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px"><span>TOTAL</span><span>${money(sale.totalCents)}</span></div>
+          ${sale.cashTenderedCents ? `<div style="display:flex;justify-content:space-between"><span>CASH</span><span>${money(sale.cashTenderedCents)}</span></div>
+          <div style="display:flex;justify-content:space-between"><span>CHANGE</span><span>${money(sale.changeCents || 0)}</span></div>` : ""}
           <div>${sale.paymentMethod}${sale.cardName ? " - " + sale.cardName : ""}</div>
         </div>
         <div style="margin-top:8px">THANK YOU!<br>homegrown + homemade</div><div style="margin-top:6px;font-size:10px">ALL SALES FINAL — NO REFUNDS OR EXCHANGES</div>
@@ -1624,17 +1631,17 @@ export default function AdminPage() {
     else { setCust(null); setCustMsg("New customer — they'll be enrolled with this sale. \u2b50"); }
   };
 
-  const completeSale = async (paymentMethod: "CASH" | "CARD") => {
+  const completeSale = async (paymentMethod: "CASH" | "CARD", cashTenderedCents = 0) => {
     if (!cart.length) return;
     setBusy(true);
     let ok = false; let data: Record<string, unknown> = {};
     try { ({ ok, data } = await safeFetch("/api/admin/sale", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paymentMethod, cardName, lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity , customerContact: custQ.trim(), redeem })) }),
+      body: JSON.stringify({ paymentMethod, cardName, cashTenderedCents, lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity , customerContact: custQ.trim(), redeem })) }),
     })); } finally { setBusy(false); }
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
     setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });
-    setCart([]); setCardName("");
+    setCart([]); setCardName(""); setCashConfirm(false);
     loadDrawer(); loadAll(); loadTickets(ticketQ);
     if (autoPrint) setTimeout(() => printSale((data.sale as { id: string }).id), 250);
   };
@@ -2586,11 +2593,12 @@ export default function AdminPage() {
 
         <div className="sidebar-nav">
           {NAV.map((group) => {
-            /* Link entries aren't tabs, so they aren't in visibleTabs — they're
-               owner-only by the same rule that hides the People group's tabs
-               from staff. */
+            /* Link entries aren't tabs, so visibleTabs can't speak for them.
+               They carry their own `owner` flag instead — Applications is the
+               owner's, the kiosk is deliberately not, since a cashier is
+               exactly who needs it. */
             const items = group.items.filter((i) =>
-              i.href ? role === "admin" : (visibleTabs as readonly string[]).includes(i.id)
+              i.href ? (!i.owner || role === "admin") : (visibleTabs as readonly string[]).includes(i.id)
             );
             if (items.length === 0) return null;
             return (
@@ -3269,9 +3277,8 @@ export default function AdminPage() {
                     size="xl"
                     block
                     icon="cash"
-                    loading={busy && !cardConfirm}
-                    disabled={busy || cardConfirm}
-                    onClick={() => completeSale("CASH")}
+                    disabled={busy || cardConfirm || cashConfirm}
+                    onClick={() => { setCashConfirm(true); setCardConfirm(false); }}
                   >
                     Cash
                   </Button>
@@ -3280,12 +3287,23 @@ export default function AdminPage() {
                     size="xl"
                     block
                     icon="card"
-                    disabled={busy || cardConfirm}
-                    onClick={() => setCardConfirm(true)}
+                    disabled={busy || cardConfirm || cashConfirm}
+                    onClick={() => { setCardConfirm(true); setCashConfirm(false); }}
                   >
                     Card
                   </Button>
                 </div>
+
+                {/* Same component the kiosk uses, so change is worked out by one
+                    implementation rather than two that can drift. */}
+                {cashConfirm ? (
+                  <CashTender
+                    totalCents={redeem ? Math.max(0, total - 500) : total}
+                    busy={busy}
+                    onCancel={() => setCashConfirm(false)}
+                    onConfirm={(tendered) => completeSale("CASH", tendered)}
+                  />
+                ) : null}
 
                 {cardConfirm && (() => {
                   const adjPct = Number(cardAdj) || 0;

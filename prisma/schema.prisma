@@ -61,6 +61,10 @@ model Sale {
   discountCents Int        @default(0)
   cardAdjustCents Int      @default(0)
   saleSavingsCents Int    @default(0)
+  // Cash sales only. 0 means the tender wasn't recorded (exact-change path, or
+  // a sale booked before the register asked), NOT that nothing was handed over.
+  cashTenderedCents Int    @default(0)
+  changeCents     Int      @default(0)
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
 }

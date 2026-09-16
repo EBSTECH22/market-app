@@ -13,12 +13,14 @@ export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
   if (!isStaff()) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { lines, paymentMethod, cardName, customerContact, redeem } = (await req.json()) as {
+  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents } = (await req.json()) as {
     lines: { itemId: string; quantity: number }[];
     paymentMethod: string;
     cardName?: string;
     customerContact?: string;
     redeem?: boolean;
+    /** What the customer physically handed over. Cash sales only. */
+    cashTenderedCents?: number;
   };
   const drawer = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
   if (!drawer) return NextResponse.json({ error: "Open the drawer (employee sign-in) before ringing sales." }, { status: 400 });
@@ -75,6 +77,24 @@ export async function POST(req: NextRequest) {
     discountCents = Math.min(REDEEM_CENTS, subtotal + taxCents);
   }
   const totalCents = subtotal + cardAdjustCents + taxCents - discountCents;
+
+  /* Cash tendered, if the register sent it.
+     Zero means "not recorded" rather than "they paid nothing" — sales booked
+     before this field existed, and the one-tap exact-change path, both land
+     there legitimately. But a POSITIVE amount that doesn't cover the sale is a
+     real mistake, and booking it would leave a drawer that can never balance,
+     so that one is refused rather than clamped. */
+  const tenderedRaw = Number(cashTenderedCents);
+  const tendered =
+    paymentMethod === "CASH" && Number.isFinite(tenderedRaw) && tenderedRaw > 0
+      ? Math.round(tenderedRaw)
+      : 0;
+  if (tendered > 0 && tendered < totalCents) {
+    return NextResponse.json(
+      { error: `Cash given (${(tendered / 100).toFixed(2)}) doesn't cover the ${(totalCents / 100).toFixed(2)} total.` },
+      { status: 400 }
+    );
+  }
 
   /* Retry the whole transaction if the ticket number collides. Two concurrent
      sales can compute the same next number; the unique index rejects the second
@@ -147,6 +167,13 @@ export async function POST(req: NextRequest) {
         cardName: paymentMethod === "CARD" ? (cardName || "").trim().slice(0, 60) : "",
         employee: drawer.employee,
         subtotalCents: subtotal, taxCents, totalCents, paymentMethod,
+        /* Change is derived here, never taken from the client. The register
+           shows the cashier a figure, but the number that goes on the ticket
+           and the receipt is computed from the authoritative total — otherwise
+           a stale or edited client value could book a sale whose own arithmetic
+           doesn't add up, and the drawer would never reconcile. */
+        cashTenderedCents: tendered,
+        changeCents: tendered > 0 ? Math.max(0, tendered - totalCents) : 0,
         lines: { create: saleLines },
       },
     });
@@ -230,6 +257,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
   });
 }
