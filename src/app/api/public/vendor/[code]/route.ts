@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
+import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: { code: string } }) {
   const vendor = await db.vendor.findFirst({
-    where: { code: params.code.toUpperCase(), active: true },
+    where: { code: params.code.toUpperCase(), ...PUBLIC_VENDOR_WHERE },
     select: { id: true, code: true, businessName: true, publicBlurb: true, acceptsPreorders: true, acceptsRequests: true },
   });
   if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });

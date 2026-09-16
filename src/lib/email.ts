@@ -273,26 +273,62 @@ export async function sendSelfCheckoutReceiptEmail(
 
 export async function sendContractSignEmail(to: string, businessName: string, link: string) {
   const inner = `
-    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your booth contract is ready \u270d\ufe0f</h2>
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your booth agreement is ready \u270d\ufe0f</h2>
     <p style="font-size:14px;color:#374151;">Hi ${businessName} — your Community Harvest booth rental agreement is ready to review and sign. The packet includes your agreement, your application, and the Market Rules.</p>
     <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Review &amp; sign</a></p>
     <p style="font-size:12px;color:#9ca3af;">Sign right on your phone with your finger. This link is private to you — don&rsquo;t forward it. Questions? Just reply to this email.</p>`;
-  await send(to, "Your booth contract is ready to sign — Community Harvest", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
+  await send(to, "Your booth agreement is ready to sign — Community Harvest", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
   const marketCopy = process.env.MARKET_NOTIFY_EMAIL || "";
   if (marketCopy) {
-    try { await send(marketCopy, `[Market copy] Contract sent to ${businessName}`, shell(`<p style="font-size:14px;color:#374151;">A signing link was just emailed to <b>${businessName}</b> (${to}). Their private link, for your records:</p><p style="font-size:12px;word-break:break-all;"><a href="${link}">${link}</a></p><p style="font-size:12px;color:#9ca3af;">You&rsquo;ll get a push the moment they open it.</p>`)); } catch {}
+    try { await send(marketCopy, `[Market copy] Agreement sent to ${businessName}`, shell(`<p style="font-size:14px;color:#374151;">A signing link was just emailed to <b>${businessName}</b> (${to}). Their private link, for your records:</p><p style="font-size:12px;word-break:break-all;"><a href="${link}">${link}</a></p><p style="font-size:12px;color:#9ca3af;">You&rsquo;ll get a push the moment they open it.</p>`)); } catch {}
   }
+}
+
+/**
+ * Nudge for an agreement that's been sent but not signed.
+ *
+ * Firm and specific about what's actually at stake — the booth isn't held —
+ * without naming a deadline the market would then have to enforce.
+ */
+export async function sendAgreementReminderEmail(
+  to: string,
+  businessName: string,
+  link: string,
+  boothLabel: string,
+  monthlyRentCents: number,
+  sentDaysAgo: number
+) {
+  const rent = `$${(monthlyRentCents / 100).toFixed(2)}`;
+  const when =
+    sentDaysAgo <= 1 ? "yesterday"
+    : sentDaysAgo < 14 ? `${sentDaysAgo} days ago`
+    : sentDaysAgo < 60 ? `about ${Math.round(sentDaysAgo / 7)} weeks ago`
+    : "a while back";
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Still holding a spot for you</h2>
+    <p style="font-size:14px;color:#374151;">Hi ${businessName} — we sent your booth agreement ${when} and haven&rsquo;t seen it come back yet. It only takes a minute, and you can sign right on your phone with your finger.</p>
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin:18px 0;text-align:left;">
+      <div style="font-size:13px;font-weight:700;color:#b45309;margin-bottom:4px;">Your booth isn&rsquo;t reserved yet</div>
+      <div style="font-size:13px;color:#92400e;line-height:1.55;">Booth space isn&rsquo;t held until the agreement is signed <b>and</b> the first month is paid. Spaces are assigned first come, first served — so until both are done, someone else can take it.</div>
+    </div>
+    <table role="presentation" style="width:100%;font-size:13px;color:#374151;margin:0 0 18px;">
+      <tr><td style="text-align:left;padding:3px 0;color:#6b7280;">Booth</td><td style="text-align:right;padding:3px 0;font-weight:600;">${boothLabel}</td></tr>
+      <tr><td style="text-align:left;padding:3px 0;color:#6b7280;">Monthly rent</td><td style="text-align:right;padding:3px 0;font-weight:600;">${rent}</td></tr>
+    </table>
+    <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Review &amp; sign my agreement</a></p>
+    <p style="font-size:12px;color:#9ca3af;">Changed your mind, or need different terms? Just reply to this email and let us know — no hard feelings either way.</p>`;
+  await send(to, `Reminder: your booth agreement is still waiting — ${process.env.MARKET_NAME || "Community Harvest"}`, shell(inner));
 }
 
 export async function sendExecutedContractEmail(to: string, businessName: string, link: string, phoneType: string = "") {
   const inner = `
-    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your contract is fully signed \u2705</h2>
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your agreement is fully signed \u2705</h2>
     <p style="font-size:14px;color:#374151;">Hi ${businessName} — both you and Community Harvest have signed your booth rental agreement. It&rsquo;s official! Your copy (agreement, application, and Market Rules, with both signatures) is at the link below — open it anytime, and use the print button to save a PDF for your records.</p>
-    <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">View &amp; print my signed contract</a></p>
+    <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">View &amp; print my signed agreement</a></p>
     <p style="font-size:12px;color:#9ca3af;">Welcome to the vendor family. \ud83c\udf3e</p>
     ${installBlock(phoneType)}
     <p style="font-size:12px;color:#9ca3af;">Full guide for either phone, anytime: <a href="${baseUrl()}/guide">${baseUrl().replace("https://", "")}/guide</a></p>`;
-  await send(to, "Fully signed — your Community Harvest booth contract \u2705", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
+  await send(to, "Fully signed — your Community Harvest booth agreement \u2705", shell(inner + `<p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">All sales final — no refunds or exchanges.</p>`));
 }
 
 export async function sendSetupGuideEmail(to: string, businessName: string, phoneType: string = "") {
@@ -369,7 +405,7 @@ export async function sendRentChargedEmail(to: string, businessName: string, due
 export async function sendFirstRentEmail(to: string, businessName: string, booth: string, monthlyCents: number, proratedCents: number, daysCharged: number, daysInMonth: number, startStr: string, hasCard: boolean, payToken: string = "") {
   const inner = `
     <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Your first month&rsquo;s rent \ud83e\uddfe</h2>
-    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — your contract is fully signed, so here&rsquo;s your first rent, prorated to your start date. It&rsquo;s posted to your vendor balance, not charged to a card.</p>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — your agreement is fully signed, so here&rsquo;s your first rent, prorated to your start date. It&rsquo;s posted to your vendor balance, not charged to a card.</p>
     <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
       <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Booth ${booth} \u00b7 monthly rent</span><b>$${(monthlyCents / 100).toFixed(2)}</b></div>
       <div style="font-size:13.5px;display:flex;justify-content:space-between;"><span>Starting ${startStr} \u2192 ${daysCharged} of ${daysInMonth} days</span><b>\u00d7 ${daysCharged}/${daysInMonth}</b></div>

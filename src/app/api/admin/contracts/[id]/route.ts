@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isAdmin } from "@/lib/auth";
-import { sendContractSignEmail, sendSetupGuideEmail, sendRentLinkEmail } from "@/lib/email";
+import { sendContractSignEmail, sendSetupGuideEmail, sendRentLinkEmail, sendAgreementReminderEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -85,15 +85,124 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ contract: updated });
   }
 
-  const data: { monthlyRentCents?: number; boothLabel?: string } = {};
-  if (monthlyRentDollars !== undefined) {
-    const rent = Math.round(Number(monthlyRentDollars) * 100);
-    if (Number.isNaN(rent) || rent < 0) return NextResponse.json({ error: "Invalid rent." }, { status: 400 });
-    data.monthlyRentCents = rent;
+  // ---- nudge an agreement that's been sent but not signed -------------------
+  if (action === "send_reminder") {
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+    if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
+    if (contract.vendorSignedAt) {
+      return NextResponse.json({ error: "They've already signed — nothing to remind them about." }, { status: 400 });
+    }
+    let token = contract.signToken;
+    if (!token) {
+      token = randomBytes(16).toString("hex");
+      await db.contract.update({ where: { id: contract.id }, data: { signToken: token } });
+    }
+    const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+    const days = Math.max(
+      0,
+      Math.round((Date.now() - new Date(contract.createdAt).getTime()) / 86_400_000)
+    );
+    try {
+      await sendAgreementReminderEmail(
+        vendor.email, vendor.businessName, `${base}/sign/${token}`,
+        contract.boothLabel, contract.monthlyRentCents, days
+      );
+    } catch {
+      return NextResponse.json({ error: "Email failed to send — check their email address." }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, sentTo: vendor.email });
   }
-  if (typeof boothLabel === "string" && boothLabel.trim()) data.boothLabel = boothLabel.trim();
-  if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 
-  const updated = await db.contract.update({ where: { id: contract.id }, data });
-  return NextResponse.json({ contract: updated });
+  // ---- edit the terms of an agreement nobody has signed yet -----------------
+  if (action === "update_terms") {
+    if (contract.vendorSignedAt) {
+      return NextResponse.json(
+        { error: "They've already signed this one. Void it and send a fresh agreement instead of changing signed terms." },
+        { status: 400 }
+      );
+    }
+    if (contract.status === "ENDED" || contract.status === "VOIDED") {
+      return NextResponse.json({ error: "This agreement is closed — create a new one." }, { status: 400 });
+    }
+
+    const data: { boothLabel?: string; monthlyRentCents?: number; startDate?: Date } = {};
+
+    if (typeof boothLabel === "string") {
+      const b = boothLabel.trim().slice(0, 40);
+      if (!b) return NextResponse.json({ error: "Booth label can't be blank." }, { status: 400 });
+      data.boothLabel = b;
+    }
+    if (monthlyRentDollars !== undefined) {
+      const rent = Math.round(Number(monthlyRentDollars) * 100);
+      if (!Number.isFinite(rent) || rent < 0) return NextResponse.json({ error: "Rent has to be a number, zero or more." }, { status: 400 });
+      if (rent > 100_000_00) return NextResponse.json({ error: "That rent looks wrong — check the amount." }, { status: 400 });
+      data.monthlyRentCents = rent;
+    }
+    const sd = (body as { startDate?: string }).startDate;
+    if (typeof sd === "string" && sd.trim()) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(sd.trim())) return NextResponse.json({ error: "Start date must be YYYY-MM-DD." }, { status: 400 });
+      const d = new Date(`${sd.trim()}T12:00:00`);
+      if (isNaN(d.getTime())) return NextResponse.json({ error: "That start date isn't valid." }, { status: 400 });
+      data.startDate = d;
+    }
+
+    if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
+
+    const updated = await db.contract.update({ where: { id: contract.id }, data });
+    return NextResponse.json({ contract: updated });
+  }
+
+  // ---- they signed, terms were wrong: void it and issue a corrected one -----
+  if (action === "void_and_reissue") {
+    if (contract.marketSignedAt) {
+      return NextResponse.json({ error: "This agreement is fully executed. Use 30-day notice to end it." }, { status: 400 });
+    }
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+    if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
+
+    const b = typeof boothLabel === "string" && boothLabel.trim()
+      ? boothLabel.trim().slice(0, 40)
+      : contract.boothLabel;
+    const rent = monthlyRentDollars !== undefined
+      ? Math.round(Number(monthlyRentDollars) * 100)
+      : contract.monthlyRentCents;
+    if (!Number.isFinite(rent) || rent < 0) return NextResponse.json({ error: "Rent has to be a number, zero or more." }, { status: 400 });
+
+    const sd2 = (body as { startDate?: string }).startDate;
+    let start = contract.startDate;
+    if (typeof sd2 === "string" && sd2.trim()) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(sd2.trim())) return NextResponse.json({ error: "Start date must be YYYY-MM-DD." }, { status: 400 });
+      const d = new Date(`${sd2.trim()}T12:00:00`);
+      if (isNaN(d.getTime())) return NextResponse.json({ error: "That start date isn't valid." }, { status: 400 });
+      start = d;
+    }
+
+    // The old one is kept, marked VOIDED, with its signature intact as a record
+    // of what they agreed to. The replacement starts clean and unsigned.
+    const [, replacement] = await db.$transaction([
+      db.contract.update({
+        where: { id: contract.id },
+        data: { status: "VOIDED", endDate: new Date() },
+      }),
+      db.contract.create({
+        data: { vendorId: contract.vendorId, boothLabel: b, monthlyRentCents: rent, startDate: start, signToken: randomBytes(16).toString("hex") },
+      }),
+    ]);
+
+    const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+    let emailed = false;
+    try {
+      await sendContractSignEmail(vendor.email, vendor.businessName, `${base}/sign/${replacement.signToken}`);
+      emailed = true;
+    } catch { /* the replacement exists either way — surface it below */ }
+
+    return NextResponse.json({
+      contract: replacement,
+      emailed,
+      sentTo: vendor.email,
+      signUrl: `${base}/sign/${replacement.signToken}`,
+    });
+  }
+
+  return NextResponse.json({ error: "Unknown action." }, { status: 400 });
 }

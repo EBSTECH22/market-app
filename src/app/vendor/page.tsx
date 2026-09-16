@@ -1033,7 +1033,7 @@ export default function VendorDashboard() {
                       variant={me.vendor.contracts[0].vendorSignedAt ? "secondary" : "primary"}
                       icon="contract"
                     >
-                      {me.vendor.contracts[0].vendorSignedAt ? "My contract" : "Sign your contract"}
+                      {me.vendor.contracts[0].vendorSignedAt ? "My agreement" : "Sign your agreement"}
                     </LinkButton>
                   ) : null}
                 </div>

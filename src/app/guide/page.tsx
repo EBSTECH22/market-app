@@ -195,7 +195,7 @@ export default function GuidePage() {
             Every sale credits your balance the moment it rings — your net, after any commission. Booth rent comes out
             of the same balance. The <b>Money</b> tab shows every line with a date, and balances{" "}
             <b>pay out by the 15th of the following month</b>. Something look off? Say so within 30 days — it&rsquo;s your
-            contract right, and we want the books right too.
+            agreement right, and we want the books right too.
           </p>
         </Card>
 

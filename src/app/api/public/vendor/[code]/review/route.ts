@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest, { params }: { params: { code: string } }) {
   const { name, rating, body, website } = await req.json();
   if (website) return NextResponse.json({ ok: true }); // honeypot: bots fill every field
-  const vendor = await db.vendor.findFirst({ where: { code: params.code.toUpperCase(), active: true } });
+  const vendor = await db.vendor.findFirst({ where: { code: params.code.toUpperCase(), ...PUBLIC_VENDOR_WHERE } });
   if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
   const r = Math.round(Number(rating));
   if (!name?.trim() || !body?.trim() || isNaN(r) || r < 1 || r > 5) {

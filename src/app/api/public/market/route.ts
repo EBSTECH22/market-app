@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
+import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -8,18 +9,18 @@ export const revalidate = 0;
 // Public: every active vendor + what's actually on the floor right now
 export async function GET() {
   const vendors = await db.vendor.findMany({
-    where: { active: true },
+    where: PUBLIC_VENDOR_WHERE,
     select: { code: true, businessName: true, publicBlurb: true, acceptsPreorders: true, acceptsRequests: true },
     orderBy: { businessName: "asc" },
   });
   const items = await db.item.findMany({
-    where: { active: true, quantity: { gt: 0 }, vendor: { active: true } },
+    where: { active: true, quantity: { gt: 0 }, vendor: PUBLIC_VENDOR_WHERE },
     select: { name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { code: true } } },
     orderBy: { name: "asc" },
   });
   const logos = await db.vendorPhoto.findMany({ where: { kind: "LOGO" }, select: { id: true, vendorId: true } });
   const reviews = await db.review.groupBy({ by: ["vendorId"], _avg: { rating: true }, _count: true });
-  const vmap = await db.vendor.findMany({ where: { active: true }, select: { id: true, code: true } });
+  const vmap = await db.vendor.findMany({ where: PUBLIC_VENDOR_WHERE, select: { id: true, code: true } });
   const idToCode = new Map(vmap.map((v) => [v.id, v.code]));
   const ratings: Record<string, { avg: number; n: number }> = {};
   for (const r of reviews) {

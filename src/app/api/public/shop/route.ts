@@ -4,10 +4,11 @@ import { effectivePriceCents } from "@/lib/pricing";
 import { stripe } from "@/lib/stripe";
 import { randomBytes } from "crypto";
 import type { CartLine } from "@/lib/selfcheckout";
+import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
 
-const sellable = { active: true, quantity: { gt: 0 }, vendor: { active: true, allowSelfCheckout: true } };
+const sellable = { active: true, quantity: { gt: 0 }, vendor: { ...PUBLIC_VENDOR_WHERE, allowSelfCheckout: true } };
 
 async function selfCheckoutPaused(): Promise<boolean> {
   const row = await db.setting.findUnique({ where: { key: "selfCheckoutPaused" } });
@@ -39,8 +40,12 @@ export async function POST(req: NextRequest) {
   if (b.action === "lookup") {
     const sku = String(b.sku || "").trim().toUpperCase();
     if (!sku) return NextResponse.json({ error: "No code." }, { status: 400 });
-    const item = await db.item.findUnique({ where: { sku }, include: { vendor: { select: { businessName: true, active: true, allowSelfCheckout: true } } } });
-    if (!item || !item.active || !item.vendor.active) return NextResponse.json({ error: `Nothing found for ${sku} — check the code under the barcode.` }, { status: 404 });
+    const item = await db.item.findUnique({ where: { sku }, include: { vendor: { select: { businessName: true, active: true, portalLocked: true, allowSelfCheckout: true } } } });
+    // portalLocked: the vendor is still onboarding — their goods aren't on the
+    // floor yet, so a scanned code shouldn't resolve.
+    if (!item || !item.active || !item.vendor.active || item.vendor.portalLocked) {
+      return NextResponse.json({ error: `Nothing found for ${sku} — check the code under the barcode.` }, { status: 404 });
+    }
     if (!item.vendor.allowSelfCheckout) return NextResponse.json({ error: `${item.vendor.businessName} items go through the register — take this one up front. 😊` }, { status: 400 });
     if (item.quantity <= 0) return NextResponse.json({ error: `${item.name} shows sold out — grab a staff member if you're holding one.` }, { status: 400 });
     return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), basePriceCents: item.priceCents, salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, vendorName: item.vendor.businessName } });

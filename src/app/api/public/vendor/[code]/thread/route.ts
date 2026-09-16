@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { sendThreadLinkEmail, sendVendorInboxEmail } from "@/lib/email";
 import { pushToAdmin, pushToVendor } from "@/lib/push";
 import { randomBytes } from "crypto";
+import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ const LABEL: Record<string, string> = { PREORDER: "Pre-order", REQUEST: "Request
 export async function POST(req: NextRequest, { params }: { params: { code: string } }) {
   const { type, name, email, phone, body, website } = await req.json();
   if (website) return NextResponse.json({ ok: true }); // honeypot
-  const vendor = await db.vendor.findFirst({ where: { code: params.code.toUpperCase(), active: true } });
+  const vendor = await db.vendor.findFirst({ where: { code: params.code.toUpperCase(), ...PUBLIC_VENDOR_WHERE } });
   if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
 
   if (!["PREORDER", "REQUEST", "COMPLAINT"].includes(type)) return NextResponse.json({ error: "Bad type." }, { status: 400 });

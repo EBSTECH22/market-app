@@ -17,7 +17,7 @@ const STAGE_BADGE: Record<string, { label: string; tone: BadgeTone }> = {
   NEW: { label: "New", tone: "info" },
   CALLED: { label: "Called", tone: "warn" },
   VIEWING: { label: "Viewing booked", tone: "warn" },
-  CONTRACT: { label: "Contract sent", tone: "success" },
+  CONTRACT: { label: "Agreement sent", tone: "success" },
   VENDOR: { label: "Vendor added", tone: "success" },
   DONE: { label: "Closed", tone: "neutral" },
 };
@@ -95,7 +95,7 @@ export default function ApplicationsPage() {
   const addAsVendor = async (a: App) => {
     const ok = await dialog.confirm({
       title: `Add ${a.businessName} as a vendor?`,
-      body: "The application files onto their new vendor profile. Their portal stays locked until the contract is fully signed and first rent is paid.",
+      body: "The application files onto their new vendor profile. Their portal stays locked until the agreement is fully signed and first rent is paid.",
       confirmLabel: "Add as vendor",
       cancelLabel: "Not yet",
     });
@@ -104,7 +104,7 @@ export default function ApplicationsPage() {
     if (d) {
       toast.success(
         `${a.businessName} added as a vendor`,
-        `Vendor ${d.vendor.code}. The portal stays locked until contract and first rent.`,
+        `Vendor ${d.vendor.code}. The portal stays locked until the agreement is signed and first rent is paid.`,
       );
     }
   };
@@ -140,7 +140,7 @@ export default function ApplicationsPage() {
       // The signing link is the only copy — it used to be dumped into an
       // alert() the operator couldn't select, let alone copy.
       await dialog.alert({
-        title: "Contract created — but the email didn't send",
+        title: "Agreement created — but the email didn't send",
         tone: "warn",
         body: (
           <>
@@ -152,7 +152,7 @@ export default function ApplicationsPage() {
         confirmLabel: "Done",
       });
     } else {
-      toast.success("Contract created", `Signing link emailed to ${a.email} — vendor ${d.vendor.code}.`);
+      toast.success("Agreement created", `Signing link emailed to ${a.email} — vendor ${d.vendor.code}.`);
     }
   };
 
@@ -187,7 +187,7 @@ export default function ApplicationsPage() {
       cell: (a) => (
         <span className="row g-2 end wrap">
           <Badge tone={statusTone(a.status)} dot>{statusLabel(a.status)}</Badge>
-          {a.stage === "CONTRACT" ? <Badge tone="info" dot>Contract sent</Badge> : null}
+          {a.stage === "CONTRACT" ? <Badge tone="info" dot>Agreement sent</Badge> : null}
         </span>
       ),
     },
@@ -201,7 +201,7 @@ export default function ApplicationsPage() {
 
       <PageHeader
         title="Vendor applications"
-        subtitle="Review and call (save your notes) → book a viewing or skip it → create the contract. Portal access opens itself only once the contract is fully signed and first rent is paid."
+        subtitle="Review and call (save your notes) → book a viewing or skip it → create the agreement. Portal access opens itself only once the agreement is fully signed and first rent is paid."
       />
 
       {loading ? (
@@ -281,7 +281,7 @@ export default function ApplicationsPage() {
                         disabled={busy}
                         onClick={() => setForm(form?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}
                       >
-                        Create contract
+                        Create agreement
                       </Button>
                     )}
 
@@ -341,7 +341,7 @@ export default function ApplicationsPage() {
                   {form?.id === a.id && (
                     <div className="card card-pad-sm stack g-4" style={{ background: "var(--bg-inset)" }}>
                       <div>
-                        <h3 className="t-card">Create contract</h3>
+                        <h3 className="t-card">Create agreement</h3>
                         <p className="t-xs t-muted">First month is full rent; month two prorates.</p>
                       </div>
 

@@ -4,12 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { usePulse } from "@/lib/usePulse";
 import {
-  Icon, Button, IconButton, LinkButton, Field, Input, Select, SearchInput,
+  Icon, Button, IconButton, LinkButton, Field, Input, Select, MoneyInput, SearchInput,
   Checkbox, ToggleTile, Segmented, Modal, Panel, useDialog, useToast,
   DataTable, DescList, Badge, Card, Stat, EmptyState, Note, Skeleton,
   SkeletonStats, PageHeader, type Column, type IconName,
 } from "@/components/ui";
-import { money, fmtDate, fmtDateTime, fmtTime, relTime, isoDate, fmtPhone, plural } from "@/lib/format";
+import { money, fmtDate, fmtDateTime, fmtTime, relTime, isoDate, fmtPhone, plural, dollarsToCents } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
@@ -41,7 +41,7 @@ const DENOMS: [string, string, number][] = [
 
 /* Tabs live in the URL hash so refresh, back/forward and shared links all work. */
 const ADMIN_TABS = [
-  "register", "time", "reports", "bank", "floor", "vendors",
+  "register", "time", "reports", "bank", "floor", "vendors", "onboarding",
   "customers", "contracts", "tents", "team", "links", "settings",
 ] as const;
 type AdminTab = (typeof ADMIN_TABS)[number];
@@ -70,7 +70,8 @@ const NAV: { group: string; items: { id: AdminTab; label: string; icon: IconName
     group: "People",
     items: [
       { id: "vendors", label: "Vendors", icon: "store" },
-      { id: "contracts", label: "Contracts", icon: "contract" },
+      { id: "onboarding", label: "Onboarding", icon: "user" },
+      { id: "contracts", label: "Agreements", icon: "contract" },
       { id: "customers", label: "Customers", icon: "star" },
       { id: "tents", label: "Tent days", icon: "tent" },
       { id: "team", label: "Team & payroll", icon: "users" },
@@ -92,7 +93,8 @@ const TAB_META: Record<AdminTab, { label: string; icon: IconName; sub: string }>
   reports: { label: "Reports", icon: "chart", sub: "Sales by period, vendor, and item" },
   bank: { label: "Bank & payouts", icon: "bank", sub: "Stripe balance, payouts, and month-end settlement" },
   vendors: { label: "Vendors", icon: "store", sub: "Accounts, balances, applications, and complaints" },
-  contracts: { label: "Contracts", icon: "contract", sub: "Booth leases, signatures, and notice" },
+  onboarding: { label: "Onboarding", icon: "user", sub: "Accepted vendors who aren't live to shoppers yet" },
+  contracts: { label: "Agreements", icon: "contract", sub: "Booth agreements, signatures, and notice" },
   customers: { label: "Customers", icon: "star", sub: "Rewards members and their spend" },
   tents: { label: "Tent days", icon: "tent", sub: "Outdoor day-booth dates and bookings" },
   team: { label: "Team & payroll", icon: "users", sub: "Employees, pay rates, documents, and payroll runs" },
@@ -208,6 +210,13 @@ export default function AdminPage() {
   const [adminPushKey, setAdminPushKey] = useState("");
   const [adminPushMsg, setAdminPushMsg] = useState("");
   const [cMsg, setCMsg] = useState("");
+  /* The one modal behind both "Edit terms" and "Void and send a corrected
+     agreement" — same fields, different action on save. */
+  const [termsForm, setTermsForm] = useState<{
+    id: string; mode: "update_terms" | "void_and_reissue"; businessName: string;
+    boothLabel: string; rent: string; startDate: string;
+  } | null>(null);
+  const [termsErr, setTermsErr] = useState("");
 
   // settings
   const [settingsMsg, setSettingsMsg] = useState("");
@@ -485,6 +494,45 @@ export default function AdminPage() {
     await loadTeam();
   };
 
+  /* ---------- onboarding ----------------------------------------------------
+     Accepted vendors whose portal is still locked, plus exactly what each one
+     is waiting on. Served whole by /api/admin/onboarding — this page does no
+     arithmetic on it beyond counting the tiles. */
+  type OnbStep = { key: "agreement" | "countersign" | "firstRent"; label: string; done: boolean; detail?: string };
+  type OnbContract = {
+    id: string; boothLabel: string; monthlyRentCents: number; startDate: string; createdAt: string;
+    sent: boolean; viewedAt: string | null; vendorSignedAt: string | null; marketSignedAt: string | null;
+  };
+  type OnbRow = {
+    vendorId: string; code: string; businessName: string; contactName: string;
+    email: string; phone: string; cardLast4: string; createdAt: string;
+    contract: OnbContract | null;
+    balanceCents: number; owesCents: number;
+    steps: OnbStep[];
+    nextStep: "agreement" | "countersign" | "firstRent" | null;
+    nextStepLabel: string;
+    daysWaiting: number;
+    publiclyVisible: boolean;
+  };
+  const [onboarding, setOnboarding] = useState<OnbRow[]>([]);
+  const [onbLoading, setOnbLoading] = useState(false);
+  const [onbErr, setOnbErr] = useState("");
+  const [onbOpen, setOnbOpen] = useState<string | null>(null);
+
+  const loadOnboarding = useCallback(async () => {
+    setOnbLoading(true); setOnbErr("");
+    try {
+      const r = await fetch("/api/admin/onboarding");
+      if (!r.ok) { setOnbErr("Couldn't load the onboarding list."); return; }
+      setOnboarding((await r.json()).vendors || []);
+    } catch {
+      setOnbErr("Couldn't reach the server. Check the connection and try again.");
+    } finally {
+      setOnbLoading(false);
+    }
+  }, []);
+  useEffect(() => { if (authed && role === "admin" && tab === "onboarding") loadOnboarding(); }, [authed, role, tab, loadOnboarding]);
+
   type TentD = { id: string; date: string; capacity: number; open: boolean; bookings: { id: string; name: string; businessName: string; email: string; phone: string; status: string }[] };
   const [tentDates, setTentDates] = useState<TentD[]>([]);
   const [tentFrom, setTentFrom] = useState("");
@@ -560,7 +608,7 @@ export default function AdminPage() {
     } else {
       const yes = await dialog.confirm({
         title: `Accept ${businessName}?`,
-        body: "They'll get the welcome email letting them know someone will be calling. You can set up their booth and contract after that.",
+        body: "They'll get the welcome email letting them know someone will be calling. You can set up their booth and agreement after that.",
         confirmLabel: "Accept application",
       });
       if (!yes) return;
@@ -925,7 +973,7 @@ export default function AdminPage() {
       if (!ok) { setCMsg(String(data.error || "Couldn't create it.")); return; }
       setCMsg("");
       toast.success(
-        "Contract created",
+        "Agreement created",
         `First month prorates to ${money(Number(data.firstMonthCents) || 0)} and is on their balance. Full rent auto-charges every 1st after that.`
       );
       setCBooth(""); setCStart("");
@@ -1042,6 +1090,209 @@ export default function AdminPage() {
     } finally { setBusy(false); }
   };
 
+  /* Nudge one vendor who hasn't signed. The email spells out that the booth
+     isn't held for them yet, so the confirm has to say that too — otherwise the
+     operator doesn't know what they're about to send. */
+  const sendAgreementReminder = async (contractId: string, businessName: string) => {
+    const yes = await dialog.confirm({
+      title: `Remind ${businessName} to sign?`,
+      body: "They get their signing link again, in an email that says plainly the booth isn't reserved until the agreement is signed and the first month is paid.",
+      confirmLabel: "Send the reminder",
+      cancelLabel: "Not now",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${contractId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send_reminder" }),
+      });
+      if (!ok) { toast.error("Couldn't send the reminder", String(data.error || "")); return; }
+      toast.success("Reminder sent", `Emailed to ${String(data.sentTo || businessName)}.`);
+      await loadOnboarding();
+      await loadAll();
+    } finally { setBusy(false); }
+  };
+
+  /* Bulk nudge. Threshold first, then a count, then the result — three small
+     questions beat one dialog nobody reads. */
+  const remindAllUnsigned = async () => {
+    const pick = await dialog.choose({
+      title: "Remind everyone unsigned",
+      body: "Only vendors whose agreement still has no signature get an email.",
+      label: "Who to remind",
+      options: [
+        { value: "0", label: "Everyone with an unsigned agreement" },
+        { value: "3", label: "Waiting 3 days or more" },
+        { value: "7", label: "Waiting 7 days or more" },
+        { value: "14", label: "Waiting 14 days or more" },
+      ],
+      confirmLabel: "Continue",
+    });
+    if (pick === null) return;
+    const minDays = Number(pick) || 0;
+
+    /* Ask the server how many actually qualify. The onboarding list only holds
+       vendors who aren't live yet, but the sweep also covers unsigned
+       agreements belonging to vendors who already are — a second booth, say —
+       so counting locally would understate it. */
+    const probe = await safeFetch("/api/admin/onboarding", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "remind_all", minDaysWaiting: minDays, dryRun: true }),
+    });
+    if (!probe.ok) { toast.error("Couldn't check who's unsigned", String(probe.data.error || "")); return; }
+    const willGet = Number(probe.data.eligibleCount) || 0;
+    const noEmail = Number(probe.data.missingEmail) || 0;
+
+    if (willGet === 0) {
+      toast.info("Nobody to remind", minDays === 0
+        ? "Every agreement out there has been signed."
+        : `Nobody has been waiting ${minDays} days or more.`);
+      return;
+    }
+
+    const yes = await dialog.confirm({
+      title: `Send ${plural(willGet, "reminder")}?`,
+      body: (
+        <>
+          <p>
+            {minDays === 0
+              ? "Every vendor sitting on an unsigned agreement"
+              : `Every vendor who's been waiting ${minDays} days or more`}{" "}
+            gets their signing link again, in an email that says the booth isn&rsquo;t reserved
+            until it&rsquo;s signed and the first month is paid.
+          </p>
+          {noEmail > 0 ? (
+            <p style={{ marginTop: 8 }}>
+              {plural(noEmail, "of them has", `of them have`)} no email address on file and will be
+              skipped — you&rsquo;ll get the list afterwards.
+            </p>
+          ) : null}
+        </>
+      ),
+      confirmLabel: "Send the reminders",
+      cancelLabel: "Not now",
+    });
+    if (!yes) return;
+
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/onboarding", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "remind_all", minDaysWaiting: minDays }),
+      });
+      if (!ok) { toast.error("Couldn't send the reminders", String(data.error || "")); return; }
+
+      const sentCount = Number(data.sentCount) || 0;
+      const skipped = Number(data.skipped) || 0;
+      const failed = (data.failed as { businessName: string; reason: string }[] | undefined) || [];
+
+      toast.success(
+        `${plural(sentCount, "reminder")} sent`,
+        failed.length > 0
+          ? `${plural(failed.length, "vendor")} couldn't be emailed — details in a moment.`
+          : skipped > 0
+            ? `${skipped} skipped — they haven't been waiting that long yet.`
+            : undefined
+      );
+
+      if (failed.length > 0) {
+        await dialog.alert({
+          title: `${plural(failed.length, "vendor")} didn't get the email`,
+          tone: "warn",
+          body: (
+            <>
+              <DescList items={failed.map((f) => ({ label: f.businessName, value: f.reason }))} />
+              <p className="t-xs t-muted mt-3">Fix the email address on their vendor record, then send theirs on its own.</p>
+            </>
+          ),
+          confirmLabel: "Done",
+        });
+      }
+      await loadOnboarding();
+      await loadAll();
+    } finally { setBusy(false); }
+  };
+
+  /* One modal serves both "fix the terms" and "void it and send a corrected
+     one" — the fields are identical, only the action and the warning differ. */
+  const openTerms = (
+    c: { id: string; businessName: string; boothLabel: string; monthlyRentCents: number; startDate: string },
+    mode: "update_terms" | "void_and_reissue"
+  ) => {
+    setTermsErr("");
+    const d = new Date(c.startDate);
+    setTermsForm({
+      id: c.id,
+      mode,
+      businessName: c.businessName,
+      boothLabel: c.boothLabel,
+      rent: (c.monthlyRentCents / 100).toFixed(2),
+      startDate: Number.isNaN(d.getTime()) ? isoDate() : isoDate(d),
+    });
+  };
+
+  const saveTerms = async () => {
+    if (!termsForm) return;
+    const booth = termsForm.boothLabel.trim();
+    const cents = dollarsToCents(termsForm.rent);
+    if (!booth) { setTermsErr("Give the booth a label."); return; }
+    if (cents === null || cents < 0) { setTermsErr("Enter the monthly rent as a number, like 150."); return; }
+    if (!termsForm.startDate) { setTermsErr("Pick a start date."); return; }
+
+    if (termsForm.mode === "void_and_reissue") {
+      const yes = await dialog.confirm({
+        title: "Void this agreement and send a corrected one?",
+        body: `${termsForm.businessName} has already signed, so this agreement can't be edited. Voiding it keeps the signed copy on file as a record and emails them a fresh agreement on the new terms — they have to sign again before the booth is theirs.`,
+        confirmLabel: "Void and send the new one",
+        cancelLabel: "Keep the old one",
+        tone: "danger",
+      });
+      if (!yes) return;
+    }
+
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch(`/api/admin/contracts/${termsForm.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: termsForm.mode,
+          boothLabel: booth,
+          monthlyRentDollars: cents / 100,
+          startDate: termsForm.startDate,
+        }),
+      });
+      if (!ok) { setTermsErr(String(data.error || "That didn't go through.")); return; }
+
+      if (termsForm.mode === "void_and_reissue") {
+        if (data.emailed) {
+          toast.success(
+            "Corrected agreement sent",
+            `${termsForm.businessName} has a fresh signing link at ${String(data.sentTo || "their email")}.`
+          );
+        } else {
+          // The link is the only copy — never bury it in a toast that vanishes.
+          await dialog.alert({
+            title: "Agreement reissued — but the email didn't send",
+            tone: "warn",
+            body: <>Send this signing link to <b>{String(data.sentTo || termsForm.businessName)}</b> yourself.</>,
+            copyable: String(data.signUrl || ""),
+            confirmLabel: "Done",
+          });
+        }
+        // The old record is voided and the panel was showing it.
+        setContractOpen(null);
+        setOnbOpen(null);
+      } else {
+        toast.success("Agreement terms updated", `Booth ${booth} · ${money(cents)}/mo.`);
+      }
+
+      setTermsForm(null);
+      await loadAll();
+      await loadOnboarding();
+    } finally { setBusy(false); }
+  };
+
   // ---------- settings ----------
   useEffect(() => {
     if (!authed || role !== "admin") return;
@@ -1106,7 +1357,7 @@ export default function AdminPage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rentPerSqft }),
     });
-    if (ok) { setRateMsg(""); toast.success("Booth rent rate saved", `New contracts price at $${rentPerSqft}/sq ft.`); }
+    if (ok) { setRateMsg(""); toast.success("Booth rent rate saved", `New agreements price at $${rentPerSqft}/sq ft.`); }
     else setRateMsg(String(data.error || "Couldn't save the rate."));
   };
 
@@ -1325,7 +1576,16 @@ export default function AdminPage() {
   const openComplaints = complaints.filter((c) => c.status !== "CLOSED").length;
   const navBadge: Partial<Record<AdminTab, number>> = {
     vendors: pendingApps + openComplaints,
+    onboarding: onboarding.length,
   };
+
+  /* One tile per thing a vendor can be stuck on, so the row of stats reads as
+     "here's the queue, and here's whose move it is". */
+  const onbWaitingSignature = onboarding.filter((o) => o.nextStep === "agreement").length;
+  const onbWaitingCountersign = onboarding.filter((o) => o.nextStep === "countersign").length;
+  const onbWaitingRent = onboarding.filter((o) => o.nextStep === "firstRent").length;
+  const onbUnsigned = onboarding.filter((o) => o.contract && !o.contract.vendorSignedAt).length;
+  const onbStuck = onboarding.filter((o) => o.daysWaiting > 14).length;
 
   /* Phones get the five most-used destinations plus a "More" sheet, rather
      than a twelve-button wrap that pushed content below the fold. */
@@ -3498,7 +3758,7 @@ export default function AdminPage() {
                   {v.portalLocked ? (
                     <Note tone="warn" title="Their portal is locked until onboarding finishes">
                       {!v.hasSignedContract
-                        ? "Their booth contract still needs a signature."
+                        ? "Their booth agreement still needs a signature."
                         : "Their first month's rent hasn't been paid yet."}{" "}
                       The lock lifts on its own once that's done.
                     </Note>
@@ -3635,7 +3895,7 @@ export default function AdminPage() {
                       <Field label="Contact name">
                         {(p) => <Input {...p} value={editF.contactName} onChange={(e) => setEditF((f) => ({ ...f, contactName: e.target.value }))} />}
                       </Field>
-                      <Field label="Email" hint="Their login, and where contracts, guides and alerts go.">
+                      <Field label="Email" hint="Their login, and where agreements, guides and alerts go.">
                         {(p) => <Input {...p} type="email" value={editF.email} onChange={(e) => setEditF((f) => ({ ...f, email: e.target.value }))} />}
                       </Field>
                       <Field label="Phone">
@@ -3666,7 +3926,7 @@ export default function AdminPage() {
           <Card
             className="mb-4"
             title="Vendor applications"
-            subtitle="Hopefuls apply at market.dailybreadbaked.com/apply. Call notes, viewings and contracts live in the full workspace."
+            subtitle="Hopefuls apply at market.dailybreadbaked.com/apply. Call notes, viewings and agreements live in the full workspace."
             actions={
               <a className="btn btn-secondary btn-sm" href="/admin/applications">
                 <Icon name="inbox" size={14} /> Open workspace
@@ -3936,11 +4196,315 @@ export default function AdminPage() {
         </>
       )}
 
+      {tab === "onboarding" && role === "admin" && (
+        <>
+          {/* Said plainly and up front, because "accepted" and "live" are not
+              the same thing and the difference is invisible from this screen. */}
+          <Note tone="info" title="Nobody on this list is live to shoppers yet">
+            Vendors here don&rsquo;t appear on the market page, their vendor page, or self-checkout.
+            They go live automatically once the agreement is signed and the first month is paid.
+          </Note>
+
+          <div className="grid-auto mt-4" style={{ ["--min" as string]: "200px" }}>
+            <Stat
+              feature
+              label="Onboarding"
+              value={String(onboarding.length)}
+              sub={onbStuck > 0 ? `${onbStuck} waiting over 2 weeks` : "Accepted, not live yet"}
+              icon="user"
+            />
+            <Stat
+              label="Waiting on a signature"
+              value={String(onbWaitingSignature)}
+              sub="Their move"
+              icon="contract"
+            />
+            <Stat
+              label="Waiting on you"
+              value={String(onbWaitingCountersign)}
+              sub="Signed — needs countersigning"
+              icon="edit"
+            />
+            <Stat
+              label="Waiting on first rent"
+              value={String(onbWaitingRent)}
+              sub="Executed, not paid"
+              icon="dollar"
+            />
+          </div>
+
+          <Card
+            className="mt-4"
+            title="Waiting to go live"
+            subtitle="Oldest first. Open anyone to see the checklist and chase them."
+            actions={
+              <Button
+                size="sm"
+                icon="mail"
+                disabled={busy || onbUnsigned === 0}
+                title={onbUnsigned === 0 ? "Nobody is sitting on an unsigned agreement" : undefined}
+                onClick={remindAllUnsigned}
+              >
+                Remind everyone unsigned
+              </Button>
+            }
+          >
+            {/* When the list is empty the error lives in the empty state, so this
+                only covers a failed refresh over rows that are already on screen. */}
+            {onbErr && onboarding.length > 0 ? (
+              <div className="mb-4">
+                <Note
+                  tone="error"
+                  title="This list may be out of date"
+                  action={<Button size="sm" variant="secondary" icon="refresh" onClick={loadOnboarding}>Try again</Button>}
+                >
+                  {onbErr}
+                </Note>
+              </div>
+            ) : null}
+
+            <DataTable
+              rows={onboarding}
+              columns={[
+                {
+                  key: "vendor",
+                  header: "Vendor",
+                  primary: true,
+                  sortBy: (o) => o.businessName,
+                  cell: (o) => (
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <b className="truncate">{o.businessName}</b>
+                      <span className="t-xs t-muted truncate">{o.code}{o.contactName ? ` · ${o.contactName}` : ""}</span>
+                    </div>
+                  ),
+                },
+                {
+                  key: "booth",
+                  header: "Booth",
+                  sortBy: (o) => o.contract?.boothLabel || "",
+                  cell: (o) =>
+                    o.contract
+                      ? <span>Booth {o.contract.boothLabel}</span>
+                      : <span className="t-muted">Not assigned</span>,
+                },
+                {
+                  key: "waiting",
+                  header: "Waiting",
+                  sortBy: (o) => o.daysWaiting,
+                  cell: (o) =>
+                    o.daysWaiting > 14 ? (
+                      <Badge tone="warn" icon="warning">{plural(o.daysWaiting, "day")}</Badge>
+                    ) : (
+                      <span className="num t-muted">{plural(o.daysWaiting, "day")}</span>
+                    ),
+                },
+                {
+                  key: "next",
+                  header: "Waiting on",
+                  sortBy: (o) => o.nextStepLabel,
+                  cell: (o) => (
+                    <Badge
+                      tone={
+                        o.nextStep === null ? "success"
+                          : o.daysWaiting > 14 ? "warn"
+                            : o.nextStep === "countersign" ? "info"
+                              : "neutral"
+                      }
+                      dot
+                    >
+                      {o.nextStepLabel}
+                    </Badge>
+                  ),
+                },
+              ]}
+              rowKey={(o) => o.vendorId}
+              loading={onbLoading && onboarding.length === 0}
+              skeletonRows={4}
+              mobileCards
+              defaultSort={{ key: "waiting", dir: "desc" }}
+              caption="Accepted vendors who aren't live yet, and what each is waiting on"
+              onRowClick={(o) => setOnbOpen(o.vendorId)}
+              empty={
+                onbErr ? (
+                  <EmptyState
+                    icon="alert"
+                    title="The list didn't load"
+                    body="Nothing here is missing — the server just didn't answer. Try again."
+                    action={<Button variant="secondary" icon="refresh" onClick={loadOnboarding}>Try again</Button>}
+                  />
+                ) : (
+                  <EmptyState
+                    icon="checkCircle"
+                    title="Everyone's live"
+                    body="No accepted vendor is waiting on a signature, a countersignature, or a first month's rent."
+                  />
+                )
+              }
+            />
+          </Card>
+
+          {/* Onboarding detail slide-over — who they are, what's left, what to send. */}
+          {(() => {
+            const o = onboarding.find((x) => x.vendorId === onbOpen);
+            if (!o) return null;
+            const c = o.contract;
+            return (
+              <Panel
+                open
+                onClose={() => setOnbOpen(null)}
+                title={o.businessName}
+                subtitle={`${o.code}${c ? ` · booth ${c.boothLabel}` : " · no booth yet"}`}
+                actions={c ? (
+                  <a className="btn btn-ghost btn-sm" href={`/contract/${c.id}/packet`} target="_blank" rel="noopener">
+                    <Icon name="print" size={14} /> Packet
+                  </a>
+                ) : undefined}
+              >
+                <div className="stack g-5">
+                  <div className="row wrap g-2">
+                    <Badge
+                      tone={
+                        o.nextStep === null ? "success"
+                          : o.daysWaiting > 14 ? "warn"
+                            : o.nextStep === "countersign" ? "info"
+                              : "neutral"
+                      }
+                      dot
+                    >
+                      {o.nextStepLabel}
+                    </Badge>
+                    <Badge tone={o.daysWaiting > 14 ? "warn" : "neutral"} dot>
+                      {plural(o.daysWaiting, "day")} waiting
+                    </Badge>
+                    <Badge tone="neutral" dot>Not live to shoppers</Badge>
+                  </div>
+
+                  <div className="stack g-1">
+                    <a className="row g-2 t-sm" href={`mailto:${o.email}`} style={{ minHeight: 32 }}>
+                      <Icon name="mail" size={14} />
+                      <span className="truncate">{o.email}</span>
+                    </a>
+                    {o.phone ? (
+                      <a className="row g-2 t-sm" href={`tel:${o.phone}`} style={{ minHeight: 32 }}>
+                        <Icon name="phone" size={14} />{fmtPhone(o.phone)}
+                      </a>
+                    ) : null}
+                    {o.contactName ? (
+                      <span className="row g-2 t-sm t-muted" style={{ minHeight: 32 }}>
+                        <Icon name="user" size={14} />{o.contactName}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* The whole point of the tab: three steps, in order, with the
+                      reason each one is still open written underneath it. */}
+                  <div className="stack g-2">
+                    <p className="t-label">What&rsquo;s left</p>
+                    <ol className="stack g-3" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                      {o.steps.map((s) => (
+                        <li key={s.key} className="row-top g-3">
+                          {s.done ? (
+                            <span className="shrink0 t-accent" style={{ display: "flex", marginTop: 1 }}>
+                              <Icon name="checkCircle" size={18} />
+                            </span>
+                          ) : (
+                            <span
+                              aria-hidden
+                              className="shrink0"
+                              style={{
+                                display: "block", width: 18, height: 18, marginTop: 1,
+                                borderRadius: "50%", border: "2px solid var(--border)",
+                              }}
+                            />
+                          )}
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <span className={`t-sm${s.done ? " t-muted" : ""}`} style={{ fontWeight: s.done ? 400 : 600 }}>
+                              {s.label}
+                            </span>
+                            <span className="sr-only">{s.done ? "Done" : "Not done yet"}</span>
+                            {s.detail ? <span className="t-xs t-muted">{s.detail}</span> : null}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+
+                  <DescList
+                    items={[
+                      { label: "Accepted", value: fmtDate(o.createdAt) },
+                      { label: "Booth", value: c ? `Booth ${c.boothLabel}` : "Not assigned yet" },
+                      { label: "Monthly rent", value: c ? <span className="num">{money(c.monthlyRentCents)}</span> : "—" },
+                      { label: "Starts", value: c ? fmtDate(c.startDate) : "—" },
+                      { label: "Agreement sent", value: c ? (c.sent ? "Yes" : "Not sent yet") : "No agreement yet" },
+                      ...(c && !c.vendorSignedAt
+                        ? [{ label: "Opened by vendor", value: c.viewedAt ? fmtDate(c.viewedAt) : "Not opened yet" }]
+                        : []),
+                      { label: "They signed", value: c?.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
+                      { label: "You signed", value: c?.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
+                      {
+                        label: "Owes",
+                        value: <span className={`num ${o.owesCents > 0 ? "t-danger" : "t-accent"}`}>{money(o.owesCents)}</span>,
+                      },
+                      { label: "Card on file", value: o.cardLast4 ? `•••• ${o.cardLast4}` : "None" },
+                    ]}
+                  />
+
+                  <div className="stack g-2">
+                    <p className="t-label">Actions</p>
+                    {c ? (
+                      <div className="row wrap g-2">
+                        {!c.vendorSignedAt ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              icon="mail"
+                              disabled={busy}
+                              onClick={() => sendAgreementReminder(c.id, o.businessName)}
+                            >
+                              Send reminder
+                            </Button>
+                            <Button
+                              size="sm"
+                              icon="edit"
+                              disabled={busy}
+                              onClick={() => openTerms(
+                                { id: c.id, businessName: o.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate },
+                                "update_terms"
+                              )}
+                            >
+                              Edit terms
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon="contract"
+                          onClick={() => { setOnbOpen(null); go("contracts"); setContractOpen(c.id); }}
+                        >
+                          Open the agreement
+                        </Button>
+                      </div>
+                    ) : (
+                      <Note tone="warn" title="No agreement yet">
+                        Nothing has been sent to {o.businessName} to sign. Create their booth agreement
+                        under Agreements — they get the signing link as soon as you do.
+                      </Note>
+                    )}
+                  </div>
+                </div>
+              </Panel>
+            );
+          })()}
+        </>
+      )}
+
       {tab === "contracts" && (
         <>
           <Card
             className="mb-4"
-            title="Booth contracts"
+            title="Booth agreements"
             subtitle="Rent auto-charges on the 1st of every month at midnight — first and final months prorate by day. Nothing for you to remember."
           >
             <DataTable
@@ -4005,19 +4569,19 @@ export default function AdminPage() {
               loading={!overview && contracts.length === 0}
               skeletonRows={4}
               mobileCards
-              caption="Booth contracts, rent, and signing status"
+              caption="Booth agreements, rent, and signing status"
               onRowClick={(c) => setContractOpen(c.id)}
               empty={
                 <EmptyState
                   icon="contract"
-                  title="No contracts yet"
-                  body="Create the first booth contract below — the vendor gets a link to sign it."
+                  title="No agreements yet"
+                  body="Create the first booth agreement below — the vendor gets a link to sign it."
                 />
               }
             />
           </Card>
 
-          {/* Contract detail slide-over — signing, emails, rent, and ending. */}
+          {/* Agreement detail slide-over — signing, emails, rent, and ending. */}
           {(() => {
             const c = contracts.find((x) => x.id === contractOpen);
             if (!c) return null;
@@ -4089,6 +4653,16 @@ export default function AdminPage() {
                       <Button size="sm" icon="mail" disabled={busy} onClick={() => sendMail("send_for_signature", "Signing link")}>
                         Send for signature
                       </Button>
+                      {!c.vendorSignedAt && c.status !== "ENDED" ? (
+                        <Button
+                          size="sm"
+                          icon="bell"
+                          disabled={busy}
+                          onClick={() => sendAgreementReminder(c.id, c.vendor.businessName)}
+                        >
+                          Send reminder
+                        </Button>
+                      ) : null}
                       <Button size="sm" icon="clipboard" disabled={busy} onClick={() => sendMail("send_setup_guide", "Setup guide")}>
                         Resend setup guide
                       </Button>
@@ -4107,42 +4681,69 @@ export default function AdminPage() {
                     ) : null}
                   </div>
 
+                  {/* Terms are editable right up until they sign, locked the
+                      moment they do, and fixed for good once both names are on
+                      it. Each of those three states gets its own answer here. */}
+                  <div className="stack g-2">
+                    <p className="t-label">Terms</p>
+                    {c.status === "ENDED" ? (
+                      <p className="t-xs t-muted">
+                        This agreement is closed. Create a new one if they&rsquo;re coming back.
+                      </p>
+                    ) : !c.vendorSignedAt ? (
+                      <div className="row wrap g-2">
+                        <Button
+                          size="sm"
+                          icon="edit"
+                          disabled={busy}
+                          onClick={() => openTerms(
+                            { id: c.id, businessName: c.vendor.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate },
+                            "update_terms"
+                          )}
+                        >
+                          Edit terms
+                        </Button>
+                      </div>
+                    ) : !c.marketSignedAt ? (
+                      <>
+                        <Note tone="warn" title="They&rsquo;ve signed — the terms are locked">
+                          {c.vendor.businessName} put their name to this on {fmtDate(c.vendorSignedAt)}.
+                          Changing the booth, the rent or the start date now would change something they&rsquo;ve
+                          already agreed to, so the only honest fix is a corrected agreement they sign again.
+                        </Note>
+                        <div className="row wrap g-2">
+                          <Button
+                            size="sm"
+                            variant="dangerSoft"
+                            icon="refresh"
+                            disabled={busy}
+                            onClick={() => openTerms(
+                              { id: c.id, businessName: c.vendor.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate },
+                              "void_and_reissue"
+                            )}
+                          >
+                            Void and send a corrected agreement
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="t-xs t-muted">
+                        Both names are on this agreement, so the terms are fixed. To change them, end it
+                        with 30-day notice and write a new one.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* An ended agreement has nothing left to do to it, so the
+                      heading doesn't sit there over an empty row. */}
+                  {c.status !== "ENDED" ? (
                   <div className="stack g-2">
                     <p className="t-label">Lease</p>
                     <div className="row wrap g-2">
                       {c.status === "ACTIVE" ? (
-                        <>
-                          <Button
-                            size="sm"
-                            icon="edit"
-                            disabled={busy}
-                            onClick={async () => {
-                              const cents = await dialog.money({
-                                title: `Monthly rent — booth ${c.boothLabel}`,
-                                body: "Takes effect on the next monthly charge. It doesn't change rent already posted to their balance.",
-                                label: "Monthly rent",
-                                defaultCents: c.monthlyRentCents,
-                                confirmLabel: "Save rent",
-                              });
-                              if (cents === null) return;
-                              setBusy(true);
-                              try {
-                                const r = await fetch(`/api/admin/contracts/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyRentDollars: String(cents / 100) }) });
-                                const d = await r.json().catch(() => ({}));
-                                if (!r.ok) { toast.error("Couldn't change the rent", String(d.error || `Error ${r.status}.`)); return; }
-                                toast.success(`Rent set to ${money(cents)}/mo`, `Booth ${c.boothLabel} · ${c.vendor.businessName}`);
-                                await loadAll();
-                              } finally {
-                                setBusy(false);
-                              }
-                            }}
-                          >
-                            Edit rent
-                          </Button>
-                          <Button size="sm" icon="calendar" disabled={busy} onClick={() => giveNotice(c)}>
-                            Enter 30-day notice
-                          </Button>
-                        </>
+                        <Button size="sm" icon="calendar" disabled={busy} onClick={() => giveNotice(c)}>
+                          Enter 30-day notice
+                        </Button>
                       ) : null}
                       {c.status === "TERMINATING" ? (
                         <Button size="sm" icon="receipt" disabled={busy} onClick={() => finalStatement(c)}>
@@ -4161,11 +4762,11 @@ export default function AdminPage() {
                             {
                               title: `End booth ${c.boothLabel} today?`,
                               body: `${c.vendor.businessName}'s lease closes immediately — no 30-day notice, no further rent charges. Their balance and history stay as they are.`,
-                              confirmLabel: "End the contract",
+                              confirmLabel: "End the agreement",
                               tone: "danger",
                               typeToConfirm: "END",
                             },
-                            `Booth ${c.boothLabel} contract ended`
+                            `Booth ${c.boothLabel} agreement ended`
                           )}
                         >
                           End now
@@ -4173,12 +4774,13 @@ export default function AdminPage() {
                       ) : null}
                     </div>
                   </div>
+                  ) : null}
                 </div>
               </Panel>
             );
           })()}
 
-          <Card title="New booth contract" subtitle="The first month prorates from the start date; full rent charges on the 1st after that.">
+          <Card title="New booth agreement" subtitle="The first month prorates from the start date; full rent charges on the 1st after that.">
             <div className="stack g-4 content-narrow">
               <Field label="Vendor" required>
                 {(p) => (
@@ -4262,7 +4864,7 @@ export default function AdminPage() {
 
               <div>
                 <Button variant="primary" icon="contract" loading={busy} onClick={addContract}>
-                  Create contract
+                  Create agreement
                 </Button>
               </div>
             </div>
@@ -4587,7 +5189,7 @@ export default function AdminPage() {
                   { path: "/market", open: true, body: "Shopper directory — every vendor and what's on the floor right now. Put this on your website and socials." },
                   { path: "/apply", open: true, body: "Vendor application." },
                   { path: "/tents", open: true, body: "Outdoor tent booking — $12.50 deposit online, $12.50 at the desk." },
-                  { path: "/rules", open: true, body: "Market rules and booth standards — part of every vendor contract. Edits post instantly." },
+                  { path: "/rules", open: true, body: "Market rules and booth standards — part of every vendor agreement. Edits post instantly." },
                   { path: "/shop", open: true, body: "Self-checkout — shoppers scan and pay by card, no cashier." },
                   { path: "/shop/sign", open: true, body: "Printable self-checkout signs for the doors and tables." },
                 ])}
@@ -4638,7 +5240,7 @@ export default function AdminPage() {
               <Card className="mb-4" title="Yours" subtitle="Staff and owner pages.">
                 {linkList([
                   { path: "/admin", open: true, body: "This whole system. Employees sign in here too, with the employee button." },
-                  { path: "/admin/contracts/…/print", body: "Printable booth contract — reached from the print action on any contract." },
+                  { path: "/admin/contracts/…/print", body: "Printable booth agreement — reached from the print action on any agreement." },
                 ])}
               </Card>
 
@@ -5065,6 +5667,79 @@ export default function AdminPage() {
             <span>Sign out</span>
           </button>
         </div>
+      </Modal>
+
+      {/* Agreement terms — reachable from both the Agreements panel and the
+          Onboarding panel, so it lives outside the tab switch. */}
+      <Modal
+        open={!!termsForm}
+        onClose={() => { setTermsForm(null); setTermsErr(""); }}
+        title={termsForm?.mode === "void_and_reissue" ? "Send a corrected agreement" : "Edit agreement terms"}
+        description={
+          termsForm
+            ? termsForm.mode === "void_and_reissue"
+              ? `${termsForm.businessName} signs the corrected agreement — the old one is voided and kept on file.`
+              : `${termsForm.businessName} hasn't signed yet, so these can still change.`
+            : undefined
+        }
+        width="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => { setTermsForm(null); setTermsErr(""); }}>Cancel</Button>
+            <Button
+              variant={termsForm?.mode === "void_and_reissue" ? "danger" : "primary"}
+              icon={termsForm?.mode === "void_and_reissue" ? "mail" : "check"}
+              loading={busy}
+              onClick={saveTerms}
+            >
+              {termsForm?.mode === "void_and_reissue" ? "Void and reissue" : "Save terms"}
+            </Button>
+          </>
+        }
+      >
+        {termsForm ? (
+          <div className="stack g-4">
+            <Field label="Booth" hint="However you label it on the floor — A3, 5, NW corner." required>
+              {(p) => (
+                <Input
+                  {...p}
+                  value={termsForm.boothLabel}
+                  onChange={(e) => setTermsForm((f) => f && ({ ...f, boothLabel: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Field label="Monthly rent" hint="Charged on the 1st of every month." required>
+              {(p) => (
+                <MoneyInput
+                  {...p}
+                  value={termsForm.rent}
+                  onChange={(e) => setTermsForm((f) => f && ({ ...f, rent: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Field label="Start date" hint="The first month prorates from this day." required>
+              {(p) => (
+                <Input
+                  {...p}
+                  type="date"
+                  value={termsForm.startDate}
+                  onChange={(e) => setTermsForm((f) => f && ({ ...f, startDate: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            {termsForm.mode === "void_and_reissue" ? (
+              <Note tone="warn" title="This replaces the agreement they signed">
+                Saving voids the signed agreement and emails {termsForm.businessName} a fresh one on these
+                terms. Their booth isn&rsquo;t theirs again until they sign it.
+              </Note>
+            ) : null}
+
+            {termsErr ? <Note tone="error">{termsErr}</Note> : null}
+          </div>
+        ) : null}
       </Modal>
 
       <div id="printzone" ref={printRef}></div>
