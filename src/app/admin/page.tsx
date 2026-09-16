@@ -14,6 +14,7 @@ import { TZ, centralDayStart } from "@/lib/time";
 import { useHashTab } from "@/lib/useHashTab";
 import { CashTender } from "@/components/register/CashTender";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
+import { subscribeToPush } from "@/lib/pushclient";
 import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
@@ -2365,38 +2366,40 @@ export default function AdminPage() {
   };
 
   // ---------- settings ----------
+  /* This used to be gated on `role === "admin"`, which stopped matching the
+     moment accounts gained roles — an owner ACCOUNT reports role "staff". The
+     effect never ran, so the service worker was never registered and the VAPID
+     key was never fetched, and the Enable button then awaited
+     `serviceWorker.ready` forever. That's the spinner. Gated on the capability
+     now, and the worker registers for anyone signed in either way. */
   useEffect(() => {
-    if (!authed || role !== "admin") return;
+    if (!authed) return;
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    if (!allowed("market")) return;
     fetch("/api/admin/push").then(async (r) => {
       if (r.ok) { const d = await r.json(); setAdminPushDevices(d.devices); setAdminPushKey(d.publicKey); }
     }).catch(() => {});
-  }, [authed, role]);
+  }, [authed, caps]);
 
   const enableAdminPush = async () => {
     setAdminPushMsg("");
+    // Every branch below finishes — nothing here can wait forever. See lib/pushclient.
+    const result = await subscribeToPush(adminPushKey);
+    if (!result.ok) { setAdminPushMsg(result.message); return; }
     try {
-      if (!("Notification" in window) || !("serviceWorker" in navigator)) {
-        setAdminPushMsg("This browser can't do notifications. On iPhone: share button → Add to Home Screen (the admin app), open from that icon, then try again.");
+      const res = await fetch("/api/admin/push", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(result.subscription),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setAdminPushMsg(String(d.error || "The browser said yes but the server wouldn't save it — try again."));
         return;
       }
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") { setAdminPushMsg("Notifications were blocked — allow them in browser settings and try again."); return; }
-      const reg = await navigator.serviceWorker.ready;
-      const b64 = adminPushKey.replace(/-/g, "+").replace(/_/g, "/");
-      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-      const raw = atob(b64 + pad);
-      const key = new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-      const res = await fetch("/api/admin/push", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()),
-      });
-      if (!res.ok) { setAdminPushMsg("Couldn't save — try again."); return; }
       setAdminPushDevices((n) => (n || 0) + 1);
       setAdminPushMsg("");
       toast.success("Admin alerts are on for this device");
     } catch {
-      setAdminPushMsg("Couldn't turn on notifications here. On iPhone this needs iOS 16.4+ and the app opened from a home-screen icon.");
+      setAdminPushMsg("No connection — the browser allowed it but we couldn't save it. Try again.");
     }
   };
 

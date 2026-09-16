@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
+import { subscribeToPush } from "@/lib/pushclient";
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
@@ -422,33 +423,29 @@ export default function VendorDashboard() {
     }).catch(() => {});
   }, []);
 
+  const [pushBusy, setPushBusy] = useState(false);
+
   const enablePush = async () => {
     setPushMsg(null);
+    setPushBusy(true);
     try {
-      if (!("Notification" in window) || !("serviceWorker" in navigator)) {
-        setPushMsg({ ok: false, text: "This browser can't do notifications. On iPhone: share button → Add to Home Screen, then open the app from there and try again." });
-        return;
-      }
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") {
-        setPushMsg({ ok: false, text: "Notifications were blocked — allow them in your browser settings and try again." });
-        return;
-      }
-      const reg = await navigator.serviceWorker.ready;
-      const b64 = pushKey.replace(/-/g, "+").replace(/_/g, "/");
-      const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-      const raw = atob(b64 + pad);
-      const key = new Uint8Array([...raw].map((c) => c.charCodeAt(0)));
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      /* Shared with the admin portal. The old copy awaited
+         `navigator.serviceWorker.ready`, which never rejects — if the worker
+         wasn't registered it waited forever and the button just sat there. */
+      const result = await subscribeToPush(pushKey);
+      if (!result.ok) { setPushMsg({ ok: false, text: result.message }); return; }
+
       const res = await fetch("/api/vendor/push", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(result.subscription),
       });
-      if (!res.ok) { setPushMsg({ ok: false, text: "Couldn't save this device — try again." }); return; }
+      if (!res.ok) { setPushMsg({ ok: false, text: "Your phone allowed it but we couldn't save this device — try again." }); return; }
       setPushDevices((n) => (n || 0) + 1);
       setPushMsg({ ok: true, text: "Sale alerts are on for this device. You'll get a notification instead of an email." });
       toast.success("Sale alerts on", "This device will buzz the moment something sells.");
     } catch {
-      setPushMsg({ ok: false, text: "Couldn't turn on notifications here. iPhone: must be iOS 16.4+ AND opened from a home-screen icon (share → Add to Home Screen)." });
+      setPushMsg({ ok: false, text: "No connection — try again when you have signal." });
+    } finally {
+      setPushBusy(false);
     }
   };
 
@@ -1668,7 +1665,7 @@ export default function VendorDashboard() {
                     summary email at the end of each selling day — never an email per sale.
                   </p>
                   <div className="row wrap g-2">
-                    <Button variant="primary" icon="bell" onClick={enablePush}>
+                    <Button variant="primary" icon="bell" loading={pushBusy} disabled={pushBusy} onClick={enablePush}>
                       Turn on for this device
                     </Button>
                     {pushDevices !== null && pushDevices > 0 ? (
