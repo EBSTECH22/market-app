@@ -7,25 +7,51 @@ import { IconButton } from "./Button";
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-/** Traps Tab inside `ref`, restores focus to whatever was focused before, and
- *  wires Escape. Used by both Modal and Panel. */
-function useFocusTrap(ref: React.RefObject<HTMLElement>, onClose?: () => void) {
+/**
+ * Traps Tab inside `ref`, restores focus to whatever was focused before, and
+ * wires Escape. Used by Modal and Panel.
+ *
+ * This effect MUST run once per open, never on re-render. `onClose` is almost
+ * always a fresh arrow function each render, so listing it as a dependency tore
+ * the whole thing down and rebuilt it on every keystroke: the cleanup pulled
+ * focus back to the trigger, then the setup re-focused the first element in the
+ * dialog — the close button. Typing a price meant retyping one character at a
+ * time. So the callback lives in a ref that stays current, and the effect keys
+ * only off `open`.
+ */
+function useFocusTrap(ref: React.RefObject<HTMLElement>, open: boolean, onClose?: () => void) {
+  const onCloseRef = useRef(onClose);
+  // Assign during render so the listener never calls a stale closure, and so
+  // this never itself triggers the effect below.
+  onCloseRef.current = onClose;
+
   useEffect(() => {
+    if (!open) return;
     const node = ref.current;
     if (!node) return;
     const previous = document.activeElement as HTMLElement | null;
 
-    // Focus the first sensible target, preferring an explicit autofocus.
+    /* Where to land on open, in order of preference:
+       1. an explicit [data-autofocus]
+       2. the first form control — someone opening an edit dialog wants the
+          cursor in the field, not on the close button that happens to come
+          first in the DOM
+       3. anything focusable, then the dialog itself */
     const auto = node.querySelector<HTMLElement>("[data-autofocus]");
-    const first = auto || node.querySelector<HTMLElement>(FOCUSABLE) || node;
-    window.setTimeout(() => first.focus(), 0);
+    const field = node.querySelector<HTMLElement>(
+      "input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled])"
+    );
+    const first = auto || field || node.querySelector<HTMLElement>(FOCUSABLE) || node;
+    const timer = window.setTimeout(() => first.focus(), 0);
 
     document.body.classList.add("scroll-locked");
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && onClose) {
+      if (e.key === "Escape") {
+        const close = onCloseRef.current;
+        if (!close) return;
         e.stopPropagation();
-        onClose();
+        close();
         return;
       }
       if (e.key !== "Tab") return;
@@ -46,11 +72,16 @@ function useFocusTrap(ref: React.RefObject<HTMLElement>, onClose?: () => void) {
 
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
+      window.clearTimeout(timer);
       document.removeEventListener("keydown", onKeyDown, true);
       document.body.classList.remove("scroll-locked");
       previous?.focus?.();
     };
-  }, [ref, onClose]);
+    // Depends ONLY on `open`. These dialogs stay mounted while closed, so the
+    // trap has to install when they open — but re-running on anything else
+    // (an ever-changing onClose) is what stole focus on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 }
 
 export type ModalWidth = "sm" | "md" | "lg" | "xl";
@@ -80,7 +111,7 @@ export function Modal({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => { if (dismissable) onClose(); }, [dismissable, onClose]);
-  useFocusTrap(ref, open ? close : undefined);
+  useFocusTrap(ref, open, close);
 
   if (!open) return null;
 
@@ -132,7 +163,7 @@ export function Panel({
   actions?: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useFocusTrap(ref, open ? onClose : undefined);
+  useFocusTrap(ref, open, onClose);
 
   if (!open) return null;
 
