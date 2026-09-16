@@ -8,8 +8,11 @@ import { TZ, centralInputToDate } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-/** Loose labels rather than a DB enum, so adding a type needs no migration. */
-export const EVENT_KINDS = ["VIEWING", "MARKET_DAY", "MOVE_IN", "MEETING", "REMINDER", "OTHER"] as const;
+/* Loose labels rather than a DB enum, so adding a type needs no migration.
+   NOT exported: Next type-checks a route module's export surface and rejects
+   anything that isn't a handler or a known route config const. If another file
+   ever needs these, move them to src/lib. */
+const EVENT_KINDS = ["VIEWING", "MARKET_DAY", "MOVE_IN", "MEETING", "REMINDER", "OTHER"] as const;
 const STATUSES = ["SCHEDULED", "CONFIRMED", "DONE", "CANCELED", "NO_SHOW"] as const;
 
 function bad(msg: string) {
