@@ -76,24 +76,45 @@ export async function POST(req: NextRequest) {
   }
   const totalCents = subtotal + cardAdjustCents + taxCents - discountCents;
 
-  const sale = await db.$transaction(async (tx) => {
-    // ---- stock check, inside the transaction so two registers can't oversell
-    // the last unit (same guard /api/public/shop does before checkout)
+  /* Retry the whole transaction if the ticket number collides. Two concurrent
+     sales can compute the same next number; the unique index rejects the second
+     with Prisma error P2002, and a retry recomputes against the committed max.
+     Anything else rethrows immediately. */
+  const runSale = async () => db.$transaction(async (tx) => {
+    /* ---- stock: claim it atomically, don't check-then-take.
+       A SELECT followed by a decrement lets two registers both read "1 left"
+       and both sell it, because Postgres reads a snapshot. Instead each item
+       is claimed with a conditional UPDATE whose WHERE carries the quantity
+       test — the row is locked and re-checked by the database, so exactly one
+       of two concurrent tickets can match. 0 rows matched means we lost the
+       race. The names are read first only to write a useful error. */
     const needed = new Map<string, number>();
     for (const sl of saleLines) needed.set(sl.itemId, (needed.get(sl.itemId) || 0) + sl.quantity);
-    const fresh = await tx.item.findMany({
+    const known = await tx.item.findMany({
       where: { id: { in: [...needed.keys()] } },
-      select: { id: true, name: true, quantity: true },
+      select: { id: true, name: true },
     });
-    for (const [itemId, qty] of needed) {
-      const row = fresh.find((i) => i.id === itemId);
-      if (!row) throw new HttpError(400, "An item on the ticket no longer exists.");
-      if (row.quantity < qty) {
+    const nameOf = (id: string) => known.find((i) => i.id === id)?.name || "That item";
+
+    // Claim in a stable order so two tickets sharing items can't deadlock by
+    // grabbing the same rows in opposite orders.
+    for (const itemId of [...needed.keys()].sort()) {
+      const qty = needed.get(itemId)!;
+      if (!known.some((i) => i.id === itemId)) {
+        throw new HttpError(400, "An item on the ticket no longer exists.");
+      }
+      const claimed = await tx.item.updateMany({
+        where: { id: itemId, quantity: { gte: qty } },
+        data: { quantity: { decrement: qty } },
+      });
+      if (claimed.count === 0) {
+        const row = await tx.item.findUnique({ where: { id: itemId }, select: { quantity: true } });
+        const left = row?.quantity ?? 0;
         throw new HttpError(
           400,
-          row.quantity <= 0
-            ? `${row.name} is sold out — take it off the ticket.`
-            : `Only ${row.quantity} of ${row.name} left (ticket has ${qty}) — adjust the quantity.`
+          left <= 0
+            ? `${nameOf(itemId)} is sold out — take it off the ticket.`
+            : `Only ${left} of ${nameOf(itemId)} left (ticket has ${qty}) — adjust the quantity.`
         );
       }
     }
@@ -110,6 +131,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    /* Ticket number. Reading the max and adding one is racy — two registers
+       ringing at the same moment both read the same max. A unique index on
+       Sale.number is what actually prevents a duplicate; this transaction is
+       retried by the caller when that index rejects the insert. */
     const last = await tx.sale.aggregate({ _max: { number: true } });
     const number = Math.max(1000, (last._max.number || 999) + 1);
     const created = await tx.sale.create({
@@ -126,10 +151,8 @@ export async function POST(req: NextRequest) {
       },
     });
     for (const sl of saleLines) {
-      await tx.item.update({
-        where: { id: sl.itemId },
-        data: { quantity: { decrement: sl.quantity } },
-      });
+      // Stock was already claimed at the top of this transaction — decrementing
+      // again here would double-count it.
       await tx.ledgerEntry.create({
         data: {
           vendorId: sl.vendorId,
@@ -139,8 +162,9 @@ export async function POST(req: NextRequest) {
         },
       });
     }
-    // never let floor counts go negative
-    await tx.item.updateMany({ where: { quantity: { lt: 0 } }, data: { quantity: 0 } });
+    /* The old code clamped negative quantities here, which quietly hid an
+       oversell after the fact. The conditional claim above makes a negative
+       count unreachable, so there is nothing left to paper over. */
 
     // ---- points earned + the audit trail, committed with the sale
     if (customer) {
@@ -155,6 +179,20 @@ export async function POST(req: NextRequest) {
     }
     return created;
   });
+
+  let sale;
+  try {
+    sale = await runSale();
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    const target = String((err as { meta?: { target?: unknown } }).meta?.target || "");
+    // Index is named Sale_number_unique, so either fragment identifies it.
+    if (code === "P2002" && (target.includes("number") || target.includes("Sale"))) {
+      sale = await runSale(); // one retry is enough for a two-register collision
+    } else {
+      throw err;
+    }
+  }
 
   // one email per vendor involved, after commit
   const byVendor = new Map<string, typeof saleLines>();

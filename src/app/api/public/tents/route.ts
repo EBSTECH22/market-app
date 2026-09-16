@@ -52,6 +52,11 @@ export async function POST(req: NextRequest) {
     // read-check-create in one transaction: without it two people holding
     // credits could both pass the capacity check and both take the last spot.
     const nb = await db.$transaction(async (tx) => {
+      /* Serialise everyone booking THIS date. A snapshot read plus a create
+         lets two people both see the last spot; SELECT ... FOR UPDATE makes
+         the second wait for the first to commit, then read the real count.
+         Scoped to one date, so other dates are unaffected. */
+      await tx.$queryRaw`SELECT id FROM "TentDate" WHERE id = ${d.id} FOR UPDATE`;
       const fresh = await tx.tentDate.findUnique({ where: { id: d.id }, include: { bookings: true } });
       if (!fresh || !fresh.open) throw new HttpError(400, "That date isn't available.");
       if (fresh.capacity - tentSpotsTaken(fresh.bookings) <= 0) throw new HttpError(400, FULL_MSG);
@@ -86,6 +91,11 @@ export async function POST(req: NextRequest) {
 
   const token = randomBytes(16).toString("hex");
   const booking = await db.$transaction(async (tx) => {
+    /* Serialise everyone booking THIS date. A snapshot read plus a create
+       lets two people both see the last spot; SELECT ... FOR UPDATE makes
+       the second wait for the first to commit, then read the real count.
+       Scoped to one date, so other dates are unaffected. */
+    await tx.$queryRaw`SELECT id FROM "TentDate" WHERE id = ${d.id} FOR UPDATE`;
     const fresh = await tx.tentDate.findUnique({ where: { id: d.id }, include: { bookings: true } });
     if (!fresh || !fresh.open) throw new HttpError(400, "That date isn't available.");
     if (fresh.capacity - tentSpotsTaken(fresh.bookings) <= 0) throw new HttpError(400, FULL_MSG);

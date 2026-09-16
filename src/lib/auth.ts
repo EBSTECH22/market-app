@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { createHash, createHmac, scryptSync, randomBytes, timingSafeEqual } from "crypto";
+import { db } from "@/lib/db";
 
 const ADMIN_COOKIE = "nm_admin";
 const VENDOR_COOKIE = "nm_vendor";
@@ -188,6 +189,92 @@ export function currentVendorId(): string | null {
   const raw = cookies().get(VENDOR_COOKIE)?.value;
   if (!raw) return null;
   return verifySession("vendor", raw);
+}
+
+// ---------------------------------------------------------------------------
+// Self-serve password reset links
+//
+// Format:  base64url(<vendorId>).<expiryEpochSeconds>.<hmacHex>
+//   hmac = HMAC-SHA256(secret, "reset:<vendorId>:<expiry>:<passwordHash>")
+//
+// There is deliberately NO reset-token table. Everything the server needs to
+// judge a link is either inside the link or already on the vendor row:
+//
+//   1. Expiry  — the deadline is signed, so it can't be pushed out, and
+//      verification refuses anything past it (RESET_TOKEN_TTL_SECONDS).
+//   2. Single use — the vendor's CURRENT passwordHash is an input to the
+//      signature. The moment the password changes (by this link, by a later
+//      link, or by an admin-issued temporary password) every previously issued
+//      link stops verifying. That is why verification has to load the vendor
+//      and recompute against what's stored right now, and why this function is
+//      async while the rest of this file isn't.
+//   3. No storage — nothing is written anywhere when a link is issued.
+//
+// A link therefore proves: "whoever holds this was emailed it within the last
+// hour, and the account's password hasn't moved since."
+// ---------------------------------------------------------------------------
+
+/** Reset links are good for 60 minutes. */
+export const RESET_TOKEN_TTL_SECONDS = 60 * 60;
+
+function signReset(vendorId: string, expiry: string, passwordHash: string): string {
+  return createHmac("sha256", secret()).update(`reset:${vendorId}:${expiry}:${passwordHash}`).digest("hex");
+}
+
+/**
+ * Mint a password-reset token for `vendorId`, bound to `passwordHash`
+ * (the vendor's hash as it is right now).
+ *
+ * Throws ConfigError when SESSION_SECRET is missing in production — callers
+ * inside `runRoute` turn that into a clean 500.
+ */
+export function makeResetToken(vendorId: string, passwordHash: string): string {
+  const expiry = String(Math.floor(Date.now() / 1000) + RESET_TOKEN_TTL_SECONDS);
+  const encodedId = Buffer.from(String(vendorId), "utf8").toString("base64url");
+  return `${encodedId}.${expiry}.${signReset(String(vendorId), expiry, String(passwordHash))}`;
+}
+
+/**
+ * Returns the vendor a reset token is good for, or null.
+ *
+ * Null covers every failure — malformed, unparseable, expired, unknown vendor,
+ * bad signature, already-used (password since changed), or a missing secret.
+ * Never throws, so route handlers can treat "not null" as the only green light.
+ */
+export async function verifyResetToken(token: string): Promise<{ vendorId: string } | null> {
+  try {
+    if (typeof token !== "string" || token.length === 0 || token.length > 512) return null;
+
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const [encodedId, expiry, sig] = parts;
+    if (!encodedId || !expiry || !sig) return null;
+    if (!/^\d{1,15}$/.test(expiry)) return null;
+    if (!/^[0-9a-f]{64}$/i.test(sig)) return null;
+
+    const exp = Number(expiry);
+    if (!Number.isFinite(exp)) return null;
+    if (Math.floor(Date.now() / 1000) > exp) return null;
+
+    // base64url decoding is lenient, so sanity-check the shape of what came out
+    // rather than trusting it — cuids are [a-z0-9] but stay permissive.
+    const vendorId = Buffer.from(encodedId, "base64url").toString("utf8");
+    if (!vendorId || vendorId.length > 128 || !/^[A-Za-z0-9_-]+$/.test(vendorId)) return null;
+
+    const vendor = await db.vendor.findUnique({
+      where: { id: vendorId },
+      select: { id: true, passwordHash: true },
+    });
+    if (!vendor) return null;
+
+    // Recomputed against the CURRENT hash — this is what makes the link
+    // single-use without anything being stored.
+    if (!safeEqualHex(sig, signReset(vendor.id, expiry, vendor.passwordHash))) return null;
+
+    return { vendorId: vendor.id };
+  } catch {
+    return null;
+  }
 }
 
 // ----- employee PINs -----

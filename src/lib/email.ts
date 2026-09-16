@@ -117,6 +117,30 @@ export async function sendPasswordResetEmail(
   await send(vendor.email, "Your password was reset", shell(inner));
 }
 
+/**
+ * Self-serve reset: the vendor asked for this themselves from the login page,
+ * and the link lets them choose their own password.
+ *
+ * Deliberately NOT sendPasswordResetEmail above — that one carries an
+ * admin-generated temporary password the vendor then has to change. This one
+ * carries no credential at all, only a link that stops working in an hour or
+ * the moment the password changes.
+ */
+export async function sendVendorResetLinkEmail(to: string, businessName: string, link: string) {
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Reset your password</h2>
+    <p style="font-size:14px;color:#374151;">Hi ${businessName} &mdash; someone asked to reset the password for your Community Harvest vendor portal. Use the button below to choose a new one.</p>
+    <p style="margin:18px 0;"><a href="${link}" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">Choose a new password</a></p>
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin:10px 0;">
+      <div style="font-size:13px;color:#374151;line-height:1.6;">
+        <b>This link expires in one hour</b>, and it only works once &mdash; as soon as you set a new password it stops working.
+      </div>
+    </div>
+    <p style="font-size:12px;color:#9ca3af;margin-top:12px;">Didn&rsquo;t ask for this? You can ignore this email &mdash; your password hasn&rsquo;t changed and nothing will happen.</p>
+    <p style="font-size:11px;color:#9ca3af;word-break:break-all;margin-top:10px;">If the button doesn&rsquo;t work, paste this into your browser:<br><a href="${link}" style="color:#9ca3af;">${link}</a></p>`;
+  await send(to, "Reset your vendor portal password", shell(inner));
+}
+
 export async function sendDailySummaryEmail(
   vendor: { email: string; businessName: string },
   day: string,

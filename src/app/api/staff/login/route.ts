@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     const { name, pin } = await req.json();
     const who = String(name || "").trim();
 
-    const limited = enforceRateLimit(req, "staff-login", who, LIMITS.pin, "Too many PIN attempts.");
+    const limited = await enforceRateLimit(req, "staff-login", who, LIMITS.pin, "Too many PIN attempts.");
     if (limited) return limited;
 
     const emp = await db.employee.findUnique({ where: { name: who } });

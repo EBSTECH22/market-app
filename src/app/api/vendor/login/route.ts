@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     const { email, password } = await req.json();
     if (!email || !password) return NextResponse.json({ error: "Email and password required." }, { status: 400 });
 
-    const limited = enforceRateLimit(req, "vendor-login", String(email), LIMITS.login, "Too many sign-in attempts.");
+    const limited = await enforceRateLimit(req, "vendor-login", String(email), LIMITS.login, "Too many sign-in attempts.");
     if (limited) return limited;
 
     const vendor = await db.vendor.findUnique({ where: { email: String(email).toLowerCase().trim() } });

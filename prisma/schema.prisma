@@ -409,3 +409,13 @@ model ViewEvent {
   @@index([vendorId])
   @@index([viewedAt])
 }
+
+/// Rate-limit counters. Fixed-window: the key carries the window start, so a
+/// new window is simply a new row and expired rows are pruned opportunistically.
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

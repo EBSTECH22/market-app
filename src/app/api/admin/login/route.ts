@@ -13,7 +13,7 @@ function constantTimeEquals(a: string, b: string): boolean {
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/login POST", async () => {
-    const limited = enforceRateLimit(req, "admin-login", "", LIMITS.login, "Too many sign-in attempts.");
+    const limited = await enforceRateLimit(req, "admin-login", "", LIMITS.login, "Too many sign-in attempts.");
     if (limited) return limited;
 
     const { password } = await req.json();
