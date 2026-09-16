@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
 import { unlockIfRentPaid } from "@/lib/unlock";
+import { notifyRentPaid } from "@/lib/rentpaid";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +81,9 @@ export async function GET(req: NextRequest) {
         note: `Rent paid by card ····${last4}: $${((dueCents + feeCents) / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, ${PROCESSING_PERCENT}%) ${marker}`,
       },
     });
+    // Only a NEW payment notifies — the marker check above is what makes a
+    // refreshed success page a no-op.
+    await notifyRentPaid(vendorId, { paidCents: dueCents, feeCents, last4, source: "portal" });
   }
   try { await unlockIfRentPaid(vendorId); } catch {}
   return NextResponse.json({ ok: true, last4, dueCents, feeCents });

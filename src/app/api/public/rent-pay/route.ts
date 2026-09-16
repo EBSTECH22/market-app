@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { unlockIfRentPaid } from "@/lib/unlock";
+import { notifyRentPaid } from "@/lib/rentpaid";
 import { isAdmin } from "@/lib/auth";
 import { logView } from "@/lib/viewlog";
 import { pushToAdmin } from "@/lib/push";
@@ -49,6 +50,9 @@ export async function GET(req: NextRequest) {
           note: `Rent paid by card ····${last4}: $${((dueCents + feeCents) / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, ${PROCESSING_PERCENT}%) ${marker}`,
         },
       });
+      // Inside the !already branch: this page is re-fetched on every reload of
+      // the success screen, and only a NEW payment should notify.
+      await notifyRentPaid(vendor.id, { paidCents: dueCents, feeCents, last4, source: "link" });
     }
     try { await unlockIfRentPaid(vendor.id); } catch {}
   return NextResponse.json({ paid: true, last4, dueCents, feeCents });
