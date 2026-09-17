@@ -15,17 +15,52 @@ export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
 
-  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents } = (await req.json()) as {
-    lines: { itemId: string; quantity: number }[];
+  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName } = (await req.json()) as {
+    lines: { itemId: string; quantity: number; priceCents?: number }[];
     paymentMethod: string;
     cardName?: string;
     customerContact?: string;
     redeem?: boolean;
     /** What the customer physically handed over. Cash sales only. */
     cashTenderedCents?: number;
+    /** Idempotency key minted by the till before sending — see below. */
+    idemKey?: string;
+    /** True only for a sale that was rung with no connection and is being posted late. */
+    offline?: boolean;
+    soldAtIso?: string;
+    employeeName?: string;
   };
+
+  /* ------------------------------------------- idempotency and offline --
+     TWO SEPARATE THINGS, deliberately:
+
+     `idemKey` is on EVERY sale the till sends, online or not. It makes sending
+     the same sale twice harmless. That matters most in the case that looks like
+     a failure and isn't: the request reaches the server, the sale commits, and
+     the response is lost on the way back. The till sees an error, queues the
+     sale, and posts it again later — with the same key, so it lands on the
+     ticket that already exists instead of ringing a second one.
+
+     `offline` says the sale was rung with no connection and is being recorded
+     after the fact. It relaxes three rules below, and it relaxes them because
+     the sale HAS ALREADY HAPPENED: the customer paid and left with the goods.
+     This endpoint is writing history at that point, not deciding whether to
+     allow a sale. */
+  const idemKey = typeof rawIdemKey === "string" ? rawIdemKey.trim().slice(0, 64) : "";
+  const offline = rawOffline === true;
+  if (idemKey) {
+    const already = await db.sale.findFirst({ where: { idemKey }, select: { id: true, number: true, employee: true, totalCents: true, createdAt: true } });
+    if (already) {
+      return NextResponse.json({ sale: already, duplicate: true });
+    }
+  }
+
   const drawer = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
-  if (!drawer) return NextResponse.json({ error: "Open the drawer (employee sign-in) before ringing sales." }, { status: 400 });
+  /* An offline sale is exempt: the drawer it was rung under may well have been
+     counted out and closed before the connection came back, and refusing it now
+     would leave money in the till with no ticket behind it. */
+  if (!drawer && !offline) return NextResponse.json({ error: "Open the drawer (employee sign-in) before ringing sales." }, { status: 400 });
+  const clerk = drawer?.employee || String(employeeName || "").trim().slice(0, 60) || "Offline sale";
   if (!Array.isArray(lines) || !lines.length) return NextResponse.json({ error: "Nothing on the ticket." }, { status: 400 });
   if (!["CASH", "CARD"].includes(paymentMethod)) return NextResponse.json({ error: "Pick a payment method." }, { status: 400 });
 
@@ -46,8 +81,24 @@ export async function POST(req: NextRequest) {
     const item = items.find((i) => i.id === l.itemId);
     if (!item) return NextResponse.json({ error: "An item on the ticket no longer exists." }, { status: 400 });
     const q = Math.max(1, Math.round(l.quantity));
-    const unit = effectivePriceCents(item);
-    saleSavingsCents += (item.priceCents - unit) * q;
+
+    /* Normally the server prices the ticket — the till can't be trusted to send
+       its own prices, and today's price is the right one.
+
+       An offline sale is the exception, and has to be: the customer paid the
+       price that was on the shelf when they bought it, possibly days before
+       this reaches the server. Re-pricing it at sync time would book a ticket
+       for an amount nobody ever handed over, and the drawer would never
+       reconcile. The sent price is used, sanity-bounded — a garbled figure gets
+       today's price rather than being taken on faith. */
+    const sentPrice = Math.round(Number(l.priceCents));
+    const useSent =
+      offline && Number.isFinite(sentPrice) && sentPrice >= 0 && sentPrice <= Math.max(100_00, item.priceCents * 3);
+    const unit = useSent ? sentPrice : effectivePriceCents(item);
+
+    // Never negative: an item whose price DROPPED after an offline sale would
+    // otherwise book as "savings" of minus something.
+    saleSavingsCents += Math.max(0, item.priceCents - unit) * q;
     const gross = unit * q;
     const commission = Math.round((gross * item.vendor.commissionPercent) / 100);
     subtotal += gross;
@@ -109,6 +160,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /* When an offline sale was actually rung, so the ticket lands in the right
+     day, the right drawer's window and the right month's tax return.
+
+     Guarded at both ends. A device whose clock is wrong — and tills do sit
+     unplugged for months — could otherwise book a sale into next year, where no
+     report would ever show it, or backdate one into a month already filed.
+     Outside the window the server's own clock is used instead, which is at
+     worst a few hours late and always visible. */
+  const soldAt = (() => {
+    if (!offline || typeof soldAtIso !== "string") return null;
+    const d = new Date(soldAtIso);
+    if (Number.isNaN(d.getTime())) return null;
+    const now = Date.now();
+    if (d.getTime() > now + 5 * 60 * 1000) return null;
+    if (d.getTime() < now - 7 * 24 * 60 * 60 * 1000) return null;
+    return d;
+  })();
+
   /* Retry the whole transaction if the ticket number collides. Two concurrent
      sales can compute the same next number; the unique index rejects the second
      with Prisma error P2002, and a retry recomputes against the committed max.
@@ -136,6 +205,18 @@ export async function POST(req: NextRequest) {
       if (!known.some((i) => i.id === itemId)) {
         throw new HttpError(400, "An item on the ticket no longer exists.");
       }
+
+      /* Offline sales never fail on stock. The goods left the building hours
+         ago; refusing the ticket now would lose the money to keep a count
+         tidy. The count is floored at zero instead, and the shortfall shows up
+         as a stock figure to correct rather than a sale that doesn't exist. */
+      if (offline) {
+        const row = await tx.item.findUnique({ where: { id: itemId }, select: { quantity: true } });
+        const left = Math.max(0, (row?.quantity ?? 0) - qty);
+        await tx.item.update({ where: { id: itemId }, data: { quantity: left } });
+        continue;
+      }
+
       const claimed = await tx.item.updateMany({
         where: { id: itemId, quantity: { gte: qty } },
         data: { quantity: { decrement: qty } },
@@ -178,7 +259,9 @@ export async function POST(req: NextRequest) {
         saleSavingsCents,
         number,
         cardName: paymentMethod === "CARD" ? (cardName || "").trim().slice(0, 60) : "",
-        employee: drawer.employee,
+        employee: clerk,
+        idemKey,
+        ...(soldAt ? { createdAt: soldAt } : {}),
         subtotalCents: subtotal, taxCents, totalCents, paymentMethod,
         /* Change is derived here, never taken from the client. The register
            shows the cashier a figure, but the number that goes on the ticket
@@ -228,6 +311,21 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const code = (err as { code?: string }).code;
     const target = String((err as { meta?: { target?: unknown } }).meta?.target || "");
+
+    /* Two syncs posting the same queued sale at the same moment: the first one
+       committed while the second was still inside its transaction, so the
+       duplicate check at the top of this route couldn't have seen it. The
+       unique index caught it, which is exactly its job — hand back the sale
+       that won rather than ringing a second one. */
+    if (code === "P2002" && idemKey && target.includes("idemKey")) {
+      const won = await db.sale.findFirst({
+        where: { idemKey },
+        select: { id: true, number: true, employee: true, totalCents: true, createdAt: true },
+      });
+      if (won) return NextResponse.json({ sale: won, duplicate: true });
+      throw err;
+    }
+
     // Index is named Sale_number_unique, so either fragment identifies it.
     if (code === "P2002" && (target.includes("number") || target.includes("Sale"))) {
       sale = await runSale(); // one retry is enough for a two-register collision

@@ -17,6 +17,7 @@ import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { subscribeToPush } from "@/lib/pushclient";
 import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
 import { auditLabel, actorLabel } from "@/lib/auditkinds";
+import { newSaleKey } from "@/lib/offline";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string };
@@ -2001,7 +2002,20 @@ export default function AdminPage() {
     let ok = false; let data: Record<string, unknown> = {};
     try { ({ ok, data } = await safeFetch("/api/admin/sale", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paymentMethod, cardName, cashTenderedCents, lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity , customerContact: custQ.trim(), redeem })) }),
+      /* customerContact and redeem belong to the SALE, not to each line. They
+         were inside the line map — a misplaced bracket — so every ticket rung
+         from this screen sent them as properties of an item, the server never
+         saw them, and no customer signed up here ever earned or spent a point.
+         idemKey makes a retry harmless: if this request is booked but the reply
+         is lost, sending it again returns the same ticket instead of a second
+         one. */
+      body: JSON.stringify({
+        paymentMethod, cardName, cashTenderedCents,
+        customerContact: custQ.trim(),
+        redeem,
+        idemKey: newSaleKey(),
+        lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+      }),
     })); } finally { setBusy(false); }
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
     setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });

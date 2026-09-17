@@ -9,6 +9,10 @@ import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
 import { CashTender } from "@/components/register/CashTender";
+import {
+  newSaleKey, queueSale, queuedSales, removeQueuedSale, syncQueuedSales, isStuck,
+  type QueuedSale,
+} from "@/lib/offline";
 
 /**
  * The register as a kiosk.
@@ -39,6 +43,8 @@ type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: 
 type Receipt = {
   id: string; number: number; employee: string; totalCents: number;
   cashTenderedCents?: number; changeCents?: number; paymentMethod: string;
+  /** Rung with no connection: it has no ticket number until it syncs. */
+  offline?: boolean;
 };
 type VendorTicket = {
   cartId: string; code: string; vendorName: string; vendorCode: string;
@@ -69,6 +75,14 @@ export default function RegisterKiosk() {
   const [openVendor, setOpenVendor] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(0);
   const [foodTaxRate, setFoodTaxRate] = useState(0);
+  const [cardAdjustPercent, setCardAdjustPercent] = useState(0);
+
+  /* Offline. `online` starts true rather than reading navigator.onLine, because
+     that property is also false during the first paint on some browsers and a
+     till that opens shouting "no connection" trains people to ignore it. */
+  const [online, setOnline] = useState(true);
+  const [queue, setQueue] = useState<QueuedSale[]>([]);
+  const [syncing, setSyncing] = useState(false);
 
   const [pay, setPay] = useState<"NONE" | "CASH" | "CARD">("NONE");
   const [cardRef, setCardRef] = useState("");
@@ -93,6 +107,15 @@ export default function RegisterKiosk() {
   const taxCents = taxFor(taxLines, rates).taxCents;
   const shownRate = displayRate(taxLines, rates);
   const total = subtotal + taxCents;
+
+  /* Dual pricing: the posted price is the CARD price, and cash skips the
+     adjustment. The kiosk used to show one total and let the server add the
+     adjustment afterwards, which meant a card customer was quoted one number
+     and charged another. Computed here with the same function the server uses,
+     surcharge included, so the two agree to the cent. */
+  const cardAdjustCents = cardAdjustPercent > 0 ? Math.round((subtotal * cardAdjustPercent) / 100) : 0;
+  const cardTaxCents = taxFor(taxLines, rates, cardAdjustCents).taxCents;
+  const cardTotal = subtotal + cardAdjustCents + cardTaxCents;
 
   /* ------------------------------------------------------------- session -- */
 
@@ -176,6 +199,7 @@ export default function RegisterKiosk() {
     const d = await r.json();
     if (typeof d.taxRatePercent === "number") setTaxRate(d.taxRatePercent);
     if (typeof d.foodTaxRatePercent === "number") setFoodTaxRate(d.foodTaxRatePercent);
+    if (typeof d.cardAdjustPercent === "number") setCardAdjustPercent(d.cardAdjustPercent);
   }, []);
 
   useEffect(() => {
@@ -184,6 +208,63 @@ export default function RegisterKiosk() {
     void loadFloor();
     void loadTax();
   }, [who, loadDrawer, loadFloor, loadTax]);
+
+  /* ------------------------------------------------------------- offline -- */
+
+  const refreshQueue = useCallback(async () => {
+    try { setQueue(await queuedSales()); } catch { /* no IndexedDB: the badge just stays empty */ }
+  }, []);
+
+  /** Post everything waiting. Safe to call at any time — it no-ops when empty. */
+  const drainQueue = useCallback(async (announce = false) => {
+    setSyncing(true);
+    try {
+      const before = (await queuedSales()).length;
+      if (!before) return;
+      const r = await syncQueuedSales();
+      await refreshQueue();
+      if (r.posted > 0) {
+        void loadDrawer();
+        void loadFloor();
+        toast.success(
+          `${plural(r.posted, "offline sale")} synced`,
+          "They're in the books and on the drawer count now."
+        );
+      } else if (announce && r.failed > 0) {
+        toast.error("Couldn't sync yet", "The sales are still saved on this iPad — nothing is lost.");
+      }
+    } catch {
+      /* Nothing to tell the cashier: the sales are still queued. */
+    } finally {
+      setSyncing(false);
+    }
+  }, [refreshQueue, loadDrawer, loadFloor, toast]);
+
+  useEffect(() => { void refreshQueue(); }, [refreshQueue]);
+
+  /* navigator.onLine only knows whether there is A network, not whether the
+     server is reachable — a market wifi that's up but has no internet still
+     reads as online. So it is treated as a hint that's worth retrying on, and
+     the real signal is whether a POST succeeds. */
+  useEffect(() => {
+    const up = () => { setOnline(true); void drainQueue(); };
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    if (typeof navigator !== "undefined" && navigator.onLine === false) setOnline(false);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, [drainQueue]);
+
+  /* A quiet retry while the till sits idle, so a queue left over from a blip
+     clears itself without anybody noticing it was there. */
+  useEffect(() => {
+    if (!who) return;
+    const t = window.setInterval(() => { void drainQueue(); }, 45_000);
+    return () => window.clearInterval(t);
+  }, [who, drainQueue]);
 
   /* Keep the cursor in the scan box so a barcode scanner just works — it types
      and presses Enter, and it does not care what's focused. */
@@ -228,6 +309,14 @@ export default function RegisterKiosk() {
   /* -------------------------------------------------------------- drawer -- */
 
   const openDrawer = async () => {
+    /* Opening and closing a drawer are server-side records that the offline
+       queue deliberately does NOT cover: a float counted into a till that the
+       books never heard of is how a shift ends up unreconcilable. Selling is
+       the thing worth saving offline; bookkeeping can wait for the wifi. */
+    if (!online) {
+      toast.error("No connection", "The drawer can't be opened until the wifi is back. Sales still work.");
+      return;
+    }
     /* dollarsToCents returns null for anything it can't read. Passing that
        through would have the server coerce it to 0 and open the drawer with a
        float of nothing — which then reads as a huge shortage at count-out. */
@@ -252,6 +341,17 @@ export default function RegisterKiosk() {
   };
 
   const closeDrawer = async () => {
+    if (!online) {
+      toast.error("No connection", "Count out once the wifi is back, so the offline sales are counted in.");
+      return;
+    }
+    if (queue.length) {
+      toast.error(
+        `${plural(queue.length, "sale")} hasn't synced`,
+        "Those aren't in the expected total yet. Sync first, or the drawer will look over."
+      );
+      return;
+    }
     const cents = dollarsToCents(closeCount);
     if (cents === null || cents < 0) {
       toast.error("That's not an amount", "Enter what you counted, like 284.50");
@@ -324,10 +424,70 @@ export default function RegisterKiosk() {
     setTimeout(() => document.body.classList.remove("receiptmode"), 400);
   }, []);
 
+  /**
+   * Save a sale on this device because the server couldn't be reached.
+   *
+   * The customer is standing there with their money out, so this never refuses:
+   * the worst case is that the ticket reaches the books a few minutes late.
+   * Totals are computed here with the same library the server uses, which is
+   * what makes the change handed over now match the receipt printed later.
+   */
+  const bookOffline = async (method: "CASH" | "CARD", tenderedCents: number, key: string): Promise<boolean> => {
+    const dueCents = method === "CARD" ? cardTotal : total;
+    try {
+      await queueSale({
+        key,
+        createdAtIso: new Date().toISOString(),
+        employee: who || "",
+        paymentMethod: method,
+        cardName: method === "CARD" ? cardRef : "",
+        cashTenderedCents: method === "CASH" ? tenderedCents : 0,
+        totalCents: dueCents,
+        changeCents: method === "CASH" && tenderedCents > 0 ? Math.max(0, tenderedCents - dueCents) : 0,
+        lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, name: l.name, priceCents: l.priceCents })),
+      });
+      await refreshQueue();
+      setOnline(false);
+      setReceipt({
+        id: key,
+        number: 0,
+        employee: who || "",
+        totalCents: dueCents,
+        cashTenderedCents: method === "CASH" ? tenderedCents : 0,
+        changeCents: method === "CASH" && tenderedCents > 0 ? Math.max(0, tenderedCents - dueCents) : 0,
+        paymentMethod: method,
+        offline: true,
+      });
+      setCart([]); setPay("NONE"); setCardRef("");
+      return true;
+    } catch {
+      /* IndexedDB itself refused — private browsing, or a full disk. This is
+         the one case where the cashier has to be told to write it down, and
+         saying so plainly beats a spinner that never resolves. */
+      setScanErr("No connection AND this device can't save the sale. Write the ticket down and ring it when the wifi is back.");
+      setPay("NONE");
+      return false;
+    }
+  };
+
   const book = async (method: "CASH" | "CARD", tenderedCents = 0) => {
     if (!cart.length) return;
+
+    /* One key per ticket, minted BEFORE anything is sent and reused if this
+       sale ends up in the offline queue — which is why it is declared out here
+       rather than inside the try, where the catch below couldn't see it.
+
+       It exists for the nastiest case: the server books the sale, the reply is
+       lost on the way back, the till treats it as failed and posts it again
+       later. Same key, same ticket, no second sale. */
+    const key = newSaleKey();
+
     setBusy(true);
     try {
+      /* Known to be offline: don't spend the customer's time on a fetch that
+         will time out. Straight to the queue. */
+      if (!online) { await bookOffline(method, tenderedCents, key); return; }
+
       const r = await fetch("/api/admin/sale", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -335,6 +495,7 @@ export default function RegisterKiosk() {
           cardName: method === "CARD" ? cardRef : "",
           cashTenderedCents: method === "CASH" ? tenderedCents : 0,
           lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+          idemKey: key,
         }),
       });
       const d = await r.json().catch(() => ({}));
@@ -343,8 +504,12 @@ export default function RegisterKiosk() {
       setCart([]); setPay("NONE"); setCardRef("");
       void loadDrawer(); void loadFloor();
     } catch {
-      setScanErr("No connection — the sale was not booked. Check the wifi and ring it again.");
-      setPay("NONE");
+      /* The fetch failed. It may never have reached the server, or it may have
+         been booked and the reply lost — there is no way to tell from here. The
+         sale is queued either way, carrying the key it was sent with, and the
+         server sorts it out: a sale that did commit is returned as-is instead
+         of being rung twice. */
+      await bookOffline(method, tenderedCents, key);
     } finally { setBusy(false); }
   };
 
@@ -353,6 +518,10 @@ export default function RegisterKiosk() {
   const findVendorTicket = async () => {
     const code = vtCode.trim().toUpperCase();
     if (!code) return;
+    if (!online) {
+      setVtErr("Booth tickets are looked up on the server — this one needs a connection.");
+      return;
+    }
     setBusy(true); setVtErr("");
     try {
       const r = await fetch(`/api/admin/vendor-ticket?code=${encodeURIComponent(code)}`);
@@ -479,6 +648,12 @@ export default function RegisterKiosk() {
         ) : (
           <Badge tone="warn" dot>No drawer</Badge>
         )}
+        {!online ? <Badge tone="danger" dot>Offline</Badge> : null}
+        {queue.length ? (
+          <Badge tone={queue.some(isStuck) ? "danger" : "warn"} dot>
+            {plural(queue.length, "sale")} waiting to sync
+          </Badge>
+        ) : null}
       </div>
       <div className="row wrap g-2">
         {drawer && !closing ? (
@@ -490,6 +665,62 @@ export default function RegisterKiosk() {
       </div>
     </div>
   );
+
+  /* Shown wherever the till is being used, not just on the sell screen: the
+     one thing a cashier must never wonder about is whether the sale they just
+     took is actually recorded anywhere. */
+  const offlineBanner =
+    !online || queue.length ? (
+      <div
+        className="card card-pad stack g-2"
+        style={{
+          background: online ? "var(--warn-soft, var(--bg-sunken))" : "var(--danger-soft, var(--bg-sunken))",
+          borderColor: online ? "var(--warn-border, var(--border-subtle))" : "var(--danger-border, var(--border-subtle))",
+        }}
+        aria-live="polite"
+      >
+        <div className="row wrap g-2" style={{ alignItems: "center", justifyContent: "space-between" }}>
+          <div className="stack g-1">
+            <span style={{ fontWeight: 700 }}>
+              {!online ? "No connection — still taking sales" : `${plural(queue.length, "sale")} waiting to sync`}
+            </span>
+            <span className="t-sm">
+              {!online
+                ? "Sales are being saved on this device and will post themselves when the wifi is back. Card sales still need running on the terminal."
+                : "They're saved here and haven't reached the books yet."}
+            </span>
+          </div>
+          {queue.length ? (
+            <Button size="sm" variant="secondary" icon="refresh" loading={syncing} disabled={syncing} onClick={() => void drainQueue(true)}>
+              Sync now
+            </Button>
+          ) : null}
+        </div>
+
+        {queue.length ? (
+          <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-2)" }}>
+            {queue.slice(0, 6).map((q) => (
+              <div key={q.key} className="row g-2" style={{ alignItems: "center" }}>
+                <span className="t-xs t-muted">{fmtTime(q.createdAtIso)}</span>
+                <span className="grow truncate t-sm">
+                  {plural(q.lines.reduce((n, l) => n + l.quantity, 0), "item")} · {q.paymentMethod === "CASH" ? "cash" : "card"}
+                </span>
+                <span className="num t-sm">{money(q.totalCents)}</span>
+                {isStuck(q) ? <Badge tone="danger">Needs a look</Badge> : null}
+              </div>
+            ))}
+            {queue.length > 6 ? <span className="t-xs t-muted">and {queue.length - 6} more</span> : null}
+          </div>
+        ) : null}
+
+        {queue.some(isStuck) ? (
+          <Note tone="error" title="Some sales won't post">
+            {queue.filter(isStuck).map((q) => q.lastError).find(Boolean) || "The server keeps rejecting them."}{" "}
+            Nothing has been lost — show this screen to whoever runs the market.
+          </Note>
+        ) : null}
+      </div>
+    ) : null;
 
   /* ----- no drawer open ----- */
   if (drawerLoaded && !drawer) {
@@ -571,7 +802,11 @@ export default function RegisterKiosk() {
     return shell(
       <>
         {header}
-        <Card title={`Sale #${receipt.number}`} subtitle="Done — hand over the receipt.">
+        {offlineBanner}
+        <Card
+          title={receipt.offline ? "Saved on this device" : `Sale #${receipt.number}`}
+          subtitle={receipt.offline ? "Take the money — it posts itself when the connection is back." : "Done — hand over the receipt."}
+        >
           <div className="stack g-4" style={{ textAlign: "center" }}>
             <div className="stack g-1">
               <span className="t-label">Total</span>
@@ -593,10 +828,21 @@ export default function RegisterKiosk() {
               <Button variant="primary" size="xl" className="grow" icon="plus" onClick={() => setReceipt(null)}>
                 Next customer
               </Button>
-              <Button variant="secondary" size="xl" icon="print" onClick={() => void printReceipt(receipt.id)}>
-                Print again
-              </Button>
+              {/* A printed receipt is built from the booked sale, which doesn't
+                  exist yet for an offline ticket. Rather than print something
+                  that can't be looked up later, say so. */}
+              {receipt.offline ? null : (
+                <Button variant="secondary" size="xl" icon="print" onClick={() => void printReceipt(receipt.id)}>
+                  Print again
+                </Button>
+              )}
             </div>
+            {receipt.offline ? (
+              <Note tone="warn">
+                No ticket number and no printed receipt until this syncs. If the customer needs paper, write the
+                total down — the sale itself is safe on this device.
+              </Note>
+            ) : null}
           </div>
         </Card>
       </>
@@ -651,6 +897,7 @@ export default function RegisterKiosk() {
   return shell(
     <>
       {header}
+      {offlineBanner}
 
       {pay === "NONE" ? (
         <Card
@@ -799,7 +1046,9 @@ export default function RegisterKiosk() {
             {pay === "NONE" ? (
               <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
                 <Button variant="primary" size="xl" block icon="cash" disabled={busy} onClick={() => setPay("CASH")}>Cash</Button>
-                <Button variant="dark" size="xl" block icon="card" disabled={busy} onClick={() => setPay("CARD")}>Card</Button>
+                <Button variant="dark" size="xl" block icon="card" disabled={busy} onClick={() => setPay("CARD")}>
+                  Card{cardAdjustCents > 0 ? ` ${money(cardTotal)}` : ""}
+                </Button>
               </div>
             ) : null}
           </div>
@@ -819,7 +1068,12 @@ export default function RegisterKiosk() {
         <div className="card card-pad stack g-3" style={{ background: "var(--accent-soft)", borderColor: "var(--accent-border)" }}>
           <div className="stack g-1">
             <span className="t-label t-accent">Charge the card terminal</span>
-            <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>
+            <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(cardTotal)}</span>
+            {cardAdjustCents > 0 ? (
+              <span className="t-xs t-muted">
+                {money(total)} cash price + {money(cardAdjustCents)} non-cash adjustment, tax included
+              </span>
+            ) : null}
           </div>
           <Field label="Approval code or last 4" hint="Optional, but it's the only thing tying this ticket to the terminal.">
             {(p) => (

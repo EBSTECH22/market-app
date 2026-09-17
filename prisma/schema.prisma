@@ -107,10 +107,22 @@ model Sale {
   // collected in February.
   foodTaxCents     Int      @default(0)
   standardTaxCents Int      @default(0)
+  // Idempotency key, minted by the till BEFORE the sale is sent. The same key
+  // can arrive twice — a retry, a sync running in two tabs, or a response lost
+  // after the server already committed — and the second arrival returns the
+  // first ticket instead of ringing a duplicate. That last case is why every
+  // sale carries one and not just the offline ones: a request that times out
+  // has not necessarily failed.
+  //
+  // Empty on sales rung before this existed, which is why uniqueness is a
+  // PARTIAL index created in SQL (WHERE "idemKey" <> '') rather than @unique
+  // here — @unique would let exactly one sale in the system have an empty key.
+  idemKey       String     @default("")
   createdAt     DateTime   @default(now())
   lines         SaleLine[]
 
   @@index([soldByVendorId])
+  @@index([idemKey])
 }
 
 model Employee {
