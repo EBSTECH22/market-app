@@ -179,8 +179,8 @@ export default function OrderPage({ params }: { params: { token: string } }) {
                 510 N Main St, Noble, OK 73068
               </p>
               <p className="t-sm t-muted" style={{ margin: 0 }}>
-                Wait for the &ldquo;ready to collect&rdquo; email before coming — {order.vendor.businessName} packs
-                these themselves.
+                This is a pre-order, not something already bagged on their shelf — {order.vendor.businessName} makes
+                it up and packs it themselves. Wait for the &ldquo;ready to collect&rdquo; email before coming.
               </p>
             </div>
           ) : order.shipTo && order.shipTo.line1 ? (

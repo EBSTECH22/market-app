@@ -647,8 +647,8 @@ export async function sendOrderConfirmEmail(
     to,
     `Order #${opts.number} confirmed — ${opts.vendorName}`,
     shell(`
-      <h1 style="font-size:20px;margin:0 0 6px;">Thanks — order #${opts.number}</h1>
-      <p style="color:#4b5563;margin:0 0 18px;">${opts.vendorName} has your order and will let you know when it's ${opts.fulfillment === "SHIP" ? "on its way" : "ready to collect"}.</p>
+      <h1 style="font-size:20px;margin:0 0 6px;">Thanks — pre-order #${opts.number}</h1>
+      <p style="color:#4b5563;margin:0 0 18px;">${opts.vendorName} is making this up for you and will let you know when it's ${opts.fulfillment === "SHIP" ? "on its way" : "ready to collect"}.${opts.fulfillment === "SHIP" ? "" : " Please wait for that email before coming — it isn't waiting on their shelf yet."}</p>
       <table style="width:100%;font-size:14px;border-collapse:collapse;margin-bottom:10px;">
         ${orderLinesHtml(opts.lines)}
         <tr><td style="padding-top:8px;border-top:1px solid #e5e7eb;text-align:left;">Subtotal</td><td style="padding-top:8px;border-top:1px solid #e5e7eb;text-align:right;">${money2(opts.subtotalCents)}</td></tr>

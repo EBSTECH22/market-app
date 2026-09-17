@@ -71,6 +71,11 @@ export default function Storefront({ params }: { params: { code: string } }) {
      browse, and a page load between every product is how browsing stops. */
   const [openItem, setOpenItem] = useState<Item | null>(null);
   const [gallery, setGallery] = useState(0);
+  /* Which shelf the open item was clicked from. The same product can sit in
+     both lists, and the two mean opposite things — one is buyable here as a
+     pre-order, the other is in the building right now and sold in person. The
+     detail panel has to say the right one, and only the click knows which. */
+  const [openShop, setOpenShop] = useState(false);
   const [cat, setCat] = useState("");
   const [q, setQ] = useState("");
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -430,11 +435,23 @@ export default function Storefront({ params }: { params: { code: string } }) {
         {/* -------------------------------------------------------- shop online -- */}
         {online.length > 0 && (
           <Card
-            title={`Order from ${vendor.businessName}`}
-            subtitle="Bought here, packed by them. Separate from what's on the shelf in the building."
+            title={`Pre-order from ${vendor.businessName}`}
+            subtitle="Made up for you after you order — not the stock sitting in their booth."
             className="mb-4"
           >
             <div className="stack g-4">
+              {/* Said once, plainly, at the top. The single thing that goes
+                  wrong with a market storefront is somebody paying online for
+                  a jar they can see on the shelf, then arriving to find it
+                  sold — because the shelf is first-come and the website is
+                  not. These are two separate counts and shoppers have to be
+                  told so before they pay, not in the confirmation email. */}
+              <Note tone="info" title="These are pre-orders">
+                {vendor.businessName} sets these aside and packs them once you&rsquo;ve ordered — you&rsquo;ll get an
+                email when it&rsquo;s ready. Anything on the shelf in their booth right now is sold in person, first
+                come, first served; ordering here doesn&rsquo;t hold it for you.
+              </Note>
+
               <div className="grid-auto" style={{ ["--min" as string]: "168px" }}>
                 {online.map((i) => {
                   const inCart = cart[i.id] || 0;
@@ -448,7 +465,7 @@ export default function Storefront({ params }: { params: { code: string } }) {
                     >
                       <button
                         type="button"
-                        onClick={() => { setOpenItem(i); setGallery(0); }}
+                        onClick={() => { setOpenItem(i); setGallery(0); setOpenShop(true); }}
                         aria-label={`See details for ${i.name}`}
                         style={{ padding: 0, border: 0, background: "none", cursor: "pointer", lineHeight: 0, position: "relative" }}
                       >
@@ -478,6 +495,14 @@ export default function Storefront({ params }: { params: { code: string } }) {
                               ? `Posted for ${money(i.shipCents)}`
                               : "Collect at the market"}
                         </span>
+                        {/* The dangerous case: the same product is also on the
+                            shelf today. Without this line a shopper reads the
+                            booth list and the shop list as one stock. */}
+                        {i.inStock ? (
+                          <span className="t-xs" style={{ color: "var(--warn)" }}>
+                            Also in the booth today — buying here is a pre-order, not that shelf stock.
+                          </span>
+                        ) : null}
 
                         {inCart > 0 ? (
                           <div className="row g-2" style={{ alignItems: "center" }}>
@@ -567,8 +592,8 @@ export default function Storefront({ params }: { params: { code: string } }) {
                   </Button>
                   <p className="t-xs t-muted" style={{ margin: 0 }}>
                     {fulfil === "SHIP"
-                      ? `Card payment through Stripe. ${vendor.businessName} posts it and adds tracking.`
-                      : `Card payment through Stripe. Collect from Community Harvest${vendor.boothLabel ? `, booth ${vendor.boothLabel}` : ""} once they mark it ready.`}
+                      ? `Card payment through Stripe. This is a pre-order — ${vendor.businessName} makes it up, posts it and adds tracking.`
+                      : `Card payment through Stripe. This is a pre-order, not shelf stock — wait for the "ready to collect" email, then pick it up from Community Harvest${vendor.boothLabel ? `, booth ${vendor.boothLabel}` : ""}.`}
                   </p>
                 </div>
               )}
@@ -579,7 +604,11 @@ export default function Storefront({ params }: { params: { code: string } }) {
         {/* ------------------------------------------------ what's on the floor -- */}
         <Card
           title="In the booth today"
-          subtitle={items.length ? `${plural(items.length, "item")} on the shelf — come and see them` : undefined}
+          subtitle={
+            items.length
+              ? `${plural(items.length, "item")} on the shelf — sold in person, first come, first served${online.length > 0 ? ". To order ahead, use the pre-order shop above" : ""}`
+              : undefined
+          }
           className="mb-4"
         >
           {items.length === 0 ? (
@@ -644,7 +673,7 @@ export default function Storefront({ params }: { params: { code: string } }) {
                         <button
                           key={i.id}
                           type="button"
-                          onClick={() => { setOpenItem(i); setGallery(0); }}
+                          onClick={() => { setOpenItem(i); setGallery(0); setOpenShop(false); }}
                           aria-label={`${i.name}, ${money(i.priceCents)}${i.description ? " — see details" : ""}`}
                           className="stack g-2"
                           style={{
@@ -968,19 +997,45 @@ export default function Storefront({ params }: { params: { code: string } }) {
 
             <div className="row g-2 wrap">
               {openItem.category ? <Badge tone="neutral">{openItem.category}</Badge> : null}
-              <Badge tone={openItem.quantity <= 3 ? "warn" : "success"} dot>
-                {openItem.quantity <= 3 ? `Only ${openItem.quantity} left` : "In stock"}
-              </Badge>
+              {/* Opened from the shop, the number that matters is what the
+                  vendor set aside for online orders — NOT the booth count,
+                  which can be zero for a product that pre-orders fine. */}
+              {openShop ? (
+                <>
+                  <Badge tone={openItem.onlineQuantity <= 3 ? "warn" : "success"} dot>
+                    {openItem.onlineQuantity <= 3
+                      ? `Only ${openItem.onlineQuantity} to pre-order`
+                      : `${openItem.onlineQuantity} available to pre-order`}
+                  </Badge>
+                  {openItem.inStock ? <Badge tone="neutral">Also in the booth today</Badge> : null}
+                </>
+              ) : (
+                <Badge tone={openItem.quantity <= 3 ? "warn" : "success"} dot>
+                  {openItem.quantity <= 3 ? `Only ${openItem.quantity} left` : "In stock"}
+                </Badge>
+              )}
             </div>
 
-            <Note tone="info">
-              {vendor.boothLabel
-                ? `Come and see it at booth ${vendor.boothLabel}, or ask about it below.`
-                : "Come and see it at the market, or ask about it below."}
-            </Note>
+            {openShop ? (
+              <Note tone="info" title="Pre-order">
+                {vendor.businessName} makes this up after you order and emails you when it&rsquo;s ready
+                {openItem.inStock
+                  ? ". One is on their shelf today, but that one is sold in person — ordering here doesn't hold it."
+                  : "."}
+              </Note>
+            ) : (
+              <Note tone="info">
+                {vendor.boothLabel
+                  ? `Come and see it at booth ${vendor.boothLabel}, or ask about it below.`
+                  : "Come and see it at the market, or ask about it below."}
+              </Note>
+            )}
 
             <div className="row g-2 wrap">
-              {vendor.acceptsPreorders ? (
+              {/* The message-based pre-order is for things you CAN'T buy here.
+                  Offering it beside a product that's already in the basket
+                  flow just gives a shopper two doors to the same room. */}
+              {vendor.acceptsPreorders && !openShop ? (
                 <Button
                   variant="primary"
                   icon="mail"
