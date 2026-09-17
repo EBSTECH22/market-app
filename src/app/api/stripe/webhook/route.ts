@@ -6,6 +6,7 @@ import { finalizeSelfCartIfPaid } from "@/lib/selfcheckout";
 import { finalizeIfPaid as finalizePreorderIfPaid } from "@/lib/preorder";
 import { finalizeTentIfPaid } from "@/lib/tents";
 import { refreshAccountStatus } from "@/lib/payouts";
+import { finalizeOrder, expireOrder } from "@/lib/orderfinalize";
 
 /**
  * Stripe's server-to-server notification that money actually moved.
@@ -21,7 +22,8 @@ import { refreshAccountStatus } from "@/lib/payouts";
  * matters because Stripe delivers at least once and can retry.
  *
  * SETUP: add this URL in the Stripe dashboard under Developers → Webhooks,
- * listening for `checkout.session.completed` and `account.updated`, then put
+ * listening for `checkout.session.completed`, `checkout.session.expired` and
+ * `account.updated`, then put
  * the signing secret in STRIPE_WEBHOOK_SECRET. Without that variable this
  * endpoint refuses everything — it will not process unverified events.
  *
@@ -89,6 +91,12 @@ export async function POST(req: NextRequest) {
       await handleCompletedSession(event.data.object);
     } else if (event.type === "account.updated") {
       await handleAccountUpdated(event.data.object);
+    } else if (event.type === "checkout.session.expired") {
+      /* An online order that was started and abandoned. The stock it was
+         holding has to go back, or one unfinished basket removes a vendor's
+         last item from sale for good. */
+      const meta = (event.data.object.metadata as Record<string, string> | null) || {};
+      if (meta.orderId) await expireOrder(meta.orderId);
     }
     // Other event types are acknowledged and ignored — returning non-200 would
     // make Stripe retry something we were never going to act on.
@@ -140,6 +148,11 @@ async function handleCompletedSession(session: Record<string, unknown>): Promise
   }
   if (metadata.tentBookingId) {
     await finalizeTentIfPaid(metadata.tentBookingId);
+    return;
+  }
+  if (metadata.orderId) {
+    const res = await finalizeOrder(metadata.orderId);
+    if (!res.ok) console.warn(`[stripe webhook] order finalize for ${id}: ${res.error}`);
     return;
   }
 

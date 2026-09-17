@@ -10,7 +10,7 @@ export const revalidate = 0;
 export async function GET() {
   const vendors = await db.vendor.findMany({
     where: PUBLIC_VENDOR_WHERE,
-    select: { code: true, businessName: true, publicBlurb: true, acceptsPreorders: true, acceptsRequests: true },
+    select: { code: true, businessName: true, publicBlurb: true, tagline: true, acceptsPreorders: true, acceptsRequests: true },
     orderBy: { businessName: "asc" },
   });
   const items = await db.item.findMany({
@@ -21,7 +21,10 @@ export async function GET() {
   const logos = await db.vendorPhoto.findMany({ where: { kind: "LOGO" }, select: { id: true, vendorId: true } });
   const reviews = await db.review.groupBy({ by: ["vendorId"], _avg: { rating: true }, _count: true });
   const vmap = await db.vendor.findMany({ where: PUBLIC_VENDOR_WHERE, select: { id: true, code: true } });
-  const idToCode = new Map(vmap.map((v) => [v.id, v.code]));
+  /* Explicit generics: `new Map(arr.map(...))` infers the value as `{}`, which
+     typechecks at the call site and then fails the production build on the
+     first use. This codebase has lost a deploy to it twice. */
+  const idToCode = new Map<string, string>(vmap.map((v) => [v.id, v.code] as [string, string]));
   const ratings: Record<string, { avg: number; n: number }> = {};
   for (const r of reviews) {
     const code = idToCode.get(r.vendorId);

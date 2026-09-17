@@ -613,3 +613,99 @@ export async function sendVendorNewsEmail(
     <p style="font-size:11px;color:#9ca3af;margin:14px 0 0;">You're getting this because you followed ${businessName} at Community Harvest.</p>`;
   await send(to, `${businessName} — what's new at the market`, shell(inner), { listUnsubscribeUrl: unsubscribeUrl });
 }
+
+/* ---------------------------------------------------------- online orders -- */
+
+const money2 = (c: number) => `$${(c / 100).toFixed(2)}`;
+
+function orderLinesHtml(lines: { name: string; unitLabel?: string; quantity: number; priceCents: number }[]) {
+  return lines
+    .map(
+      (l) =>
+        `<tr><td style="padding:4px 0;text-align:left;">${l.quantity}× ${l.name}${l.unitLabel ? ` <span style="color:#9ca3af">(${l.unitLabel})</span>` : ""}</td><td style="padding:4px 0;text-align:right;">${money2(l.priceCents * l.quantity)}</td></tr>`
+    )
+    .join("");
+}
+
+/**
+ * The customer's receipt for an online order.
+ *
+ * Says who is actually fulfilling it, because they bought from a vendor
+ * THROUGH the market — and if they turn up at the counter expecting staff to
+ * know about it, somebody has a bad morning.
+ */
+export async function sendOrderConfirmEmail(
+  to: string,
+  opts: {
+    number: number; vendorName: string; fulfillment: string; token: string;
+    lines: { name: string; unitLabel?: string; quantity: number; priceCents: number }[];
+    subtotalCents: number; shippingCents: number; taxCents: number; totalCents: number;
+  }
+) {
+  const link = `${baseUrl()}/order/${opts.token}`;
+  return send(
+    to,
+    `Order #${opts.number} confirmed — ${opts.vendorName}`,
+    shell(`
+      <h1 style="font-size:20px;margin:0 0 6px;">Thanks — order #${opts.number}</h1>
+      <p style="color:#4b5563;margin:0 0 18px;">${opts.vendorName} has your order and will let you know when it's ${opts.fulfillment === "SHIP" ? "on its way" : "ready to collect"}.</p>
+      <table style="width:100%;font-size:14px;border-collapse:collapse;margin-bottom:10px;">
+        ${orderLinesHtml(opts.lines)}
+        <tr><td style="padding-top:8px;border-top:1px solid #e5e7eb;text-align:left;">Subtotal</td><td style="padding-top:8px;border-top:1px solid #e5e7eb;text-align:right;">${money2(opts.subtotalCents)}</td></tr>
+        ${opts.shippingCents ? `<tr><td style="text-align:left;">Shipping</td><td style="text-align:right;">${money2(opts.shippingCents)}</td></tr>` : ""}
+        ${opts.taxCents ? `<tr><td style="text-align:left;">Sales tax</td><td style="text-align:right;">${money2(opts.taxCents)}</td></tr>` : ""}
+        <tr><td style="font-weight:700;text-align:left;padding-top:4px;">Total paid</td><td style="font-weight:700;text-align:right;padding-top:4px;">${money2(opts.totalCents)}</td></tr>
+      </table>
+      <p style="margin:18px 0 0;"><a href="${link}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:600;">Track this order</a></p>
+      <p style="color:#9ca3af;font-size:12px;margin-top:16px;">
+        ${opts.fulfillment === "SHIP"
+          ? "Shipping is handled by the vendor — they'll add tracking when it goes out."
+          : "Collect it at Community Harvest, 510 N Main St, Noble. Bring your order number."}
+      </p>
+    `)
+  );
+}
+
+/** The vendor's "you've sold something" email. */
+export async function sendVendorOrderEmail(
+  to: string,
+  opts: {
+    number: number; customerName: string; fulfillment: string; netCents: number;
+    lines: { name: string; quantity: number }[];
+  }
+) {
+  return send(
+    to,
+    `New online order #${opts.number} — ${opts.fulfillment === "SHIP" ? "to post" : "for collection"}`,
+    shell(`
+      <h1 style="font-size:20px;margin:0 0 6px;">You've sold something</h1>
+      <p style="color:#4b5563;margin:0 0 14px;">Order #${opts.number} from ${opts.customerName}.</p>
+      <p style="text-align:left;font-size:14px;margin:0 0 14px;">${opts.lines.map((l) => `${l.quantity}× ${l.name}`).join("<br>")}</p>
+      <p style="margin:0 0 6px;font-size:15px;"><b>${money2(opts.netCents)}</b> to your balance${opts.fulfillment === "SHIP" ? " (including shipping)" : ""}.</p>
+      <p style="margin:14px 0 0;"><a href="${baseUrl()}/vendor" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:600;">Open my orders</a></p>
+      <p style="color:#9ca3af;font-size:12px;margin-top:14px;">${opts.fulfillment === "SHIP" ? "Post it, then add the tracking number in your portal." : "Pack it and mark it ready — the customer gets an email to come and collect."}</p>
+    `)
+  );
+}
+
+/** Ready for collection, or posted with tracking. */
+export async function sendOrderStatusEmail(
+  to: string,
+  opts: { number: number; vendorName: string; status: string; token: string; carrier?: string; tracking?: string }
+) {
+  const link = `${baseUrl()}/order/${opts.token}`;
+  const ready = opts.status === "READY";
+  return send(
+    to,
+    ready ? `Order #${opts.number} is ready to collect` : `Order #${opts.number} is on its way`,
+    shell(`
+      <h1 style="font-size:20px;margin:0 0 6px;">${ready ? "Ready when you are" : "It's posted"}</h1>
+      <p style="color:#4b5563;margin:0 0 16px;">
+        ${ready
+          ? `${opts.vendorName} has order #${opts.number} packed and waiting at Community Harvest, 510 N Main St, Noble. Give your name or order number at the counter.`
+          : `${opts.vendorName} has sent order #${opts.number}.${opts.tracking ? ` ${opts.carrier || "Tracking"}: <b>${opts.tracking}</b>` : ""}`}
+      </p>
+      <p style="margin:0;"><a href="${link}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:600;">See my order</a></p>
+    `)
+  );
+}

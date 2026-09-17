@@ -42,11 +42,24 @@ model Vendor {
   // say something more useful than "pending".
   payoutStatusNote String  @default("")
   publicBlurb       String   @default("")
+  // The storefront. publicBlurb stays as the one-line summary that shows in
+  // listings; these are the page itself.
+  //
+  // A booth in a market sells on a story and a face — "we've milled our own
+  // flour since 2019" does work that a product list can't. Separate fields
+  // rather than one blob of HTML because they appear in different places: the
+  // tagline under the name, the story below the fold, the links in the footer.
+  tagline           String   @default("")
+  story             String   @default("")
+  instagramUrl      String   @default("")
+  facebookUrl       String   @default("")
+  websiteUrl        String   @default("")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
   items             Item[]
   ledger            LedgerEntry[]
   contracts         Contract[]
+  orders            Order[]
 }
 
 model Item {
@@ -70,6 +83,34 @@ model Item {
   // categories are whatever walked in the door this season. Used only to
   // compare against other vendors selling the same kind of thing.
   category   String   @default("")
+  // What the shopper reads before deciding. An item with a name and a price is
+  // a line in a stock list; an item with a description is something somebody
+  // might buy without holding it first.
+  description String  @default("")
+  // "per dozen", "8 oz jar", "each" — the unit the price is for. Without it a
+  // $14 jar of honey looks expensive next to a $6 one that's half the size.
+  unitLabel  String   @default("")
+  // Pinned to the front of the vendor's storefront. Their best three things,
+  // chosen by them, rather than whatever sorts first alphabetically.
+  featured   Boolean  @default(false)
+  // ---- selling online -------------------------------------------------
+  // Off by default and opted into per product. The market's floor stock is NOT
+  // an online catalogue: a shopper standing at the booth holding the last jar
+  // must not lose it to an order placed from a sofa thirty seconds earlier.
+  onlineEnabled  Boolean @default(false)
+  // Stock set aside for online orders, counted SEPARATELY from `quantity`.
+  // Online orders only ever draw this number down; the register only ever draws
+  // `quantity` down. Two counts is the whole reason the two channels can't
+  // sell each other's goods.
+  onlineQuantity Int     @default(0)
+  // How the vendor will get it to the buyer. Pickup at the market is the
+  // default because it costs nobody anything.
+  onlinePickup   Boolean @default(true)
+  onlineShip     Boolean @default(false)
+  // What the vendor charges to post this one item. Shipping is the vendor's
+  // responsibility and their money — the market doesn't take commission on it
+  // and doesn't tax it (Oklahoma doesn't tax separately-stated delivery).
+  shipCents      Int     @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -390,10 +431,18 @@ model VendorPhoto {
   id        String   @id @default(cuid())
   vendorId  String
   itemId    String   @default("")
+  /// LOGO | COVER | PRODUCT (the vendor's gallery) | ITEM (one product's photos)
   kind      String   @default("PRODUCT")
   mime      String
   data      String
+  /// Lowest first. The first photo on an item is the one that sells it, so
+  /// which photo leads has to be the vendor's choice and not an accident of
+  /// upload order.
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
+
+  @@index([vendorId, kind])
+  @@index([itemId])
 }
 
 model SelfCart {
@@ -625,4 +674,85 @@ model Payout {
 
   @@unique([runId, vendorId])
   @@index([vendorId])
+}
+
+
+/// An online order: one customer, ONE VENDOR, paid up front.
+///
+/// One vendor per order, deliberately. Fulfillment, shipping, the ledger credit
+/// and the payout all belong to a single vendor, so a cart spanning two booths
+/// would have to be split into two of everything the moment it was paid for.
+/// A shopper on a vendor's page is shopping with that vendor; buying from two
+/// means two checkouts, which is honest about what's actually happening.
+model Order {
+  id             String   @id @default(cuid())
+  number         Int      @unique
+  vendorId       String
+  vendor         Vendor   @relation(fields: [vendorId], references: [id])
+
+  customerName   String   @default("")
+  customerEmail  String
+  customerPhone  String   @default("")
+  /// Anything the customer typed at checkout — "leave with the neighbour".
+  note           String   @default("")
+
+  /// PICKUP | SHIP
+  fulfillment    String   @default("PICKUP")
+  /// Captured by Stripe at checkout for shipped orders; empty for pickup.
+  shipName       String   @default("")
+  shipLine1      String   @default("")
+  shipLine2      String   @default("")
+  shipCity       String   @default("")
+  shipState      String   @default("")
+  shipPostal     String   @default("")
+
+  subtotalCents  Int      @default(0)
+  /// Separately stated, untaxed, and passed to the vendor in full.
+  shippingCents  Int      @default(0)
+  taxCents       Int      @default(0)
+  foodTaxCents   Int      @default(0)
+  standardTaxCents Int    @default(0)
+  totalCents     Int      @default(0)
+  commissionCents Int     @default(0)
+  /// What lands on the vendor's ledger: goods less commission, plus shipping.
+  vendorNetCents Int      @default(0)
+
+  /// PENDING → PAID → PACKED → READY → COLLECTED (pickup)
+  ///                        → SHIPPED (post)
+  /// plus EXPIRED (never paid) and CANCELLED / REFUNDED.
+  status         String   @default("PENDING")
+  /// The customer's own link to their order. Long and random — it is the only
+  /// thing standing between a stranger and somebody's delivery address.
+  token          String   @unique
+  stripeSessionId String  @default("")
+  carrier        String   @default("")
+  trackingNumber String   @default("")
+
+  createdAt      DateTime @default(now())
+  paidAt         DateTime?
+  readyAt        DateTime?
+  completedAt    DateTime?
+
+  lines          OrderLine[]
+
+  @@index([vendorId, status])
+  @@index([createdAt])
+  @@index([status])
+}
+
+model OrderLine {
+  id         String @id @default(cuid())
+  orderId    String
+  order      Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId     String
+  /// Copied at order time. A vendor renaming or repricing an item next week
+  /// must not rewrite what somebody already bought.
+  name       String
+  unitLabel  String @default("")
+  priceCents Int
+  quantity   Int
+  taxClass   String @default("STANDARD")
+  shipCents  Int    @default(0)
+
+  @@index([itemId])
 }

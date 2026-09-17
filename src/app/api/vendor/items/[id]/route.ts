@@ -14,7 +14,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const body = await req.json();
   let restock = false;
-  const data: { name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number; taxClass?: string; category?: string } = {};
+  const data: {
+    name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number;
+    taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean;
+    onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number;
+  } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
   if (body.priceDollars !== undefined) {
     const price = Math.round(Number(body.priceDollars) * 100);
@@ -41,6 +45,41 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if (body.taxClass !== undefined) data.taxClass = normalizeTaxClass(body.taxClass);
   if (body.category !== undefined) data.category = String(body.category || "").trim().slice(0, 40);
+  if (body.description !== undefined) data.description = String(body.description || "").trim().slice(0, 1200);
+  if (body.unitLabel !== undefined) data.unitLabel = String(body.unitLabel || "").trim().slice(0, 40);
+  if (typeof body.featured === "boolean") data.featured = body.featured;
+
+  /* Selling online, per product. The online count is its own number and is set
+     directly rather than adjusted — a vendor deciding "four of these are for
+     the website" is stating a total, not a delta. */
+  if (typeof body.onlineEnabled === "boolean") data.onlineEnabled = body.onlineEnabled;
+  if (body.onlineQuantity !== undefined) {
+    const q = Math.round(Number(body.onlineQuantity));
+    if (Number.isNaN(q) || q < 0 || q > 9999) {
+      return NextResponse.json({ error: "Online quantity has to be 0 or more." }, { status: 400 });
+    }
+    data.onlineQuantity = q;
+  }
+  if (typeof body.onlinePickup === "boolean") data.onlinePickup = body.onlinePickup;
+  if (typeof body.onlineShip === "boolean") data.onlineShip = body.onlineShip;
+  if (body.shipDollars !== undefined) {
+    const cents = Math.round(Number(body.shipDollars || 0) * 100);
+    if (Number.isNaN(cents) || cents < 0 || cents > 50000) {
+      return NextResponse.json({ error: "Shipping charge has to be between $0 and $500." }, { status: 400 });
+    }
+    data.shipCents = cents;
+  }
+  /* Neither collection nor post means nobody can receive it, so it can't be
+     sold online however the boxes were left. */
+  const finalPickup = data.onlinePickup ?? item.onlinePickup;
+  const finalShip = data.onlineShip ?? item.onlineShip;
+  const finalOnline = data.onlineEnabled ?? item.onlineEnabled;
+  if (finalOnline && !finalPickup && !finalShip) {
+    return NextResponse.json(
+      { error: "Pick collection at the market, posting, or both — an online item needs a way to reach the buyer." },
+      { status: 400 }
+    );
+  }
   if (typeof body.active === "boolean") data.active = body.active;
   if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 

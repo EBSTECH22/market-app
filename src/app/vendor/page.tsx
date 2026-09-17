@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePulse } from "@/lib/usePulse";
 import {
-  Icon, Button, IconButton, LinkButton, Field, Input, Select, Textarea, Checkbox,
+  Icon, Button, IconButton, LinkButton, Field, Input, MoneyInput, Select, Textarea, Checkbox,
   Modal, Panel, useDialog, useToast, DataTable, Badge, Card, Stat, EmptyState,
   Note, Skeleton, SkeletonStats, PageHeader, type Column, type IconName,
 } from "@/components/ui";
@@ -11,25 +11,35 @@ import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
 import { subscribeToPush } from "@/lib/pushclient";
 
-type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string };
+type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 type Thread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; last: { sender: string; body: string } | null };
 type OpenThread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; messages: { id: string; sender: string; body: string; createdAt: string }[] };
-type Photo = { id: string; kind: string; itemId?: string };
+type Photo = { id: string; kind: string; itemId?: string; sortOrder?: number };
+type VOrderLine = { name: string; unitLabel: string; quantity: number; priceCents: number };
+type VOrder = {
+  id: string; number: number; status: string; statusLabel: string; next: string[];
+  fulfillment: string; customerName: string; customerEmail: string; customerPhone: string;
+  note: string; createdAt: string; paidAt: string | null; lines: VOrderLine[];
+  subtotalCents: number; shippingCents: number; taxCents: number; totalCents: number; vendorNetCents: number;
+  carrier: string; trackingNumber: string;
+  shipTo: { name: string; line1: string; line2: string; city: string; state: string; postal: string } | null;
+};
 
 /* Tabs live in the URL hash so refresh, back/forward and shared links all work.
    They used to sit in plain useState, so a reload always dumped a vendor back
    on Home and there was no way to link anyone to a section. */
-const VENDOR_TABS = ["home", "items", "insights", "inbox", "page", "money", "chat", "settings"] as const;
+const VENDOR_TABS = ["home", "items", "orders", "insights", "inbox", "page", "money", "chat", "settings"] as const;
 type VendorTab = (typeof VENDOR_TABS)[number];
 
 const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }> = {
   home: { label: "Home", icon: "store", sub: "Your booth at a glance" },
   items: { label: "My items", icon: "box", sub: "Prices, stock, sales, and barcode labels" },
+  orders: { label: "Online orders", icon: "receipt", sub: "What people have bought from your page — pack it, send it, hand it over" },
   insights: { label: "What's working", icon: "chart", sub: "What sells, what's stuck, and what's about to run out" },
   inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
   page: { label: "My page", icon: "star", sub: "Your public page, photos, and market feed posts" },
@@ -49,8 +59,8 @@ const CATEGORY_SUGGESTIONS = [
   "Clothing", "Pet", "Seasonal", "Other",
 ];
 
-const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "insights", "money"];
-const MORE_MOBILE: VendorTab[] = ["page", "chat", "settings"];
+const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "orders", "money"];
+const MORE_MOBILE: VendorTab[] = ["insights", "page", "chat", "settings"];
 
 const LEDGER_ICON = (type: string): IconName =>
   type === "SALE" ? "receipt" : type === "PAYOUT" ? "cash" : type === "RENT" ? "store" : "edit";
@@ -169,7 +179,18 @@ export default function VendorDashboard() {
   const [pubReq, setPubReq] = useState(false);
   const [pubBlurb, setPubBlurb] = useState("");
   const [pubSelf, setPubSelf] = useState(true);
+  const [pubTagline, setPubTagline] = useState("");
+  const [pubStory, setPubStory] = useState("");
+  const [pubInsta, setPubInsta] = useState("");
+  const [pubFb, setPubFb] = useState("");
+  const [pubWeb, setPubWeb] = useState("");
   const [myPhotos, setMyPhotos] = useState<Photo[]>([]);
+  const [orders, setOrders] = useState<VOrder[]>([]);
+  const [orderScope, setOrderScope] = useState<"open" | "done">("open");
+  const [openOrders, setOpenOrders] = useState(0);
+  const [trackFor, setTrackFor] = useState<VOrder | null>(null);
+  const [trackCarrier, setTrackCarrier] = useState("USPS");
+  const [trackNumber, setTrackNumber] = useState("");
   const [photoBusy, setPhotoBusy] = useState(false);
   const [po, setPo] = useState<{ status: string; description: string; subtotalCents: number; taxCents: number; totalCents: number; expectedDate: string; payUrl: string } | null>(null);
   const [poDesc, setPoDesc] = useState("");
@@ -179,7 +200,11 @@ export default function VendorDashboard() {
   const [tab, setTab] = useHashTab(VENDOR_TABS, "home");
   const [moreOpen, setMoreOpen] = useState(false);
   const [editItem, setEditItem] = useState<string | null>(null);
-  const [editIF, setEditIF] = useState({ name: "", price: "", qty: "", sale: "0", food: false, category: "" });
+  const [editIF, setEditIF] = useState({
+    name: "", price: "", qty: "", sale: "0", food: false, category: "",
+    description: "", unitLabel: "", featured: false,
+    onlineEnabled: false, onlineQuantity: "0", onlinePickup: true, onlineShip: false, shipDollars: "",
+  });
   const [cardMsg, setCardMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [chat, setChat] = useState<{ id: string; vendorId: string; name: string; body: string; createdAt: string }[]>([]);
   const [chatMe, setChatMe] = useState("");
@@ -308,6 +333,11 @@ export default function VendorDashboard() {
       setPubReq(!!data.vendor.acceptsRequests);
       setPubBlurb(data.vendor.publicBlurb || "");
       setPubSelf(data.vendor.allowSelfCheckout !== false);
+      setPubTagline(data.vendor.tagline || "");
+      setPubStory(data.vendor.story || "");
+      setPubInsta(data.vendor.instagramUrl || "");
+      setPubFb(data.vendor.facebookUrl || "");
+      setPubWeb(data.vendor.websiteUrl || "");
     }
   }, []);
 
@@ -465,6 +495,19 @@ export default function VendorDashboard() {
       img.src = url;
     });
 
+  /** Move a photo up or down the order shoppers see. */
+  const movePhoto = async (photoId: string, move: "up" | "down") => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/photos", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ photoId, move }),
+      });
+      if (!r.ok) { toast.error("Couldn't move that photo", "Try again in a moment."); return; }
+      await loadPhotos();
+    } finally { setBusy(false); }
+  };
+
   const uploadItemPhoto = async (file: File | undefined, itemId: string) => {
     if (!file) return;
     setBusy(true);
@@ -473,14 +516,14 @@ export default function VendorDashboard() {
       const r = await fetch("/api/vendor/photos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data, mime, kind: "ITEM", itemId }) });
       const d = await r.json();
       if (!r.ok) { toast.error("Couldn't add that photo", d.error || "Try a JPEG or PNG from your phone."); return; }
-      toast.success("Photo added", "It shows on your public page next to this item.");
+      toast.success("Photo added", "The first photo is the one shoppers see in the grid.");
       await loadPhotos();
     } catch {
       toast.error("That file didn't read as a photo", "Try a JPEG or PNG.");
     } finally { setBusy(false); }
   };
 
-  const uploadPhoto = async (file: File | undefined, kind: "PRODUCT" | "LOGO" = "PRODUCT") => {
+  const uploadPhoto = async (file: File | undefined, kind: "PRODUCT" | "LOGO" | "COVER" = "PRODUCT") => {
     if (!file) return;
     setPhotoBusy(true);
     try {
@@ -491,7 +534,7 @@ export default function VendorDashboard() {
       });
       const d = await r.json();
       if (!r.ok) { toast.error("Couldn't upload that photo", d.error || "Try again."); return; }
-      toast.success(kind === "LOGO" ? "Logo updated" : "Photo added", "Customers see it on your public page.");
+      toast.success(kind === "LOGO" ? "Logo updated" : kind === "COVER" ? "Cover photo updated" : "Photo added", "Customers see it on your public page.");
       await loadPhotos();
     } catch {
       toast.error("That file didn't read as a photo", "Try a JPEG or PNG.");
@@ -512,12 +555,53 @@ export default function VendorDashboard() {
     await loadPhotos();
   };
 
+  const loadOrders = useCallback(async (scope: "open" | "done") => {
+    const r = await fetch(`/api/vendor/orders?scope=${scope}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    setOrders((d.orders || []) as VOrder[]);
+    setOpenOrders(Number(d.openCount) || 0);
+  }, []);
+
+  useEffect(() => { void loadOrders(orderScope); }, [orderScope, loadOrders]);
+
+  /** Move an order along. Tracking is asked for at the moment of posting. */
+  const advanceOrder = async (o: VOrder, status: string, carrier = "", trackingNumber = "") => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/orders", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: o.id, status, carrier, trackingNumber }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't update that order", String(d.error || "")); return; }
+
+      if (status === "READY") toast.success(`#${o.number} ready`, "The customer has been emailed to come and collect it.");
+      else if (status === "SHIPPED") toast.success(`#${o.number} posted`, trackingNumber ? "Tracking sent to the customer." : "The customer has been told it's on its way.");
+      else if (status === "PACKED") toast.success(`#${o.number} packed`, o.fulfillment === "SHIP" ? "Post it, then mark it sent." : "Mark it ready when it's at the counter.");
+      else if (status === "COLLECTED") toast.success(`#${o.number} collected`, "Closed off.");
+      else if (status === "CANCELLED") {
+        await dialog.alert({
+          title: `Order #${o.number} cancelled`,
+          tone: "warn",
+          body: `The stock is back on your online shelf. This does NOT refund the ${money(o.totalCents)} they paid — the market took that payment, so ask the office to refund it.`,
+        });
+      }
+      await loadOrders(orderScope);
+      await load();
+    } finally { setBusy(false); }
+  };
+
   const savePublic = async () => {
     setBusy(true);
     try {
       const r = await fetch("/api/vendor/settings", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb, allowSelfCheckout: pubSelf }),
+        body: JSON.stringify({
+          acceptsPreorders: pubPre, acceptsRequests: pubReq, publicBlurb: pubBlurb, allowSelfCheckout: pubSelf,
+          tagline: pubTagline, story: pubStory,
+          instagramUrl: pubInsta, facebookUrl: pubFb, websiteUrl: pubWeb,
+        }),
       });
       if (r.ok) toast.success("Public page saved", "Customers see the change immediately.");
       else toast.error("Couldn't save", "Try again in a moment.");
@@ -995,7 +1079,13 @@ export default function VendorDashboard() {
   ];
 
   const logoPhotos = myPhotos.filter((ph) => ph.kind === "LOGO");
-  const productPhotos = myPhotos.filter((ph) => ph.kind !== "LOGO");
+  const coverPhotos = myPhotos.filter((ph) => ph.kind === "COVER");
+  const productPhotos = myPhotos.filter((ph) => ph.kind === "PRODUCT");
+  /** Every photo on one item, in the order the shopper will see them. */
+  const itemPhotos = (itemId: string) =>
+    myPhotos
+      .filter((ph) => ph.kind === "ITEM" && ph.itemId === itemId)
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 
   return (
     <div className="shell">
@@ -1194,6 +1284,154 @@ export default function VendorDashboard() {
           )}
 
           {/* ----------------------------------------------------------- items */}
+          {tab === "orders" && (
+            <div className="stack g-4">
+              <Card
+                title="Online orders"
+                subtitle="Paid and waiting on you. You pack these — market staff only hand over what's already labelled."
+                actions={
+                  <Select value={orderScope} onChange={(e) => setOrderScope(e.target.value as "open" | "done")} aria-label="Which orders">
+                    <option value="open">Needs me</option>
+                    <option value="done">Finished</option>
+                  </Select>
+                }
+              >
+                {orders.length === 0 ? (
+                  <EmptyState
+                    icon="receipt"
+                    title={orderScope === "open" ? "Nothing waiting" : "Nothing finished yet"}
+                    body={
+                      orderScope === "open"
+                        ? "When somebody buys from your page, it lands here and we'll email and notify you."
+                        : "Orders you've handed over or posted show up here."
+                    }
+                  />
+                ) : (
+                  <div className="stack g-4">
+                    {orders.map((o) => (
+                      <div key={o.id} className="stack g-3" style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: "var(--sp-4)" }}>
+                        <div className="row between g-3 wrap">
+                          <div className="stack g-1" style={{ minWidth: 0 }}>
+                            <span className="row g-2" style={{ alignItems: "center" }}>
+                              <b>#{o.number}</b>
+                              <Badge tone={o.fulfillment === "SHIP" ? "info" : "neutral"} dot>
+                                {o.fulfillment === "SHIP" ? "To post" : "Collection"}
+                              </Badge>
+                              <Badge tone={o.status === "READY" ? "success" : o.status === "PAID" ? "warn" : "neutral"}>
+                                {o.statusLabel}
+                              </Badge>
+                            </span>
+                            <span className="t-xs t-muted">
+                              {o.customerName} · {fmtDateTime(o.paidAt || o.createdAt)}
+                            </span>
+                          </div>
+                          <b className="num">{money(o.vendorNetCents)}</b>
+                        </div>
+
+                        <div className="stack g-1">
+                          {o.lines.map((l, idx) => (
+                            <span key={`${o.id}-${idx}`} className="t-body">
+                              {l.quantity}× {l.name}
+                              {l.unitLabel ? <span className="t-xs t-muted"> ({l.unitLabel})</span> : null}
+                            </span>
+                          ))}
+                        </div>
+
+                        {o.note ? <Note tone="info" title="From the customer">{o.note}</Note> : null}
+
+                        {/* The address only appears on orders being posted, and
+                            only to the vendor sending it. */}
+                        {o.fulfillment === "SHIP" && o.shipTo?.line1 ? (
+                          <div className="stack g-1" style={{ background: "var(--bg-sunken)", borderRadius: "var(--r-md)", padding: "var(--sp-3)" }}>
+                            <span className="t-label">Post to</span>
+                            <span className="t-body">
+                              {o.shipTo.name || o.customerName}<br />
+                              {o.shipTo.line1}{o.shipTo.line2 ? <><br />{o.shipTo.line2}</> : null}<br />
+                              {o.shipTo.city}, {o.shipTo.state} {o.shipTo.postal}
+                            </span>
+                            <span className="t-xs t-muted">
+                              They paid {money(o.shippingCents)} shipping — that&rsquo;s in your {money(o.vendorNetCents)}.
+                            </span>
+                          </div>
+                        ) : null}
+
+                        {o.trackingNumber ? (
+                          <span className="t-sm">{o.carrier || "Tracking"}: <b>{o.trackingNumber}</b></span>
+                        ) : null}
+
+                        <div className="row g-2 wrap">
+                          {o.next.includes("PACKED") ? (
+                            <Button size="sm" icon="check" disabled={busy} onClick={() => advanceOrder(o, "PACKED")}>
+                              Mark packed
+                            </Button>
+                          ) : null}
+                          {o.next.includes("READY") ? (
+                            <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => advanceOrder(o, "READY")}>
+                              Ready for collection
+                            </Button>
+                          ) : null}
+                          {o.next.includes("SHIPPED") ? (
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              icon="mail"
+                              disabled={busy}
+                              onClick={() => { setTrackFor(o); setTrackCarrier(o.carrier || "USPS"); setTrackNumber(o.trackingNumber || ""); }}
+                            >
+                              Mark posted
+                            </Button>
+                          ) : null}
+                          {o.next.includes("COLLECTED") ? (
+                            <Button size="sm" variant="secondary" icon="check" disabled={busy} onClick={() => advanceOrder(o, "COLLECTED")}>
+                              Collected
+                            </Button>
+                          ) : null}
+                          {o.customerEmail ? (
+                            <a className="btn btn-ghost btn-sm" href={`mailto:${o.customerEmail}`}>
+                              <Icon name="mail" size={14} /> Email them
+                            </a>
+                          ) : null}
+                          {o.customerPhone ? (
+                            <a className="btn btn-ghost btn-sm" href={`tel:${o.customerPhone.replace(/\D/g, "")}`}>
+                              <Icon name="phone" size={14} /> Call
+                            </a>
+                          ) : null}
+                          {o.next.includes("CANCELLED") ? (
+                            <Button
+                              size="sm"
+                              variant="dangerSoft"
+                              disabled={busy}
+                              onClick={async () => {
+                                const yes = await dialog.confirm({
+                                  title: `Cancel order #${o.number}?`,
+                                  body: <p>The stock goes back on your online shelf. It does <b>not</b> refund the {money(o.totalCents)} they paid — the market has to do that.</p>,
+                                  confirmLabel: "Cancel the order",
+                                  tone: "danger",
+                                });
+                                if (yes) await advanceOrder(o, "CANCELLED");
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
+              <Card title="How online selling works here">
+                <ul className="stack g-2" style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                  <li className="t-sm">Items you tick as <b>Sell this online</b> appear on your public page with their own stock count — separate from what&rsquo;s on your shelf at the market.</li>
+                  <li className="t-sm">The customer pays the market by card. Your share lands on your balance the moment the order is paid, and goes out with your next payout.</li>
+                  <li className="t-sm">Shipping is yours — you set the price per item, you post it, and you keep every cent of the postage with no commission taken.</li>
+                  <li className="t-sm">Collection orders wait at the market counter once you mark them ready. Staff hand over what you&rsquo;ve labelled; they don&rsquo;t pack for you.</li>
+                </ul>
+              </Card>
+            </div>
+          )}
+
           {tab === "items" && (
             <div className="stack g-4">
               <Card
@@ -1226,7 +1464,20 @@ export default function VendorDashboard() {
                   caption="Your active items, prices, and floor counts"
                   onRowClick={(it) => {
                     setEditItem(it.id);
-                    setEditIF({ name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity), sale: String(it.salePercent || 0), food: String(it.taxClass || "STANDARD").toUpperCase() === "FOOD", category: it.category || "" });
+                    setEditIF({
+                      name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity),
+                      sale: String(it.salePercent || 0),
+                      food: String(it.taxClass || "STANDARD").toUpperCase() === "FOOD",
+                      category: it.category || "",
+                      description: it.description || "",
+                      unitLabel: it.unitLabel || "",
+                      featured: !!it.featured,
+                      onlineEnabled: !!it.onlineEnabled,
+                      onlineQuantity: String(it.onlineQuantity ?? 0),
+                      onlinePickup: it.onlinePickup !== false,
+                      onlineShip: !!it.onlineShip,
+                      shipDollars: it.shipCents ? String(it.shipCents / 100) : "",
+                    });
                   }}
                   empty={
                     <div className="card-body">
@@ -1816,6 +2067,48 @@ export default function VendorDashboard() {
                     </div>
                   </div>
 
+                  {/* ---- cover photo ---- */}
+                  <div className="stack g-3">
+                    <Field
+                      label="Cover photo"
+                      hint="The wide banner across the top of your page. A shot of your table set up, or your goods laid out. A new upload replaces it."
+                    >
+                      {(p) => (
+                        <input
+                          {...p}
+                          className="input"
+                          type="file"
+                          accept="image/*"
+                          disabled={photoBusy}
+                          onChange={(e) => { uploadPhoto(e.target.files?.[0], "COVER"); e.target.value = ""; }}
+                        />
+                      )}
+                    </Field>
+                    <div className="row wrap g-3">
+                      {coverPhotos.map((ph) => (
+                        <span key={ph.id} style={{ position: "relative", display: "inline-block" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`/api/public/photo/${ph.id}`}
+                            alt="Your cover photo"
+                            style={{ height: 96, width: "auto", maxWidth: "100%", objectFit: "cover", border: "1px solid var(--border)", borderRadius: "var(--r-md)", display: "block" }}
+                          />
+                          <IconButton
+                            icon="close"
+                            label="Remove cover photo"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => deletePhoto(ph.id)}
+                            style={{ position: "absolute", top: -10, right: -10, borderRadius: "var(--r-full)", background: "var(--surface)" }}
+                          />
+                        </span>
+                      ))}
+                      {coverPhotos.length === 0 ? (
+                        <p className="t-sm t-muted">No cover yet — your page still looks fine without one.</p>
+                      ) : null}
+                    </div>
+                  </div>
+
                   <Field label="Short blurb for your public page" hint="What you make, in a sentence. 300 characters max.">
                     {(p) => (
                       <Input
@@ -1827,6 +2120,53 @@ export default function VendorDashboard() {
                       />
                     )}
                   </Field>
+
+                  <Field
+                    label="Tagline"
+                    hint="A few words under your name. This is also what shows when somebody shares your page on Facebook."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        value={pubTagline}
+                        maxLength={90}
+                        placeholder="Baked before dawn, sold by noon."
+                        onChange={(e) => setPubTagline(e.target.value)}
+                      />
+                    )}
+                  </Field>
+
+                  {/* The thing that actually sells a booth. Most vendors will
+                      leave it blank unless asked a question they can answer —
+                      hence the prompt rather than "bio". */}
+                  <Field
+                    label="Your story"
+                    hint="How you got started, what makes your work different, who you are. Shoppers buy from people at a market — this is where they meet you."
+                  >
+                    {(p) => (
+                      <Textarea
+                        {...p}
+                        rows={6}
+                        maxLength={2000}
+                        placeholder="I started baking in my kitchen in 2019 after my grandmother's starter came back with me from Tulsa…"
+                        value={pubStory}
+                        onChange={(e) => setPubStory(e.target.value)}
+                      />
+                    )}
+                  </Field>
+
+                  <div className="stack g-3">
+                    <span className="t-label">Where else to find you</span>
+                    <Field label="Instagram">
+                      {(p) => <Input {...p} placeholder="@yourhandle" value={pubInsta} onChange={(e) => setPubInsta(e.target.value)} />}
+                    </Field>
+                    <Field label="Facebook">
+                      {(p) => <Input {...p} placeholder="facebook.com/yourpage" value={pubFb} onChange={(e) => setPubFb(e.target.value)} />}
+                    </Field>
+                    <Field label="Website">
+                      {(p) => <Input {...p} placeholder="yourshop.com" value={pubWeb} onChange={(e) => setPubWeb(e.target.value)} />}
+                    </Field>
+                  </div>
                 </div>
               </Card>
             </div>
@@ -2249,6 +2589,59 @@ export default function VendorDashboard() {
         </div>
       </Modal>
 
+      {/* ---------------------------------------------------- posting an order */}
+      {trackFor ? (
+        <Modal
+          open
+          onClose={() => setTrackFor(null)}
+          title={`Posting order #${trackFor.number}`}
+        >
+          <div className="stack g-4">
+            <p className="t-sm t-secondary" style={{ margin: 0 }}>
+              Add the tracking number and the customer gets it by email straight away. Leave it blank if you
+              haven&rsquo;t got one — they&rsquo;ll still be told it&rsquo;s on its way.
+            </p>
+            <Field label="Carrier">
+              {(p) => (
+                <Select {...p} value={trackCarrier} onChange={(e) => setTrackCarrier(e.target.value)}>
+                  <option value="USPS">USPS</option>
+                  <option value="UPS">UPS</option>
+                  <option value="FedEx">FedEx</option>
+                  <option value="Other">Other</option>
+                </Select>
+              )}
+            </Field>
+            <Field label="Tracking number">
+              {(p) => (
+                <Input
+                  {...p}
+                  className="mono"
+                  autoComplete="off"
+                  value={trackNumber}
+                  onChange={(e) => setTrackNumber(e.target.value)}
+                />
+              )}
+            </Field>
+            <div className="row g-2 wrap">
+              <Button
+                variant="primary"
+                icon="check"
+                loading={busy}
+                onClick={async () => {
+                  const o = trackFor;
+                  setTrackFor(null);
+                  await advanceOrder(o, "SHIPPED", trackCarrier, trackNumber.trim());
+                  setTrackNumber("");
+                }}
+              >
+                Mark it posted
+              </Button>
+              <Button variant="ghost" onClick={() => setTrackFor(null)}>Cancel</Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
       {/* ------------------------------------------------------- item editor */}
       {editing ? (
         <Panel
@@ -2275,6 +2668,14 @@ export default function VendorDashboard() {
                     salePercent: editIF.sale,
                     taxClass: editIF.food ? "FOOD" : "STANDARD",
                     category: editIF.category,
+                    description: editIF.description,
+                    unitLabel: editIF.unitLabel,
+                    featured: editIF.featured,
+                    onlineEnabled: editIF.onlineEnabled,
+                    onlineQuantity: editIF.onlineQuantity,
+                    onlinePickup: editIF.onlinePickup,
+                    onlineShip: editIF.onlineShip,
+                    shipDollars: editIF.shipDollars,
                   });
                   if (ok) { toast.success("Item saved", "Changed the name or price? Print fresh labels so the shelf matches the register."); setEditItem(null); }
                 }}
@@ -2287,7 +2688,7 @@ export default function VendorDashboard() {
         >
           <div className="stack g-5">
             <div className="stack g-3">
-              <Field label="Product photo" hint="Shows online — one per product. A new upload replaces it.">
+              <Field label="Photos" hint="Up to five. The first one is what shoppers see in the grid — make it your best.">
                 {(p) => (
                   <input
                     {...p}
@@ -2300,32 +2701,43 @@ export default function VendorDashboard() {
                 )}
               </Field>
               {(() => {
-                const ph = myPhotos.find((x) => x.kind === "ITEM" && x.itemId === editing.id);
-                return ph ? (
-                  <span style={{ position: "relative", display: "inline-block" }}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`/api/public/photo/${ph.id}`}
-                      alt={editing.name}
-                      style={{ width: 96, height: 96, objectFit: "cover", borderRadius: "var(--r-md)", border: "1px solid var(--border)", display: "block" }}
-                    />
-                    <IconButton
-                      icon="close"
-                      label="Remove photo"
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => deletePhoto(ph.id)}
-                      style={{
-                        position: "absolute",
-                        top: -10,
-                        right: -10,
-                        borderRadius: "var(--r-full)",
-                        background: "var(--surface)",
-                      }}
-                    />
-                  </span>
-                ) : (
-                  <p className="t-sm t-muted">No photo yet.</p>
+                const list = itemPhotos(editing.id);
+                if (!list.length) {
+                  return (
+                    <Note tone="warn">
+                      No photo yet. An item without one sells a fraction of what the same item sells with one — a
+                      phone snap in daylight is enough.
+                    </Note>
+                  );
+                }
+                return (
+                  <div className="row wrap g-3">
+                    {list.map((ph, idx) => (
+                      <span key={ph.id} className="stack g-1" style={{ alignItems: "center" }}>
+                        <span style={{ position: "relative", display: "inline-block" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`/api/public/photo/${ph.id}`}
+                            alt={`${editing.name} photo ${idx + 1}`}
+                            style={{ width: 96, height: 96, objectFit: "cover", borderRadius: "var(--r-md)", border: idx === 0 ? "2px solid var(--accent)" : "1px solid var(--border)", display: "block" }}
+                          />
+                          <IconButton
+                            icon="close"
+                            label={`Remove photo ${idx + 1}`}
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => deletePhoto(ph.id)}
+                            style={{ position: "absolute", top: -10, right: -10, borderRadius: "var(--r-full)", background: "var(--surface)" }}
+                          />
+                        </span>
+                        <span className="row g-1">
+                          <IconButton icon="arrowLeft" label={`Move photo ${idx + 1} earlier`} size="sm" variant="ghost" disabled={busy || idx === 0} onClick={() => movePhoto(ph.id, "up")} />
+                          {idx === 0 ? <span className="t-xs t-accent">Main</span> : null}
+                          <IconButton icon="arrowRight" label={`Move photo ${idx + 1} later`} size="sm" variant="ghost" disabled={busy || idx === list.length - 1} onClick={() => movePhoto(ph.id, "down")} />
+                        </span>
+                      </span>
+                    ))}
+                  </div>
                 );
               })()}
             </div>
@@ -2340,7 +2752,7 @@ export default function VendorDashboard() {
               )}
             </Field>
 
-            <Field label="What kind of thing is it?" hint="Used for the anonymous price comparison on What's working.">
+            <Field label="What kind of thing is it?" hint="Used for the anonymous price comparison on What's working, and to group your storefront.">
               {(p) => (
                 <Select {...p} value={editIF.category} onChange={(e) => setEditIF((f) => ({ ...f, category: e.target.value }))}>
                   <option value="">Not set</option>
@@ -2348,6 +2760,108 @@ export default function VendorDashboard() {
                 </Select>
               )}
             </Field>
+
+            <Field
+              label="Description"
+              hint="What it is, what's in it, why it's good. Two or three sentences beats one — this is what a shopper reads instead of holding it."
+            >
+              {(p) => (
+                <Textarea
+                  {...p}
+                  rows={4}
+                  placeholder="Slow-fermented for 24 hours with flour milled ten miles from here. Crackly crust, open crumb, keeps three days on the counter."
+                  value={editIF.description}
+                  onChange={(e) => setEditIF((f) => ({ ...f, description: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Field label="What the price is for" hint="&ldquo;each&rdquo;, &ldquo;per dozen&rdquo;, &ldquo;8 oz jar&rdquo;. Without it, a bigger jar just looks expensive.">
+              {(p) => (
+                <Input
+                  {...p}
+                  placeholder="8 oz jar"
+                  value={editIF.unitLabel}
+                  onChange={(e) => setEditIF((f) => ({ ...f, unitLabel: e.target.value }))}
+                />
+              )}
+            </Field>
+
+            <Checkbox
+              checked={editIF.featured}
+              onCheckedChange={(v) => setEditIF((f) => ({ ...f, featured: v }))}
+              label="Feature this on my page"
+              hint="Featured items sit at the front of your storefront. Pick your two or three best sellers, not everything."
+            />
+
+            <hr className="divider" />
+
+            {/* Selling online is opt-in per product, with its own count. The
+                market's shelf stock is never sold from the website. */}
+            <div className="stack g-4">
+              <Checkbox
+                checked={editIF.onlineEnabled}
+                onCheckedChange={(v) => setEditIF((f) => ({ ...f, onlineEnabled: v }))}
+                label="Sell this online"
+                hint="Customers can buy it from your page. What you set aside here is separate from what's on the shelf — the two never sell each other's stock."
+              />
+
+              {editIF.onlineEnabled ? (
+                <div className="stack g-4" style={{ paddingLeft: "var(--sp-4)", borderLeft: "2px solid var(--border)" }}>
+                  <Field
+                    label="How many to set aside for online"
+                    hint={`Separate from the ${editing.quantity} on the shelf. Orders only ever come out of this number.`}
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number"
+                        min="0"
+                        inputMode="numeric"
+                        value={editIF.onlineQuantity}
+                        onChange={(e) => setEditIF((f) => ({ ...f, onlineQuantity: e.target.value }))}
+                      />
+                    )}
+                  </Field>
+
+                  <Checkbox
+                    checked={editIF.onlinePickup}
+                    onCheckedChange={(v) => setEditIF((f) => ({ ...f, onlinePickup: v }))}
+                    label="Collected at the market"
+                    hint="You pack it, mark it ready, and the customer picks it up at the counter. Costs nobody anything."
+                  />
+
+                  <Checkbox
+                    checked={editIF.onlineShip}
+                    onCheckedChange={(v) => setEditIF((f) => ({ ...f, onlineShip: v }))}
+                    label="I'll post this"
+                    hint="You pay the postage and send it yourself. The market doesn't handle shipping."
+                  />
+
+                  {editIF.onlineShip ? (
+                    <Field
+                      label="Shipping charge for this item (dollars)"
+                      hint="What the customer pays you to post it. Charged once per item however many they buy — three jars go in one box. You keep all of it; no commission on shipping."
+                    >
+                      {(p) => (
+                        <MoneyInput
+                          {...p}
+                          value={editIF.shipDollars}
+                          placeholder="8.00"
+                          onChange={(e) => setEditIF((f) => ({ ...f, shipDollars: e.target.value }))}
+                        />
+                      )}
+                    </Field>
+                  ) : null}
+
+                  {!editIF.onlinePickup && !editIF.onlineShip ? (
+                    <Note tone="warn">
+                      Pick at least one — with neither, nobody can actually receive it and it won&rsquo;t show online.
+                    </Note>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
 
             <Checkbox
               checked={editIF.food}

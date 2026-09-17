@@ -550,6 +550,16 @@ type Reconcile = {
   checkedCount: number;
 };
 
+/* Online orders waiting at the counter. Staff don't pack these — the vendor
+   does — so all the till needs is "who's coming in for what". */
+type PickupOrder = {
+  id: string; number: number; status: string; statusLabel: string; fulfillment: string;
+  customerName: string; customerEmail: string; customerPhone: string;
+  vendorCode: string; vendorName: string;
+  lines: { name: string; quantity: number }[];
+  totalCents: number; createdAt: string; readyAt: string | null;
+};
+
 type PayoutRunRow = {
   id: string;
   periodStart: string;
@@ -1224,6 +1234,27 @@ export default function AdminPage() {
     setAuditOut(Number(d.moneyOutCents) || 0);
   }, []);
 
+  const [pickups, setPickups] = useState<PickupOrder[]>([]);
+  const loadPickups = useCallback(async () => {
+    const r = await fetch("/api/admin/orders?scope=ready");
+    if (!r.ok) return;
+    const d = await r.json();
+    setPickups((d.orders || []) as PickupOrder[]);
+  }, []);
+
+  const handOver = async (o: PickupOrder) => {
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/orders", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: o.id }),
+      });
+      if (!ok) { toast.error("Couldn't close that one off", String(data.error || "")); await loadPickups(); return; }
+      toast.success(`#${o.number} handed over`, `${o.customerName} — ${o.vendorName}.`);
+      await loadPickups();
+    } finally { setBusy(false); }
+  };
+
   const [recon, setRecon] = useState<Reconcile | null>(null);
   const [reconLoading, setReconLoading] = useState(false);
   const [reconErr, setReconErr] = useState("");
@@ -1360,6 +1391,10 @@ export default function AdminPage() {
   useEffect(() => {
     if (authed && allowed("financials") && tab === "bank") { loadPayouts(); loadRecon(); }
   }, [authed, caps, tab, loadPayouts, loadRecon]);
+  /* Declared here rather than beside the other register loaders because
+     `loadPickups` is defined further down — hoisting the effect above its own
+     callback is a build error, not just a lint warning. */
+  useEffect(() => { if (authed && tab === "register") void loadPickups(); }, [authed, tab, loadPickups]);
 
   const buildPayoutRun = async () => {
     setPayErr("");
@@ -3412,6 +3447,40 @@ export default function AdminPage() {
           ) : (
             <>
               <PageHeader title={meta.label} subtitle={meta.sub} />
+
+      {/* Collections waiting at the counter. Shown on the register screen
+          because that is where the customer walks up and asks for them. */}
+      {tab === "register" && pickups.length > 0 && (
+        <Card
+          title={`${plural(pickups.length, "online order")} waiting for collection`}
+          subtitle="Packed by the vendor and sitting here. Find it, hand it over, tap the button."
+          className="mb-4"
+        >
+          <div className="stack g-3">
+            {pickups.map((o) => (
+              <div key={o.id} className="row between g-3 wrap" style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border)" }}>
+                <div className="stack g-1" style={{ minWidth: 0 }}>
+                  <span className="row g-2" style={{ alignItems: "center" }}>
+                    <b>#{o.number}</b>
+                    <span className="truncate">{o.customerName}</span>
+                  </span>
+                  <span className="t-xs t-muted truncate">
+                    {o.vendorName} · {o.lines.map((l) => `${l.quantity}× ${l.name}`).join(", ")}
+                  </span>
+                  {o.readyAt ? <span className="t-xs t-muted">Ready {relTime(o.readyAt)}</span> : null}
+                </div>
+                <Button size="sm" icon="check" disabled={busy} onClick={() => void handOver(o)}>
+                  Handed over
+                </Button>
+              </div>
+            ))}
+            <p className="t-xs t-muted" style={{ margin: 0 }}>
+              Already paid online — take nothing at the till. If it isn&rsquo;t on the shelf, the vendor hasn&rsquo;t
+              brought it in yet.
+            </p>
+          </div>
+        </Card>
+      )}
 
       {tab === "register" && !drawer && drawerErr && (
         <div className="mb-4"><Note tone="error" title="The register can't reach the drawer system">{drawerErr}</Note></div>
