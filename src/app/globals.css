@@ -274,7 +274,17 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  min-height: 100dvh;
+  /* svh, NOT dvh.
+     `dvh` is the DYNAMIC viewport height: it is defined to change as the
+     browser's address bar collapses and expands, which on a phone happens
+     continuously while you scroll. Anything sized by it therefore resizes on
+     every scroll frame, the page height changes underneath the scroll
+     position, and the fixed bottom tab bar visibly slides and judders.
+     `svh` is the height with the toolbars SHOWN and never changes, which is
+     exactly what a minimum wants: at least one full screen, guaranteed.
+     The plain `vh` line above it is the fallback for older Safari. */
+  min-height: 100vh;
+  min-height: 100svh;
 }
 
 img, svg, video { display: block; max-width: 100%; }
@@ -976,7 +986,8 @@ legend { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary)
   z-index: var(--z-modal);
   width: 100%;
   max-width: var(--modal-w, 480px);
-  max-height: calc(100dvh - var(--sp-8));
+  max-height: calc(100vh - var(--sp-8));
+  max-height: calc(100svh - var(--sp-8));
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated);
@@ -1011,7 +1022,8 @@ legend { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary)
   .overlay { padding: 0; align-items: flex-end; }
   .modal {
     max-width: 100%;
-    max-height: 92dvh;
+    max-height: 92vh;
+    max-height: 92svh;
     border-radius: var(--r-xl) var(--r-xl) 0 0;
     border-bottom: 0;
     animation: sheetIn var(--dur-slow) var(--ease);
@@ -1036,7 +1048,7 @@ legend { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary)
   animation: panelIn var(--dur-slow) var(--ease);
 }
 @media (max-width: 560px) {
-  .panel { animation: sheetIn var(--dur-slow) var(--ease); top: 6dvh; border-radius: var(--r-xl) var(--r-xl) 0 0; border-left: 0; border-top: 1px solid var(--border); }
+  .panel { animation: sheetIn var(--dur-slow) var(--ease); top: 6svh; border-radius: var(--r-xl) var(--r-xl) 0 0; border-left: 0; border-top: 1px solid var(--border); }
 }
 .panel-head {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
@@ -1126,7 +1138,10 @@ body.scroll-locked { overflow: hidden; }
 
 .shell {
   display: flex;
-  min-height: 100dvh;
+  /* Same reason as `body` above — this one is the app shell that the admin and
+     vendor portals sit in, so it is the one that was moving the tab bar. */
+  min-height: 100vh;
+  min-height: 100svh;
   background: var(--bg);
 }
 
@@ -1247,6 +1262,12 @@ body.scroll-locked { overflow: hidden; }
     -webkit-backdrop-filter: saturate(180%) blur(12px);
     border-top: 1px solid var(--border);
     padding-bottom: env(safe-area-inset-bottom);
+    /* Give the bar its own compositor layer. A blurred FIXED element that
+       shares a layer with the page gets its backdrop re-sampled on every
+       scroll frame, which is what makes it lag a few pixels behind your
+       thumb on an iPad. */
+    transform: translateZ(0);
+    will-change: transform;
   }
   @supports not (background: color-mix(in srgb, red 50%, blue)) {
     .tabbar { background: var(--bg-elevated); }
