@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { runRoute } from "@/lib/handler";
 import { finalizeOrder } from "@/lib/orderfinalize";
 import { ORDER_STATUS_LABEL } from "@/lib/orders";
+import { pickupCode } from "@/lib/pickupcode";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,10 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
 
     return NextResponse.json({
       number: order.number,
+      /* Shown to the customer so they can read it out when the camera won't
+         focus. Safe here and nowhere else: this response already required the
+         token the code is derived from. */
+      pickupCode: pickupCode(order.number, order.token),
       status: order.status,
       statusLabel: ORDER_STATUS_LABEL[order.status] || order.status,
       fulfillment: order.fulfillment,

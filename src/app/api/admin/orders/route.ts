@@ -4,6 +4,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit } from "@/lib/audit";
 import { ORDER_STATUS_LABEL, OPEN_STATUSES } from "@/lib/orders";
+import { parsePickupCode, pickupCodeMatches } from "@/lib/pickupcode";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,59 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   return runRoute("admin/orders GET", async () => {
     { const denied = await denyUnless("ops"); if (denied) return denied; }
+
+    /* A scanned collection code. Answered here rather than in its own route
+       because the till wants exactly what the list gives it — same shape, same
+       fields, straight into the same hand-over button. */
+    const code = req.nextUrl.searchParams.get("code");
+    if (code) {
+      const parsed = parsePickupCode(code);
+      if (!parsed) {
+        return NextResponse.json({ error: "That isn't a collection code." }, { status: 400 });
+      }
+      const match = await db.order.findFirst({
+        where: { number: parsed.number },
+        include: {
+          lines: { select: { name: true, quantity: true } },
+          vendor: { select: { code: true, businessName: true } },
+        },
+      });
+      /* The wrong check characters are treated exactly like no order at all.
+         Saying "that order exists but your code is wrong" would tell somebody
+         guessing that they had the number right. */
+      if (!match || !pickupCodeMatches(code, match)) {
+        return NextResponse.json({ error: "No order with that code." }, { status: 404 });
+      }
+      if (match.status !== "READY") {
+        return NextResponse.json(
+          {
+            error:
+              match.status === "COLLECTED"
+                ? `Order #${match.number} was already handed over.`
+                : `Order #${match.number} is "${ORDER_STATUS_LABEL[match.status] || match.status}" — ${match.vendor.businessName} hasn't dropped it off yet.`,
+          },
+          { status: 409 }
+        );
+      }
+      return NextResponse.json({
+        order: {
+          id: match.id,
+          number: match.number,
+          status: match.status,
+          statusLabel: ORDER_STATUS_LABEL[match.status] || match.status,
+          fulfillment: match.fulfillment,
+          customerName: match.customerName,
+          customerEmail: match.customerEmail,
+          customerPhone: match.customerPhone,
+          vendorCode: match.vendor.code,
+          vendorName: match.vendor.businessName,
+          lines: match.lines,
+          totalCents: match.totalCents,
+          createdAt: match.createdAt,
+          readyAt: match.readyAt,
+        },
+      });
+    }
 
     const scope = req.nextUrl.searchParams.get("scope") || "waiting";
     const where =

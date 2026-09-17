@@ -1,3 +1,5 @@
+import { pickupCode as pickupCodeFor } from "@/lib/pickupcode";
+
 const RESEND_URL = "https://api.resend.com/emails";
 const FROM = process.env.EMAIL_FROM || "Community Harvest <orders@dailybreadbaked.com>";
 
@@ -702,9 +704,21 @@ export async function sendOrderStatusEmail(
       <h1 style="font-size:20px;margin:0 0 6px;">${ready ? "Ready when you are" : "It's posted"}</h1>
       <p style="color:#4b5563;margin:0 0 16px;">
         ${ready
-          ? `${opts.vendorName} has order #${opts.number} packed and waiting at Community Harvest, 510 N Main St, Noble. Give your name or order number at the counter.`
+          ? `${opts.vendorName} has order #${opts.number} packed and waiting at Community Harvest, 510 N Main St, Noble. Show the code below at the counter.`
           : `${opts.vendorName} has sent order #${opts.number}.${opts.tracking ? ` ${opts.carrier || "Tracking"}: <b>${opts.tracking}</b>` : ""}`}
       </p>
+      ${ready ? `
+      <!-- Hosted PNG, not an inline SVG or a data: URI: Gmail and Outlook drop
+           both. The code is repeated as text underneath because a good share of
+           inboxes block remote images until the reader taps "show pictures",
+           and somebody standing at a counter should not have to. -->
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 18px;">
+        <tr><td align="center" style="padding:18px;border:1px solid #e5e7eb;border-radius:12px;background:#ffffff;">
+          <img src="${baseUrl()}/api/public/order/${opts.token}/barcode" width="418" height="120" alt="Collection barcode ${pickupCodeFor(opts.number, opts.token)}" style="display:block;width:100%;max-width:418px;height:auto;margin:0 auto 10px;image-rendering:pixelated;" />
+          <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:20px;letter-spacing:0.08em;font-weight:700;color:#111827;">${pickupCodeFor(opts.number, opts.token)}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:6px;">Let them scan it at the counter, or read the code out.</div>
+        </td></tr>
+      </table>` : ""}
       <p style="margin:0;"><a href="${link}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:600;">See my order</a></p>
     `)
   );

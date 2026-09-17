@@ -17,6 +17,7 @@ import { money, fmtDateTime, plural } from "@/lib/format";
 type Line = { name: string; unitLabel: string; quantity: number; priceCents: number };
 type Order = {
   number: number;
+  pickupCode: string;
   status: string;
   statusLabel: string;
   fulfillment: string;
@@ -122,10 +123,59 @@ export default function OrderPage({ params }: { params: { token: string } }) {
         ) : null}
 
         {order.status === "READY" ? (
-          <Note tone="success" title="Ready to collect">
-            It&rsquo;s packed and waiting at Community Harvest, 510 N Main St, Noble. Give your name or this order
-            number at the counter.
-          </Note>
+          <>
+            <Note tone="success" title="Ready to collect">
+              It&rsquo;s packed and waiting at Community Harvest, 510 N Main St, Noble.
+            </Note>
+
+            {/* The code, as big as the phone will allow. A customer holding
+                this up is the whole interaction — the cashier scans it, the
+                right bag comes over the counter, and nobody spells a surname
+                twice. The text underneath is not decoration: cameras fail on
+                cracked screens, in sunlight, and at 2% battery brightness, and
+                then somebody has to read six characters out loud. */}
+            <Card title="Show this at the counter" className="mb-4 mt-4">
+              <div className="stack g-3" style={{ alignItems: "center", textAlign: "center" }}>
+                {/* The barcode first, because the thing at the counter is a
+                    barcode scanner. Rendered at its natural pixel size and
+                    never scaled up by CSS — a resampled barcode is a barcode
+                    that doesn't read. */}
+                <div style={{ background: "#fff", padding: 12, borderRadius: "var(--r-lg)", border: "1px solid var(--border)", maxWidth: "100%" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/public/order/${params.token}/barcode`}
+                    alt={`Collection barcode ${order.pickupCode}`}
+                    style={{ width: "100%", maxWidth: 418, height: "auto", display: "block", imageRendering: "pixelated" }}
+                  />
+                </div>
+                <span className="mono" style={{ fontSize: "var(--fs-xl)", letterSpacing: "0.08em", fontWeight: 700 }}>
+                  {order.pickupCode}
+                </span>
+                <span className="t-sm t-muted">
+                  Turn your screen brightness right up before they scan it.
+                </span>
+
+                {/* The same code as a QR, for a counter using a camera rather
+                    than a handheld scanner. A QR reads off a screen far more
+                    forgivingly than lines do; a 1D-only scanner can't see it
+                    at all. Both are here so neither counter is stuck. */}
+                <details style={{ width: "100%" }}>
+                  <summary className="t-sm t-muted" style={{ cursor: "pointer" }}>Square code instead</summary>
+                  <div className="mt-3" style={{ display: "flex", justifyContent: "center" }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`/api/public/order/${params.token}/qr`}
+                      alt={`Collection QR code ${order.pickupCode}`}
+                      style={{
+                        width: "min(240px, 66vw)", height: "auto", display: "block",
+                        background: "#fff", padding: 10, borderRadius: "var(--r-lg)", border: "1px solid var(--border)",
+                      }}
+                    />
+                  </div>
+                </details>
+              </div>
+            </Card>
+          </>
         ) : null}
 
         {order.status === "SHIPPED" ? (

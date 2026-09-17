@@ -13,6 +13,7 @@ import {
   newSaleKey, queueSale, queuedSales, removeQueuedSale, syncQueuedSales, isStuck,
   type QueuedSale,
 } from "@/lib/offline";
+import { isPickupCode } from "@/lib/pickupcode";
 
 /**
  * The register as a kiosk.
@@ -106,6 +107,12 @@ export default function RegisterKiosk() {
      recording that it left. */
   const [pickups, setPickups] = useState<Pickup[]>([]);
   const [pickupQ, setPickupQ] = useState("");
+  /* A scanned code, held up for the cashier to confirm before anything is
+     recorded. The scan finds the bag; a person still checks the face. */
+  const [scanned, setScanned] = useState<Pickup | null>(null);
+  const [scannedErr, setScannedErr] = useState("");
+  const [camOpen, setCamOpen] = useState(false);
+  const camRef = useRef<{ stop: () => Promise<void>; clear: () => void } | null>(null);
   const [vtCode, setVtCode] = useState("");
   const [vt, setVt] = useState<VendorTicket | null>(null);
   const [vtErr, setVtErr] = useState("");
@@ -244,6 +251,69 @@ export default function RegisterKiosk() {
     return () => window.clearInterval(t);
   }, [who, loadPickups]);
 
+  /** Look a scanned or typed collection code up. Returns true if it found one. */
+  const lookupPickup = useCallback(async (code: string): Promise<boolean> => {
+    setScannedErr("");
+    try {
+      const r = await fetch(`/api/admin/orders?code=${encodeURIComponent(code)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setScannedErr(String(d.error || "No order with that code.")); return false; }
+      setScanned(d.order as Pickup);
+      return true;
+    } catch {
+      setScannedErr("No connection — the code couldn't be checked.");
+      return false;
+    }
+  }, []);
+
+  const stopCam = useCallback(async () => {
+    try { await camRef.current?.stop(); camRef.current?.clear(); } catch { /* already stopped */ }
+    camRef.current = null;
+    setCamOpen(false);
+  }, []);
+
+  /* The camera, not a laser. A market till is an iPad, and a laser scanner
+     can't read a phone screen at all — the beam needs ink on paper. The same
+     camera scanner the self-checkout already uses reads a QR off a screen
+     without complaint. */
+  const startCam = async () => {
+    setScannedErr("");
+    try {
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import("html5-qrcode");
+      setCamOpen(true);
+      await new Promise((r) => setTimeout(r, 80)); // let the video box render first
+      const scanner = new Html5Qrcode("collect-scan-box", {
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        verbose: false,
+      });
+      camRef.current = scanner as unknown as { stop: () => Promise<void>; clear: () => void };
+      let held = false;
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 12, qrbox: (w: number) => ({ width: Math.min(300, Math.floor(w * 0.9)), height: Math.min(300, Math.floor(w * 0.9)) }), aspectRatio: 1 },
+        (text) => {
+          if (held) return;
+          held = true;
+          if (navigator.vibrate) navigator.vibrate(50);
+          void lookupPickup(text.trim().toUpperCase()).then((ok) => {
+            void stopCam();
+            if (!ok) held = false;
+          });
+        },
+        () => {}
+      );
+    } catch {
+      setCamOpen(false);
+      setScannedErr("Couldn't open the camera — allow camera access, or type the code instead.");
+    }
+  };
+
+  /* Never leave the camera running behind a locked till. */
+  useEffect(() => {
+    if (!who && camRef.current) void stopCam();
+  }, [who, stopCam]);
+
   const handOver = async (o: Pickup) => {
     setBusy(true);
     try {
@@ -256,6 +326,7 @@ export default function RegisterKiosk() {
         toast.error("Couldn't record that", String(d.error || "Give it another go."));
       } else {
         toast.success(`#${o.number} handed over`, `${o.customerName} — ${o.vendorName}.`);
+        setScanned(null);
       }
     } catch {
       toast.error("No connection", "Hand the bag over anyway and record it when the wifi is back.");
@@ -346,6 +417,10 @@ export default function RegisterKiosk() {
     const code = scan.trim().toUpperCase();
     setScan("");
     if (!code) return;
+    /* Checked before anything else. A collection code can't collide with a SKU
+       — it always starts CH- and a SKU never does — and a cashier who scans one
+       into the ring-up box means "find this order", not "sell me something". */
+    if (isPickupCode(code)) { setScanErr(""); await lookupPickup(code); return; }
     const inCart = cart.find((l) => l.sku === code);
     if (inCart) { addItem({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName, taxClass: inCart.taxClass }); return; }
     const onFloor = floor.find((i) => i.sku === code);
@@ -920,6 +995,49 @@ export default function RegisterKiosk() {
   /* A vendor's booth ticket takes over the screen: it is already priced and
      already attributed, so mixing it with whatever is in the cart would only
      create ways to ring the wrong thing. */
+  /* A scanned order takes over the screen, for the same reason a booth ticket
+     does: it is already paid and already priced, and the only decision left is
+     whether the person in front of you is the person on the order. That
+     decision deserves the whole screen, not a row in a list. */
+  if (scanned) {
+    return shell(
+      <>
+        {header}
+        <Card
+          title={scanned.customerName}
+          subtitle={`Order #${scanned.number} · ${scanned.vendorName}`}
+          actions={<Button size="sm" variant="ghost" onClick={() => { setScanned(null); setScannedErr(""); }}>Back</Button>}
+        >
+          <div className="stack g-4">
+            <Note tone="success" title="Code checks out">
+              Paid in full online — {money(scanned.totalCents)}. Take no money.
+            </Note>
+
+            <div className="stack g-2">
+              {scanned.lines.map((l, idx) => (
+                <div key={`${l.name}-${idx}`} className="row g-3" style={{ alignItems: "center" }}>
+                  <span className="grow truncate">{l.quantity}× {l.name}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="stack g-1">
+              <span className="t-sm t-muted">
+                {scanned.readyAt ? `Dropped off ${fmtTime(scanned.readyAt)}` : "Marked ready"}
+                {scanned.customerPhone ? ` · ${scanned.customerPhone}` : ""}
+              </span>
+              <span className="t-sm t-muted">Check the name matches before you hand it over.</span>
+            </div>
+
+            <Button size="xl" block variant="primary" icon="check" loading={busy} disabled={busy} onClick={() => void handOver(scanned)}>
+              Hand it over
+            </Button>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
   if (vt) {
     return shell(
       <>
@@ -964,10 +1082,10 @@ export default function RegisterKiosk() {
           way to make online ordering feel worse than just turning up. Hidden
           entirely when there's nothing waiting — a permanent empty panel on a
           till is noise. */}
-      {pay === "NONE" && pickups.length > 0 ? (
+      {pay === "NONE" && (pickups.length > 0 || camOpen || scannedErr) ? (
         <Card
           title="Ready to collect"
-          subtitle="Already paid online. Check the name, hand the bag over, tap the button."
+          subtitle="Already paid online. Scan their code, or find them by name."
           actions={
             <Button size="sm" variant="ghost" icon="refresh" onClick={() => void loadPickups()}>
               Refresh
@@ -975,6 +1093,21 @@ export default function RegisterKiosk() {
           }
         >
           <div className="stack g-3">
+            {camOpen ? (
+              <div className="stack g-2">
+                <div
+                  id="collect-scan-box"
+                  style={{ width: "100%", maxWidth: 380, margin: "0 auto", borderRadius: "var(--r-lg)", overflow: "hidden", background: "#000" }}
+                />
+                <Button size="lg" variant="secondary" block onClick={() => void stopCam()}>Stop scanning</Button>
+              </div>
+            ) : (
+              <Button size="lg" variant="primary" block icon="search" onClick={() => void startCam()}>
+                Scan their code
+              </Button>
+            )}
+
+            {scannedErr ? <Note tone="error">{scannedErr}</Note> : null}
             {pickups.length > 4 ? (
               <Field label="Find it">
                 {(p) => (
@@ -990,6 +1123,7 @@ export default function RegisterKiosk() {
             ) : null}
 
             {(() => {
+              if (pickups.length === 0) return null;
               const q = pickupQ.trim().toLowerCase();
               const shown = q
                 ? pickups.filter(
@@ -1041,9 +1175,11 @@ export default function RegisterKiosk() {
               ));
             })()}
 
-            <Note tone="info">
-              Nothing to ring up — these are paid in full. Take no money at the counter.
-            </Note>
+            {pickups.length > 0 ? (
+              <Note tone="info">
+                Nothing to ring up — these are paid in full. Take no money at the counter.
+              </Note>
+            ) : null}
           </div>
         </Card>
       ) : null}
