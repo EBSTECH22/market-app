@@ -9726,17 +9726,13 @@ function downloadReportCsv(r: Report, scopeLabel: string) {
    ========================================================================== */
 
 /**
- * Fallback only, for a row that arrived before vendors had their own setting.
- *
- * Each vendor sets their own threshold in their portal and 0 means never flag
- * it — the fixed rule used to stamp "running low" across every item of anyone
- * selling one-of-a-kind work, where a quantity of one is the normal state.
+ * Low stock is off unless a vendor turned it on, so there is no market-wide
+ * threshold any more — only whatever each vendor asked for. A fixed rule
+ * flagged every item of anyone selling one-of-a-kind work, where a quantity of
+ * one is simply how it is.
  */
-const LOW_STOCK_DEFAULT = 3;
-
-/** Is this row actually low, by its own vendor's rule? */
 const isLow = (i: FloorItem): boolean => {
-  const at = i.lowStockAt ?? LOW_STOCK_DEFAULT;
+  const at = i.lowStockAt ?? 0;
   return at > 0 && i.quantity > 0 && i.quantity <= at;
 };
 

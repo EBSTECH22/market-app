@@ -73,14 +73,14 @@ const effectivePriceCents = (it: Item): number =>
   Math.max(0, Math.round((it.priceCents * (100 - Math.min(90, Math.max(0, it.salePercent || 0)))) / 100));
 
 /**
- * Default warning threshold for a vendor who has never changed it.
+ * Off, for anybody who hasn't turned it on.
  *
- * It is a DEFAULT, not a rule. A vendor selling one-of-a-kind work keeps every
- * item at a quantity of one on purpose, and a fixed threshold stamped "low
- * stock" across their whole booth and then nagged them about it on the
- * dashboard. Each vendor sets their own now, and 0 turns it off.
+ * Low-stock warnings used to apply to every vendor at a fixed three units. For
+ * a vendor selling one-of-a-kind work that meant a "low stock" badge on every
+ * single piece they make, plus a dashboard telling them to restock things that
+ * by definition cannot be restocked. Nobody gets it now unless they ask for it.
  */
-const LOW_STOCK_DEFAULT = 3;
+const LOW_STOCK_OFF = 0;
 
 /**
  * One password form, used by both the forced first-change screen and the
@@ -1012,7 +1012,7 @@ export default function VendorDashboard() {
   const retiredItems = me.items.filter((it) => !it.active);
   const floorUnits = me.items.reduce((n, i) => n + (i.active ? i.quantity : 0), 0);
   /* 0 means the vendor has switched these warnings off entirely. */
-  const lowStockAt = me.vendor.lowStockThreshold ?? LOW_STOCK_DEFAULT;
+  const lowStockAt = me.vendor.lowStockThreshold ?? LOW_STOCK_OFF;
   const lowStock = lowStockAt > 0 ? activeItems.filter((it) => it.quantity <= lowStockAt).length : 0;
   const onSale = activeItems.filter((it) => (it.salePercent || 0) > 0).length;
   const meta = TAB_META[tab];
@@ -1253,8 +1253,8 @@ export default function VendorDashboard() {
                   title={`${plural(lowStock, "item is", "items are")} running low`}
                   action={<Button size="sm" variant="secondary" onClick={() => go("items")}>See items</Button>}
                 >
-                  Anything at {lowStockAt} {lowStockAt === 1 ? "unit" : "units"} or fewer. If you sell one-of-a-kind
-                  pieces, set this to 0 on the Items tab and these warnings stop.
+                  Anything at {lowStockAt} {lowStockAt === 1 ? "unit" : "units"} or fewer — the level you set on the
+                  Items tab. Put it back to 0 there to switch these off.
                 </Note>
               ) : null}
 
@@ -1484,7 +1484,7 @@ export default function VendorDashboard() {
                      one-field form with a Save button is a form nobody
                      finishes. */
                   <div className="row wrap g-3" style={{ alignItems: "center" }}>
-                    <label className="t-sm" htmlFor="lowstock">Low stock warning at or below</label>
+                    <label className="t-sm" htmlFor="lowstock">Warn me when an item drops to</label>
                     <Input
                       id="lowstock"
                       type="number"
@@ -1498,8 +1498,8 @@ export default function VendorDashboard() {
                     />
                     <span className="t-sm t-muted">
                       {lowStockAt === 0
-                        ? "units — off. Nothing gets a low-stock badge."
-                        : `${lowStockAt === 1 ? "unit" : "units"} left. Set it to 0 if you sell one-of-a-kind pieces.`}
+                        ? "Off. Put a number in if you restock and want a nudge."
+                        : `${lowStockAt === 1 ? "unit" : "units"} or fewer. Back to 0 to switch it off.`}
                     </span>
                   </div>
                 }
