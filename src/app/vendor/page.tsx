@@ -275,7 +275,22 @@ export default function VendorDashboard() {
     try {
       const r = await fetch("/api/vendor/payout-account", { method: "POST" });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.url) { toast.error("Couldn't start the setup", String(d.error || "Try again in a minute.")); return; }
+      if (!r.ok || !d.url) {
+        /* Stripe's exact wording goes on screen when it's a setup problem, in a
+           dialog rather than a toast — it's a sentence worth reading and often
+           worth copying to whoever runs the market. */
+        if (d.detail) {
+          await dialog.alert({
+            title: "Bank setup couldn't start",
+            body: String(d.error || ""),
+            tone: "warn",
+            copyable: String(d.detail),
+          });
+        } else {
+          toast.error("Couldn't start the setup", String(d.error || "Try again in a minute."));
+        }
+        return;
+      }
       /* Stripe's own hosted form. Same window rather than a popup: phone
          browsers block popups, and this is the one flow that must not fail
          silently on a phone. */

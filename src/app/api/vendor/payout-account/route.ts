@@ -60,8 +60,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ url });
     } catch (err) {
       console.error("[vendor/payout-account] couldn't create the onboarding link", err);
+
+      /* Stripe's own words, passed through.
+         Every failure here is a CONFIGURATION problem on the market's side —
+         Connect not enabled, the platform profile unfinished, live mode not
+         activated — and Stripe names which one. Swallowing that behind "try
+         again in a minute" turns a five-second fix into an afternoon of
+         guessing in the dashboard, which is exactly what happened. These
+         messages carry no account or customer data; they are about the
+         platform's own setup. */
+      const e = err as { raw?: { message?: string }; message?: string; code?: string };
+      const detail = String(e.raw?.message || e.message || "").slice(0, 300);
+      const isSetup = /platform profile|Connect|not enabled|activate|live mode/i.test(detail);
+
       return NextResponse.json(
-        { error: "Couldn't start the bank setup just now. Try again in a minute." },
+        {
+          error: isSetup
+            ? "The market's Stripe setup isn't finished yet — tell them what this says."
+            : "Couldn't start the bank setup just now. Try again in a minute.",
+          detail,
+          code: e.code || "",
+        },
         { status: 502 }
       );
     }
