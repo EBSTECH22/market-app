@@ -40,6 +40,14 @@ type CartLine = {
   priceCents: number; basePriceCents: number; quantity: number; taxClass?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number };
+
+/** An online pre-order the vendor has packed and left at the counter. */
+type Pickup = {
+  id: string; number: number; customerName: string; customerPhone: string;
+  vendorName: string; vendorCode: string;
+  lines: { name: string; quantity: number }[];
+  totalCents: number; readyAt: string | null;
+};
 type Receipt = {
   id: string; number: number; employee: string; totalCents: number;
   cashTenderedCents?: number; changeCents?: number; paymentMethod: string;
@@ -92,6 +100,12 @@ export default function RegisterKiosk() {
      never enters the normal cart: re-pricing it against today's prices, or
      booking it under the cashier's name, are the two things the code exists to
      prevent. */
+  /* Online pre-orders sitting at the counter, waiting for somebody to walk in
+     for them. The till has to know about these: the customer has already paid,
+     so there is nothing to ring up — the only job is finding the right bag and
+     recording that it left. */
+  const [pickups, setPickups] = useState<Pickup[]>([]);
+  const [pickupQ, setPickupQ] = useState("");
   const [vtCode, setVtCode] = useState("");
   const [vt, setVt] = useState<VendorTicket | null>(null);
   const [vtErr, setVtErr] = useState("");
@@ -202,12 +216,54 @@ export default function RegisterKiosk() {
     if (typeof d.cardAdjustPercent === "number") setCardAdjustPercent(d.cardAdjustPercent);
   }, []);
 
+  /* Only ever the ready ones. A cashier has no use for an order the vendor
+     hasn't packed yet, and showing it would invite handing over a bag that
+     isn't there. */
+  const loadPickups = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/orders?scope=ready");
+      if (!r.ok) return;
+      const d = await r.json();
+      setPickups(Array.isArray(d.orders) ? d.orders : []);
+    } catch { /* offline: the list just goes stale, which is harmless */ }
+  }, []);
+
   useEffect(() => {
     if (!who) return;
     void loadDrawer();
     void loadFloor();
     void loadTax();
-  }, [who, loadDrawer, loadFloor, loadTax]);
+    void loadPickups();
+  }, [who, loadDrawer, loadFloor, loadTax, loadPickups]);
+
+  /* Vendors drop orders off through the day, so the till re-checks rather than
+     waiting for somebody to reload the page. */
+  useEffect(() => {
+    if (!who) return;
+    const t = window.setInterval(() => { void loadPickups(); }, 60_000);
+    return () => window.clearInterval(t);
+  }, [who, loadPickups]);
+
+  const handOver = async (o: Pickup) => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/orders", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: o.id }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        toast.error("Couldn't record that", String(d.error || "Give it another go."));
+      } else {
+        toast.success(`#${o.number} handed over`, `${o.customerName} — ${o.vendorName}.`);
+      }
+    } catch {
+      toast.error("No connection", "Hand the bag over anyway and record it when the wifi is back.");
+    } finally {
+      setBusy(false);
+      void loadPickups();
+    }
+  };
 
   /* ------------------------------------------------------------- offline -- */
 
@@ -649,6 +705,9 @@ export default function RegisterKiosk() {
           <Badge tone="warn" dot>No drawer</Badge>
         )}
         {!online ? <Badge tone="danger" dot>Offline</Badge> : null}
+        {pickups.length ? (
+          <Badge tone="info" dot>{plural(pickups.length, "order")} to collect</Badge>
+        ) : null}
         {queue.length ? (
           <Badge tone={queue.some(isStuck) ? "danger" : "warn"} dot>
             {plural(queue.length, "sale")} waiting to sync
@@ -898,6 +957,96 @@ export default function RegisterKiosk() {
     <>
       {header}
       {offlineBanner}
+
+      {/* Collections come first on the screen because they come first at the
+          counter: somebody standing there for a paid order is not queuing to
+          buy anything, and making them wait behind a ring-up is the fastest
+          way to make online ordering feel worse than just turning up. Hidden
+          entirely when there's nothing waiting — a permanent empty panel on a
+          till is noise. */}
+      {pay === "NONE" && pickups.length > 0 ? (
+        <Card
+          title="Ready to collect"
+          subtitle="Already paid online. Check the name, hand the bag over, tap the button."
+          actions={
+            <Button size="sm" variant="ghost" icon="refresh" onClick={() => void loadPickups()}>
+              Refresh
+            </Button>
+          }
+        >
+          <div className="stack g-3">
+            {pickups.length > 4 ? (
+              <Field label="Find it">
+                {(p) => (
+                  <SearchInput
+                    {...p}
+                    value={pickupQ}
+                    onValueChange={setPickupQ}
+                    placeholder="name or order number"
+                    aria-label="Search orders waiting for collection"
+                  />
+                )}
+              </Field>
+            ) : null}
+
+            {(() => {
+              const q = pickupQ.trim().toLowerCase();
+              const shown = q
+                ? pickups.filter(
+                    (o) =>
+                      o.customerName.toLowerCase().includes(q) ||
+                      String(o.number).includes(q) ||
+                      o.vendorName.toLowerCase().includes(q)
+                  )
+                : pickups;
+
+              if (shown.length === 0) {
+                return <EmptyState icon="search" title="No match" body="Try their surname, or the number on their email." />;
+              }
+
+              return shown.map((o) => (
+                <div
+                  key={o.id}
+                  className="row wrap g-3"
+                  style={{
+                    alignItems: "center",
+                    padding: "var(--sp-3)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r-lg)",
+                  }}
+                >
+                  <div className="stack g-1 grow" style={{ minWidth: 200 }}>
+                    <span className="row g-2" style={{ alignItems: "baseline" }}>
+                      <b style={{ fontSize: "var(--fs-lg)" }}>{o.customerName}</b>
+                      <span className="t-sm t-muted num">#{o.number}</span>
+                    </span>
+                    <span className="t-sm t-muted truncate">
+                      {o.vendorName} · {o.lines.map((l) => `${l.quantity}× ${l.name}`).join(", ")}
+                    </span>
+                    <span className="t-xs t-muted">
+                      {o.readyAt ? `Dropped off ${fmtTime(o.readyAt)}` : "Ready"} · paid {money(o.totalCents)}
+                      {o.customerPhone ? ` · ${o.customerPhone}` : ""}
+                    </span>
+                  </div>
+                  <Button
+                    size="lg"
+                    variant="primary"
+                    icon="check"
+                    disabled={busy}
+                    onClick={() => void handOver(o)}
+                  >
+                    Handed over
+                  </Button>
+                </div>
+              ));
+            })()}
+
+            <Note tone="info">
+              Nothing to ring up — these are paid in full. Take no money at the counter.
+            </Note>
+          </div>
+        </Card>
+      ) : null}
 
       {pay === "NONE" ? (
         <Card
