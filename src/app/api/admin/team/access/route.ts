@@ -6,6 +6,7 @@ import { denyUnless, currentRole } from "@/lib/perm";
 import { normalizeRole, ROLE_LABEL, type Role } from "@/lib/roles";
 import { randomBytes } from "crypto";
 import { sendStaffAccessEmail } from "@/lib/email";
+import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -170,6 +171,31 @@ export async function PATCH(req: NextRequest) {
     const needsLogin = finalRole !== "EMPLOYEE" && (!finalEmail || !finalHasPassword);
 
     const updated = await db.employee.update({ where: { id: emp.id }, data });
+
+    /* Access changes are logged with what changed but never with the password
+       itself — a log that stores credentials is a second place to steal them
+       from. "Password issued" is the fact worth keeping. */
+    const changes: string[] = [];
+    if (data.role !== undefined && data.role !== emp.role) {
+      changes.push(`role ${ROLE_LABEL[normalizeRole(emp.role)]} → ${ROLE_LABEL[normalizeRole(data.role)]}`);
+    }
+    if (data.email !== undefined && data.email !== emp.email) changes.push(`sign-in email set to ${data.email || "(none)"}`);
+    if (data.passwordHash) changes.push(issuedPassword ? "password issued" : "password changed");
+    if (data.active !== undefined && data.active !== emp.active) changes.push(data.active ? "account switched on" : "account switched off");
+    if (changes.length) {
+      await recordAudit(
+        {
+          action: "EMPLOYEE_CHANGE",
+          targetType: "EMPLOYEE",
+          targetId: emp.id,
+          targetLabel: emp.name,
+          detail: `${emp.name}: ${changes.join(", ")}`,
+          before: { role: normalizeRole(emp.role), email: emp.email, active: emp.active },
+          after: { role: finalRole, email: finalEmail, active: data.active ?? emp.active },
+        },
+        req
+      );
+    }
 
     /* Email them the details. The password is in that email because there is
        nowhere else to get it — it's hashed on generation and never stored

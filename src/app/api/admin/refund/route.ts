@@ -2,14 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentEmployeeId, isAdmin } from "@/lib/auth";
 import { denyUnless } from "@/lib/perm";
+import { recordAudit, checkApproval } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
-// POST { saleId, action: "void" } — full void: never happened, restock everything, reverse vendor credits
-// POST { saleId, action: "refund", lines: [{ lineId, quantity }], restock } — partial/full refund with proportional tax
+// POST { saleId, action: "void", approvalPin? } — full void: never happened, restock everything, reverse vendor credits
+// POST { saleId, action: "refund", lines: [{ lineId, quantity }], restock, approvalPin? } — partial/full refund with proportional tax
 export async function POST(req: NextRequest) {
   { const denied = await denyUnless("money"); if (denied) return denied; }
-  const { saleId, action, lines, restock } = await req.json();
+  const { saleId, action, lines, restock, approvalPin } = await req.json();
   const sale = await db.sale.findUnique({ where: { id: saleId }, include: { lines: true } });
   if (!sale) return NextResponse.json({ error: "Sale not found." }, { status: 404 });
   if (sale.status === "VOIDED") return NextResponse.json({ error: "Already voided." }, { status: 400 });
@@ -20,6 +21,13 @@ export async function POST(req: NextRequest) {
   else if (isAdmin()) empName = "ADMIN";
 
   if (action === "void") {
+    /* Approval BEFORE anything moves. A void hands back the whole ticket, so
+       it's checked against the same threshold as a refund of that size. */
+    const approval = await checkApproval(sale.totalCents, approvalPin);
+    if (!approval.ok) {
+      return NextResponse.json({ error: approval.error, needsApproval: true }, { status: 400 });
+    }
+
     await db.$transaction(async (tx) => {
       for (const l of sale.lines) {
         await tx.item.update({ where: { id: l.itemId }, data: { quantity: { increment: l.quantity } } }).catch(() => {});
@@ -37,6 +45,22 @@ export async function POST(req: NextRequest) {
         },
       });
     });
+
+    await recordAudit(
+      {
+        action: "SALE_VOID",
+        targetType: "SALE",
+        targetId: sale.id,
+        targetLabel: `Ticket #${sale.number}`,
+        amountCents: sale.totalCents,
+        detail: `Voided ticket #${sale.number} (${sale.paymentMethod.toLowerCase()}) — ${sale.lines.length} line${sale.lines.length === 1 ? "" : "s"} restocked`,
+        before: { status: sale.status, totalCents: sale.totalCents },
+        after: { status: "VOIDED" },
+        approvedBy: approval.required ? approval.approvedBy : "",
+      },
+      req
+    );
+
     return NextResponse.json({ ok: true, kind: "VOID", cashBack: sale.paymentMethod === "CASH" ? sale.totalCents : 0 });
   }
 
@@ -91,6 +115,13 @@ export async function POST(req: NextRequest) {
       // old proportional calculation is still the right one for them.
       : Math.round((sale.taxCents * refundSubtotal) / (sale.subtotalCents || 1));
 
+    /* Checked once the amount is known — the threshold is about how much money
+       is going back, not how many lines were ticked. */
+    const approval = await checkApproval(refundSubtotal + refundTax, approvalPin);
+    if (!approval.ok) {
+      return NextResponse.json({ error: approval.error, needsApproval: true }, { status: 400 });
+    }
+
     await db.$transaction(async (tx) => {
       for (const p of applied) {
         const line = sale.lines.find((l) => l.id === p.lineId)!;
@@ -115,6 +146,28 @@ export async function POST(req: NextRequest) {
         },
       });
     });
+    const refundedNames = applied
+      .map((p) => {
+        const line = sale.lines.find((l) => l.id === p.lineId);
+        return line ? `${p.quantity}× ${line.name}` : "";
+      })
+      .filter(Boolean)
+      .join(", ");
+
+    await recordAudit(
+      {
+        action: "SALE_REFUND",
+        targetType: "SALE",
+        targetId: sale.id,
+        targetLabel: `Ticket #${sale.number}`,
+        amountCents: refundSubtotal + refundTax,
+        detail: `Refunded ${refundedNames || "items"} on #${sale.number}${restock === false ? " (not restocked)" : ""}`,
+        after: { refundSubtotal, refundTax, method: sale.paymentMethod },
+        approvedBy: approval.required ? approval.approvedBy : "",
+      },
+      req
+    );
+
     return NextResponse.json({
       ok: true, kind: "REFUND",
       refundCents: refundSubtotal + refundTax,

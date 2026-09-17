@@ -4,6 +4,7 @@ import { verifyPin, pinUpgrade, currentEmployeeId } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
+import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -122,5 +123,24 @@ export async function PATCH(req: NextRequest) {
       diffCents: counted - expected,
     },
   });
+  /* Only a drawer that didn't balance goes in the log. Logging every clean
+     close would bury the ones that matter — and a till that is out is the
+     single most useful thing this log can show a month later. */
+  if (closed.diffCents !== 0) {
+    const over = closed.diffCents > 0;
+    await recordAudit(
+      {
+        action: "DRAWER_CLOSE",
+        targetType: "DRAWER",
+        targetId: closed.id,
+        targetLabel: closed.employee,
+        amountCents: -closed.diffCents,
+        detail: `Drawer closed $${(Math.abs(closed.diffCents) / 100).toFixed(2)} ${over ? "OVER" : "SHORT"} — counted $${(counted / 100).toFixed(2)}, expected $${(expected / 100).toFixed(2)}`,
+        after: { countedCents: counted, expectedCents: expected, diffCents: closed.diffCents },
+      },
+      req
+    );
+  }
+
   return NextResponse.json({ session: closed, expected });
 }

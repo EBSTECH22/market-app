@@ -7,6 +7,7 @@ import { unlockIfRentPaid } from "@/lib/unlock";
 import { runRoute } from "@/lib/handler";
 import { TZ } from "@/lib/time";
 import { denyUnless } from "@/lib/perm";
+import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -141,6 +142,20 @@ export async function POST(req: NextRequest) {
         note: `Rent balance paid by card on file ····${vendor.cardLast4}: $${(chargeTotal / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, 3%)`,
       },
     });
+    await recordAudit(
+      {
+        action: "VENDOR_LEDGER",
+        targetType: "VENDOR",
+        targetId: vendor.id,
+        targetLabel: `${vendor.code} — ${vendor.businessName}`,
+        /* Negative: this is money coming IN, and the log's running total is
+           about what left the building. */
+        amountCents: -chargeTotal,
+        detail: `Card on file ····${vendor.cardLast4} charged $${(chargeTotal / 100).toFixed(2)} for rent owed`,
+        after: { dueCents, feeCents, chargeTotal },
+      },
+      req
+    );
     try { await sendRentChargedEmail(vendor.email, vendor.businessName, dueCents, feeCents, chargeTotal, vendor.cardLast4); } catch {}
     try { await unlockIfRentPaid(vendor.id); } catch {}
     return NextResponse.json({ ok: true, dueCents, feeCents, chargeTotalCents: chargeTotal });

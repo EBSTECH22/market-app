@@ -47,7 +47,9 @@ export type PromptOptions = {
   confirmLabel?: string;
   multiline?: boolean;
   required?: boolean;
-  type?: "text" | "date" | "number" | "email" | "tel";
+  /** "password" masks the field — used for the manager PIN on a big refund,
+      which gets typed at a till with customers standing over it. */
+  type?: "text" | "date" | "number" | "email" | "tel" | "password";
   tone?: Tone;
   /** Return an error string to block submission. */
   validate?: (value: string) => string | null;

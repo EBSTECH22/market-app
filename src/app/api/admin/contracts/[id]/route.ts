@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { sendContractSignEmail, sendSetupGuideEmail, sendRentLinkEmail, sendAgreementReminderEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
 import { denyUnless } from "@/lib/perm";
+import { recordAudit } from "@/lib/audit";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   { const denied = await denyUnless("market"); if (denied) return denied; }
@@ -252,6 +253,28 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
 
     const updated = await db.contract.update({ where: { id: contract.id }, data });
+
+    const parts: string[] = [];
+    if (data.boothLabel && data.boothLabel !== contract.boothLabel) parts.push(`booth ${contract.boothLabel} → ${data.boothLabel}`);
+    if (data.monthlyRentCents !== undefined && data.monthlyRentCents !== contract.monthlyRentCents) {
+      parts.push(`rent $${(contract.monthlyRentCents / 100).toFixed(2)} → $${(data.monthlyRentCents / 100).toFixed(2)}`);
+    }
+    if (data.startDate) parts.push(`start date changed`);
+    if (parts.length) {
+      await recordAudit(
+        {
+          action: "CONTRACT_EDIT",
+          targetType: "CONTRACT",
+          targetId: contract.id,
+          targetLabel: `Booth ${contract.boothLabel}`,
+          detail: `Terms changed before signing: ${parts.join(", ")}`,
+          before: { boothLabel: contract.boothLabel, monthlyRentCents: contract.monthlyRentCents },
+          after: { boothLabel: updated.boothLabel, monthlyRentCents: updated.monthlyRentCents },
+        },
+        req
+      );
+    }
+
     return NextResponse.json({ contract: updated });
   }
 

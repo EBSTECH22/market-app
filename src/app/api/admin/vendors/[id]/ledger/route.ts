@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
 import { denyUnless } from "@/lib/perm";
+import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -31,5 +32,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const entry = await db.ledgerEntry.create({
     data: { vendorId: params.id, type, amountCents, note: (note || "").trim() },
   });
+
+  const vendor = await db.vendor.findUnique({ where: { id: params.id }, select: { code: true, businessName: true } });
+  await recordAudit(
+    {
+      action: "VENDOR_LEDGER",
+      targetType: "VENDOR",
+      targetId: params.id,
+      targetLabel: vendor ? `${vendor.code} — ${vendor.businessName}` : params.id,
+      /* Signed so the log reads as money out. A payout or a negative adjustment
+         is money leaving; rent charged is money owed TO the market, so it lands
+         negative and doesn't inflate the "handed back" total. */
+      amountCents: -amountCents,
+      detail: `${type === "ADJUST" ? "Balance adjusted" : type === "PAYOUT" ? "Payout recorded" : "Rent charged"}: ${(Math.abs(amountCents) / 100).toFixed(2)}${(note || "").trim() ? ` — ${(note || "").trim()}` : ""}`,
+      after: { type, amountCents },
+    },
+    req
+  );
+
   return NextResponse.json({ entry });
 }

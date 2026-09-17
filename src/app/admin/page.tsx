@@ -16,6 +16,7 @@ import { CashTender } from "@/components/register/CashTender";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { subscribeToPush } from "@/lib/pushclient";
 import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
+import { auditLabel, actorLabel } from "@/lib/auditkinds";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string };
@@ -403,6 +404,84 @@ type Report = {
   byHour: Record<string, number>;
 };
 
+/* ---- sales tax return -------------------------------------------------- */
+
+type TaxMonth = {
+  month: string;
+  label: string;
+  tickets: number;
+  returns: number;
+  preSplitTickets: number;
+  grossSalesCents: number;
+  stateTaxableCents: number;
+  localTaxableCents: number;
+  exemptFromStateCents: number;
+  standardSalesCents: number;
+  foodSalesCents: number;
+  standardTaxCents: number;
+  foodTaxCents: number;
+  taxCollectedCents: number;
+  returnedSalesCents: number;
+  returnedTaxCents: number;
+};
+
+type TaxReport = {
+  selected: string;
+  current: TaxMonth;
+  months: TaxMonth[];
+  rates: { standardPercent: number; foodPercent: number; statePercent: number; splitConfigured: boolean };
+};
+
+/* ---- activity log ------------------------------------------------------ */
+
+type AuditRow = {
+  id: string;
+  at: string;
+  actorType: string;
+  actorName: string;
+  actorRole: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  targetLabel: string;
+  amountCents: number;
+  detail: string;
+  approvedBy: string;
+};
+
+/* ---- payout runs ------------------------------------------------------- */
+
+type PayoutRunRow = {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  status: string;
+  createdAt: string;
+  createdBy: string;
+  note: string;
+  vendorCount: number;
+  totalCents: number;
+  paidCents: number;
+  pendingCount: number;
+};
+
+type PayoutRow = {
+  id: string;
+  vendorId: string;
+  vendorCode: string;
+  vendorName: string;
+  grossCents: number;
+  commissionCents: number;
+  refundCents: number;
+  balanceCents: number;
+  netCents: number;
+  method: string;
+  reference: string;
+  status: string;
+  paidAt: string | null;
+  paidBy: string;
+};
+
 const DENOMS: [string, string, number][] = [
   ["b100", "$100 bills", 10000], ["b50", "$50 bills", 5000], ["b20", "$20 bills", 2000],
   ["b10", "$10 bills", 1000], ["b5", "$5 bills", 500], ["b1", "$1 bills", 100],
@@ -752,6 +831,9 @@ export default function AdminPage() {
   const [rentPerSqft, setRentPerSqft] = useState(6);
   const [scPaused, setScPaused] = useState(false);
   const [cardAdj, setCardAdj] = useState("0");
+  /* Dollars as typed, not cents — the field is a text input and rounding it on
+     every keystroke fights the person using it. */
+  const [approvalDollars, setApprovalDollars] = useState("50");
   const [cardConfirm, setCardConfirm] = useState(false);
   /* Cash used to book the instant you pressed the button — no tender, no
      change, nothing on the receipt saying what was handed over. */
@@ -863,7 +945,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -1007,6 +1089,109 @@ export default function AdminPage() {
     }
   }, []);
   useEffect(() => { if (authed && allowed("market") && tab === "customers") loadCustomers(); }, [authed, caps, tab, loadCustomers]);
+
+  /* ---- sales tax return, activity log, payout runs ---------------------- */
+
+  const [taxReport, setTaxReport] = useState<TaxReport | null>(null);
+  const [taxMonth, setTaxMonth] = useState<string>(() => isoDate().slice(0, 7));
+  const [taxErr, setTaxErr] = useState("");
+  const loadTaxReport = useCallback(async (month: string) => {
+    setTaxErr("");
+    const r = await fetch(`/api/admin/tax-report?month=${encodeURIComponent(month)}`);
+    if (!r.ok) { setTaxErr("Couldn't build the tax report."); return; }
+    setTaxReport(await r.json());
+  }, []);
+
+  const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [auditFilter, setAuditFilter] = useState<string>("MONEY_OUT");
+  const [auditDays, setAuditDays] = useState<string>("30");
+  const [auditOut, setAuditOut] = useState(0);
+  const loadAudit = useCallback(async (action: string, days: string) => {
+    const r = await fetch(`/api/admin/audit?days=${encodeURIComponent(days)}${action === "ALL" ? "" : `&action=${encodeURIComponent(action)}`}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    setAudit((d.events || []) as AuditRow[]);
+    setAuditOut(Number(d.moneyOutCents) || 0);
+  }, []);
+
+  const [payRuns, setPayRuns] = useState<PayoutRunRow[]>([]);
+  const [payRunId, setPayRunId] = useState("");
+  const [payouts, setPayouts] = useState<PayoutRow[]>([]);
+  const [payFromDate, setPayFromDate] = useState(() => `${isoDate().slice(0, 7)}-01`);
+  const [payToDate, setPayToDate] = useState(() => isoDate());
+  const [payErr, setPayErr] = useState("");
+  const loadPayouts = useCallback(async (runId?: string) => {
+    const r = await fetch(`/api/admin/payouts${runId ? `?runId=${encodeURIComponent(runId)}` : ""}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    setPayRuns((d.runs || []) as PayoutRunRow[]);
+    setPayRunId(String(d.runId || ""));
+    setPayouts((d.payouts || []) as PayoutRow[]);
+  }, []);
+
+  useEffect(() => {
+    if (authed && allowed("financials") && tab === "reports") { loadTaxReport(taxMonth); loadAudit(auditFilter, auditDays); }
+  }, [authed, caps, tab, taxMonth, auditFilter, auditDays, loadTaxReport, loadAudit]);
+  useEffect(() => {
+    if (authed && allowed("financials") && tab === "bank") loadPayouts();
+  }, [authed, caps, tab, loadPayouts]);
+
+  const buildPayoutRun = async () => {
+    setPayErr("");
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/payouts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: payFromDate, to: payToDate }),
+      });
+      if (!ok) { setPayErr(String(data.error || "Couldn't build the run.")); return; }
+      await loadPayouts(String(data.runId || ""));
+      toast.success("Payout run built", "Mark each vendor as you pay them.");
+    } finally { setBusy(false); }
+  };
+
+  const markPayoutPaid = async (p: PayoutRow) => {
+    const method = await dialog.choose({
+      title: `Pay ${p.vendorName} ${money(p.netCents)}`,
+      body: <p>This posts {money(p.netCents)} against their balance. Record how it actually left the market.</p>,
+      label: "How was it paid?",
+      options: [
+        { value: "CASH", label: "Cash", hint: "Out of the drawer or the safe" },
+        { value: "CHECK", label: "Check", hint: "You'll be asked for the check number" },
+        { value: "ACH", label: "Bank transfer", hint: "Zelle, ACH, anything bank-to-bank" },
+        { value: "STRIPE", label: "Stripe", hint: "Sent from the Stripe balance" },
+        { value: "RENT_OFFSET", label: "Applied to rent", hint: "Kept against what they owe" },
+      ],
+      defaultValue: "CHECK",
+      confirmLabel: "Next",
+    });
+    if (!method) return;
+
+    let reference = "";
+    if (method === "CHECK" || method === "ACH" || method === "STRIPE") {
+      const ref = await dialog.prompt({
+        title: "Reference",
+        body: <p>Whatever lets you find this on the bank statement later.</p>,
+        label: method === "CHECK" ? "Check number" : "Reference",
+        placeholder: method === "CHECK" ? "1042" : "Zelle 9/14",
+        confirmLabel: "Mark paid",
+      });
+      if (ref === null) return;
+      reference = ref;
+    }
+
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/payouts", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payoutId: p.id, method, reference }),
+      });
+      if (!ok) { toast.error("Couldn't mark it paid", String(data.error || "")); return; }
+      await loadPayouts(payRunId);
+      await loadAll();
+      toast.success(`${p.vendorName} paid`, `${money(p.netCents)} posted to their ledger.`);
+    } finally { setBusy(false); }
+  };
   useEffect(() => {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
     if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) { const d = await r.json(); setSettle(d.rows); setRentRoll(d.rentRoll || null); } });
@@ -1566,6 +1751,19 @@ export default function AdminPage() {
     setRefundRestock(true);
   };
 
+  /** The manager-PIN prompt shown when the server asks for authorisation. */
+  const askApprovalPin = async (reason: string): Promise<string | null> =>
+    dialog.prompt({
+      title: "Manager approval needed",
+      body: <p>{reason} Have a manager or the owner enter their PIN — their name goes on the record.</p>,
+      label: "Manager PIN",
+      type: "password",
+      placeholder: "••••",
+      confirmLabel: "Approve",
+      tone: "danger",
+      required: true,
+    });
+
   const voidSale = async (t: Ticket) => {
     const yes = await dialog.confirm({
       title: `Void ticket #${t.number}?`,
@@ -1586,10 +1784,21 @@ export default function AdminPage() {
       typeToConfirm: "VOID",
     });
     if (!yes) return;
-    const { ok, data } = await safeFetch("/api/admin/refund", {
+    let { ok, data } = await safeFetch("/api/admin/refund", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ saleId: t.id, action: "void" }),
     });
+    /* Over the threshold a manager has to authorise it. Asked for only when
+       the server says so, so a manager or owner never types their own PIN into
+       their own session — that proves nothing and only slows the queue. */
+    if (!ok && data.needsApproval) {
+      const pin = await askApprovalPin(String(data.error || ""));
+      if (pin === null) return;
+      ({ ok, data } = await safeFetch("/api/admin/refund", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saleId: t.id, action: "void", approvalPin: pin }),
+      }));
+    }
     if (!ok) { toast.error("Void failed", String(data.error || "")); return; }
     toast.success(
       `Ticket #${t.number} voided`,
@@ -1603,10 +1812,18 @@ export default function AdminPage() {
     setRefundMsg("");
     const lines = Object.entries(refundQty).filter(([, q]) => q > 0).map(([lineId, quantity]) => ({ lineId, quantity }));
     if (!lines.length) { setRefundMsg("Set a quantity on at least one item."); return; }
-    const { ok, data } = await safeFetch("/api/admin/refund", {
+    let { ok, data } = await safeFetch("/api/admin/refund", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock }),
     });
+    if (!ok && data.needsApproval) {
+      const pin = await askApprovalPin(String(data.error || ""));
+      if (pin === null) { setRefundMsg("Refund cancelled — no manager approval."); return; }
+      ({ ok, data } = await safeFetch("/api/admin/refund", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock, approvalPin: pin }),
+      }));
+    }
     if (!ok) { setRefundMsg(String(data.error || "Refund failed.")); return; }
     const back = Number(data.refundCents) || 0;
     const method = refundTarget.ticket.paymentMethod;
@@ -4755,6 +4972,202 @@ export default function AdminPage() {
               </Card>
             </>
           )}
+
+          {/* ---- what actually goes on the sales tax return ---------------- */}
+          <Card
+            title="Sales tax return"
+            subtitle="The figures the Oklahoma return asks for, split the way it splits them."
+            actions={
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="download"
+                disabled={!taxReport}
+                onClick={() => { window.location.href = `/api/admin/tax-report?month=${encodeURIComponent(taxMonth)}&format=csv`; }}
+              >
+                Export CSV
+              </Button>
+            }
+          >
+            <div className="stack g-4">
+              <Field label="Filing month" hint="Sales count in the month they were rung; refunds in the month they were given back.">
+                {(p) => (
+                  <Select {...p} value={taxMonth} onChange={(e) => setTaxMonth(e.target.value)} style={{ maxWidth: 260 }}>
+                    {(taxReport?.months.length ? taxReport.months.map((m) => m.month) : [taxMonth]).map((m) => (
+                      <option key={m} value={m}>{taxReport?.months.find((x) => x.month === m)?.label || m}</option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+
+              {taxErr ? <Note tone="error">{taxErr}</Note> : null}
+
+              {taxReport ? (
+                <>
+                  {!taxReport.rates.splitConfigured ? (
+                    <Note tone="warn" title="Food rate isn't set">
+                      Groceries are still being taxed at the full {taxReport.rates.standardPercent}%. Set the food
+                      rate in Settings and the split below starts filling in from the next sale.
+                    </Note>
+                  ) : null}
+
+                  <div className="stats">
+                    <Stat
+                      feature
+                      label="Tax collected"
+                      value={money(taxReport.current.taxCollectedCents)}
+                      sub={taxReport.current.label}
+                      icon="dollar"
+                    />
+                    <Stat label="Gross sales" value={money(taxReport.current.grossSalesCents)} sub={`${taxReport.current.tickets} tickets`} />
+                    <Stat
+                      label="Taxable — general"
+                      value={money(taxReport.current.stateTaxableCents)}
+                      sub={`at ${taxReport.rates.standardPercent}%`}
+                    />
+                    <Stat
+                      label="Food (state-exempt)"
+                      value={money(taxReport.current.exemptFromStateCents)}
+                      sub={`local only, ${taxReport.rates.foodPercent}%`}
+                    />
+                  </div>
+
+                  <DescList
+                    items={[
+                      { label: "Gross receipts", value: money(taxReport.current.grossSalesCents) },
+                      {
+                        label: "Less food & food ingredients (exempt from the state portion)",
+                        value: money(taxReport.current.exemptFromStateCents),
+                      },
+                      { label: "Net taxable at the full rate", value: <b>{money(taxReport.current.stateTaxableCents)}</b> },
+                      { label: "Taxable for the local portion (everything)", value: money(taxReport.current.localTaxableCents) },
+                      { label: `Tax collected — general (${taxReport.rates.standardPercent}%)`, value: money(taxReport.current.standardTaxCents) },
+                      { label: `Tax collected — food (${taxReport.rates.foodPercent}%)`, value: money(taxReport.current.foodTaxCents) },
+                      { label: "Total tax collected", value: <b>{money(taxReport.current.taxCollectedCents)}</b> },
+                      {
+                        label: "Refunds and voids given back this month",
+                        value: `${money(taxReport.current.returnedSalesCents)} + ${money(taxReport.current.returnedTaxCents)} tax`,
+                      },
+                    ]}
+                  />
+
+                  {taxReport.current.preSplitTickets > 0 ? (
+                    <Note tone="info">
+                      {plural(taxReport.current.preSplitTickets, "ticket")} this month {taxReport.current.preSplitTickets === 1 ? "was" : "were"} rung
+                      before the food rate was set, so {taxReport.current.preSplitTickets === 1 ? "it counts" : "they count"} as
+                      general-rate sales — which is what was actually collected at the till.
+                    </Note>
+                  ) : null}
+
+                  <DataTable
+                    rows={taxReport.months}
+                    rowKey={(m) => m.month}
+                    mobileCards
+                    columns={[
+                      { key: "month", header: "Month", cell: (m) => m.label, primary: true },
+                      { key: "gross", header: "Gross", align: "right", cell: (m) => money(m.grossSalesCents) },
+                      { key: "general", header: "General", align: "right", cell: (m) => money(m.stateTaxableCents) },
+                      { key: "food", header: "Food", align: "right", cell: (m) => money(m.foodSalesCents) },
+                      { key: "tax", header: "Tax collected", align: "right", cell: (m) => <b>{money(m.taxCollectedCents)}</b> },
+                      { key: "returns", header: "Returned", align: "right", cell: (m) => (m.returnedSalesCents ? money(m.returnedSalesCents + m.returnedTaxCents) : "—") },
+                    ]}
+                    empty={<EmptyState title="No sales yet" body="Once tickets are rung, the months build up here." />}
+                  />
+
+                  <p className="t-xs t-muted">
+                    Figures come from the tax actually charged on each ticket, not from today&rsquo;s rates — changing a
+                    rate in Settings can&rsquo;t move a month you&rsquo;ve already filed.
+                  </p>
+                </>
+              ) : (
+                <Skeleton />
+              )}
+            </div>
+          </Card>
+
+          {/* ---- who did what to the money ---------------------------------- */}
+          <Card
+            title="Activity"
+            subtitle="Voids, refunds, balance changes, payouts and access changes — with a name on each one."
+          >
+            <div className="stack g-4">
+              <div className="row wrap g-3">
+                <Field label="Show" className="grow">
+                  {(p) => (
+                    <Select {...p} value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)}>
+                      <option value="MONEY_OUT">Money going out</option>
+                      <option value="ALL">Everything</option>
+                      <option value="SALE_VOID">Voids</option>
+                      <option value="SALE_REFUND">Refunds</option>
+                      <option value="VENDOR_LEDGER">Balance changes</option>
+                      <option value="PAYOUT_PAID">Payouts</option>
+                      <option value="DRAWER_CLOSE">Drawers that didn&rsquo;t balance</option>
+                      <option value="EMPLOYEE_CHANGE">Staff access</option>
+                      <option value="SETTING_CHANGE">Settings</option>
+                    </Select>
+                  )}
+                </Field>
+                <Field label="Period" className="grow">
+                  {(p) => (
+                    <Select {...p} value={auditDays} onChange={(e) => setAuditDays(e.target.value)}>
+                      <option value="7">Last 7 days</option>
+                      <option value="30">Last 30 days</option>
+                      <option value="90">Last 90 days</option>
+                      <option value="365">Last year</option>
+                    </Select>
+                  )}
+                </Field>
+              </div>
+
+              {auditFilter === "MONEY_OUT" && audit.length ? (
+                <Note tone={auditOut > 0 ? "warn" : "info"}>
+                  <b>{money(auditOut)}</b> handed back or paid out in this period, across {plural(audit.length, "entry", "entries")}.
+                </Note>
+              ) : null}
+
+              <DataTable
+                rows={audit}
+                rowKey={(e) => e.id}
+                mobileCards
+                columns={[
+                  { key: "at", header: "When", cell: (e) => <span title={fmtDateTime(e.at)}>{relTime(e.at)}</span> },
+                  {
+                    key: "what",
+                    header: "What happened",
+                    primary: true,
+                    cell: (e) => (
+                      <div>
+                        <div style={{ fontWeight: 560 }}>{auditLabel(e.action)}</div>
+                        <div className="t-xs t-muted">{e.detail || e.targetLabel}</div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "who",
+                    header: "Who",
+                    cell: (e) => (
+                      <div>
+                        <div>{actorLabel(e)}</div>
+                        {e.approvedBy ? <div className="t-xs t-muted">approved by {e.approvedBy}</div> : null}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "amount",
+                    header: "Amount",
+                    align: "right",
+                    cell: (e) => (e.amountCents > 0 ? <b>{money(e.amountCents)}</b> : e.amountCents < 0 ? <span className="t-muted">{money(-e.amountCents)} in</span> : "—"),
+                  },
+                ]}
+                empty={
+                  <EmptyState
+                    title="Nothing logged yet"
+                    body="Voids, refunds, payouts and account changes will appear here from now on. It starts empty — there's no history to backfill."
+                  />
+                }
+              />
+            </div>
+          </Card>
         </div>
       )}
 
@@ -4912,6 +5325,136 @@ export default function AdminPage() {
 
       {tab === "bank" && (
         <div className="stack g-4">
+          {/* ---- paying the vendors --------------------------------------- */}
+          <Card
+            title="Vendor payouts"
+            subtitle="Build a run for the period, then mark each one as you actually pay them."
+            actions={
+              payRuns.length ? (
+                <Select
+                  value={payRunId}
+                  onChange={(e) => { setPayRunId(e.target.value); loadPayouts(e.target.value); }}
+                  aria-label="Payout run"
+                  style={{ maxWidth: 260 }}
+                >
+                  {payRuns.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {fmtDateShort(r.periodStart)} – {fmtDateShort(r.periodEnd)} · {money(r.totalCents)}
+                      {r.pendingCount ? ` · ${r.pendingCount} to pay` : " · done"}
+                    </option>
+                  ))}
+                </Select>
+              ) : null
+            }
+          >
+            <div className="stack g-4">
+              <div className="row wrap g-3 items-end">
+                <Field label="Period start" className="grow">
+                  {(p) => <Input {...p} type="date" value={payFromDate} onChange={(e) => setPayFromDate(e.target.value)} />}
+                </Field>
+                <Field label="Period end" className="grow">
+                  {(p) => <Input {...p} type="date" value={payToDate} onChange={(e) => setPayToDate(e.target.value)} />}
+                </Field>
+                <Button icon="plus" disabled={busy} onClick={buildPayoutRun}>Build payout run</Button>
+              </div>
+
+              {payErr ? <Note tone="error">{payErr}</Note> : null}
+
+              <Note tone="info">
+                The amount paid is each vendor&rsquo;s <b>current balance</b>, not the period&rsquo;s sales — so rent
+                they owe, refunds since, and anything you&rsquo;ve already paid them are all netted off first. The
+                dates decide what the statement covers.
+              </Note>
+
+              {payouts.length ? (
+                <>
+                  <div className="stats">
+                    <Stat
+                      feature
+                      label="Still to pay"
+                      value={money(payouts.filter((p) => p.status === "PENDING").reduce((n, p) => n + p.netCents, 0))}
+                      sub={`${payouts.filter((p) => p.status === "PENDING").length} vendors`}
+                      icon="dollar"
+                    />
+                    <Stat
+                      label="Paid on this run"
+                      value={money(payouts.filter((p) => p.status === "PAID").reduce((n, p) => n + p.netCents, 0))}
+                      sub={`${payouts.filter((p) => p.status === "PAID").length} vendors`}
+                    />
+                    <Stat
+                      label="Owing the market"
+                      value={money(payouts.reduce((n, p) => n + (p.balanceCents < 0 ? -p.balanceCents : 0), 0))}
+                      sub={`${payouts.filter((p) => p.balanceCents < 0).length} vendors behind`}
+                    />
+                  </div>
+
+                  <DataTable
+                    rows={payouts}
+                    rowKey={(p) => p.id}
+                    mobileCards
+                    defaultSort={{ key: "net", dir: "desc" }}
+                    columns={[
+                      {
+                        key: "vendor",
+                        header: "Vendor",
+                        primary: true,
+                        sortBy: (p) => p.vendorName,
+                        cell: (p) => (
+                          <div>
+                            <div style={{ fontWeight: 560 }}>{p.vendorName}</div>
+                            <div className="t-xs t-muted">{p.vendorCode}</div>
+                          </div>
+                        ),
+                      },
+                      { key: "sold", header: "Sold this period", align: "right", sortBy: (p) => p.grossCents, cell: (p) => money(p.grossCents) },
+                      { key: "commission", header: "Commission", align: "right", cell: (p) => (p.commissionCents ? `-${money(p.commissionCents)}` : "—") },
+                      {
+                        key: "net",
+                        header: "To pay",
+                        align: "right",
+                        sortBy: (p) => p.netCents,
+                        cell: (p) =>
+                          p.netCents > 0
+                            ? <b>{money(p.netCents)}</b>
+                            : <span className="t-muted">{p.balanceCents < 0 ? `owes ${money(-p.balanceCents)}` : "—"}</span>,
+                      },
+                      {
+                        key: "status",
+                        header: "Status",
+                        cell: (p) =>
+                          p.status === "PAID" ? (
+                            <Badge tone="success" dot>
+                              {p.method === "CHECK" && p.reference ? `Check ${p.reference}` : "Paid"}
+                            </Badge>
+                          ) : p.status === "SKIPPED" ? (
+                            <Badge tone="neutral">Nothing owed</Badge>
+                          ) : (
+                            <Badge tone="warn" dot>To pay</Badge>
+                          ),
+                      },
+                      {
+                        key: "action",
+                        header: "",
+                        align: "right",
+                        cell: (p) =>
+                          p.status === "PENDING" ? (
+                            <Button size="sm" disabled={busy} onClick={() => markPayoutPaid(p)}>Mark paid</Button>
+                          ) : p.status === "PAID" ? (
+                            <span className="t-xs t-muted">{p.paidBy ? `by ${p.paidBy}` : ""} {p.paidAt ? fmtDateShort(p.paidAt) : ""}</span>
+                          ) : null,
+                      },
+                    ]}
+                  />
+                </>
+              ) : (
+                <EmptyState
+                  title="No payout run yet"
+                  body="Pick the period you're paying for and build a run. It freezes what each vendor is owed so the batch still makes sense a month later."
+                />
+              )}
+            </div>
+          </Card>
+
           {/* Deliberately OUTSIDE the Stripe checks below. Who owes you rent is
               a question about your own ledger, not about Stripe — it must still
               answer when Stripe is misconfigured or refusing to talk. */}
@@ -7849,6 +8392,63 @@ export default function AdminPage() {
                   ) : null}
                   <Note tone="info">
                     Check Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
+                  </Note>
+                </div>
+              </Card>
+
+              <Card
+                className="mb-4"
+                title="Refund approval"
+                subtitle="How much an employee can hand back before a manager has to stand there."
+              >
+                <div className="stack g-3">
+                  <Field
+                    label="Needs a manager's PIN at or above"
+                    hint="Applies to refunds and voids rung by an employee. Managers and owners authorise their own. $0 turns the check off."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number"
+                        min="0"
+                        max="1000"
+                        step="5"
+                        inputMode="decimal"
+                        value={approvalDollars}
+                        onChange={(e) => setApprovalDollars(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Button
+                    icon="check"
+                    loading={pending === "approval"}
+                    onClick={async () => {
+                      setPending("approval");
+                      try {
+                        const cents = Math.round(Number(approvalDollars) * 100);
+                        const r = await fetch("/api/admin/settings", {
+                          method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ refundApprovalCents: cents }),
+                        });
+                        if (!r.ok) {
+                          const d = await r.json().catch(() => ({}));
+                          toast.error("Couldn't save the threshold", String(d.error || ""));
+                          return;
+                        }
+                        toast.success(
+                          "Approval threshold saved",
+                          cents === 0
+                            ? "Employees can refund any amount on their own."
+                            : `Refunds of $${(cents / 100).toFixed(2)} or more now need a manager's PIN.`
+                        );
+                      } finally { setPending(""); }
+                    }}
+                  >
+                    Save threshold
+                  </Button>
+                  <Note tone="info">
+                    Every void, refund and payout is recorded with who did it — and who approved it — under
+                    Reports → Activity.
                   </Note>
                 </div>
               </Card>

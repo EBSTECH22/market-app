@@ -496,3 +496,99 @@ model RateLimit {
 
   @@index([expiresAt])
 }
+
+/// Who did what to the money.
+///
+/// Sales, refunds and ledger entries already record WHAT happened. None of them
+/// record who decided it, what it looked like before, or whether anyone
+/// approved it — so a voided ticket, a price cut at 4pm and a balance written
+/// off are all currently anonymous. With staff on the register that is exactly
+/// where money leaves a business unnoticed.
+///
+/// Append-only by convention: nothing in the app updates or deletes a row here.
+model AuditEvent {
+  id          String   @id @default(cuid())
+  at          DateTime @default(now())
+  /// STAFF (an employee session) | OWNER_KEY (the shared admin password) |
+  /// VENDOR | SYSTEM (cron, webhooks).
+  actorType   String   @default("STAFF")
+  actorId     String   @default("")
+  actorName   String   @default("")
+  actorRole   String   @default("")
+  /// A stable machine name — SALE_VOID, SALE_REFUND, ITEM_PRICE, VENDOR_LEDGER,
+  /// CONTRACT_EDIT, SETTING_CHANGE, EMPLOYEE_CHANGE, PAYOUT_PAID. Labels for
+  /// humans live in lib/auditkinds.ts so client code can read them.
+  action      String
+  targetType  String   @default("")
+  targetId    String   @default("")
+  targetLabel String   @default("")
+  /// Signed, in cents, when money moved. Positive is money out of the market.
+  amountCents Int      @default(0)
+  /// One sentence a person can read without decoding the JSON.
+  detail      String   @default("")
+  beforeJson  String   @default("")
+  afterJson   String   @default("")
+  /// The manager or owner who authorised it, when an approval was required.
+  approvedBy  String   @default("")
+  ip          String   @default("")
+
+  @@index([at])
+  @@index([action, at])
+  @@index([targetType, targetId])
+}
+
+/// A batch of vendor payouts for one period.
+///
+/// Paying vendors was a one-at-a-time ledger entry with a note, which meant no
+/// record of the batch, no statement, and no way to answer "did I pay everyone
+/// in March". A run groups the payments, freezes what each vendor was owed at
+/// the moment it was built, and survives as the thing you check against the
+/// bank statement.
+model PayoutRun {
+  id          String    @id @default(cuid())
+  /// The sales period the statements cover. The amount paid is always the
+  /// vendor's CURRENT ledger balance, not this period's sales — see the route.
+  periodStart DateTime
+  periodEnd   DateTime
+  /// OPEN while payments are still being marked, CLOSED once it's done.
+  status      String    @default("OPEN")
+  createdBy   String    @default("")
+  note        String    @default("")
+  createdAt   DateTime  @default(now())
+  closedAt    DateTime?
+  payouts     Payout[]
+
+  @@index([createdAt])
+}
+
+/// One vendor's line in a payout run.
+model Payout {
+  id                 String    @id @default(cuid())
+  runId              String
+  run                PayoutRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  vendorId           String
+  /// Copied at build time. A vendor renamed in June must not rewrite the
+  /// statement you handed them in March.
+  vendorCode         String    @default("")
+  vendorName         String    @default("")
+  /// The period's sales, for the statement.
+  grossCents         Int       @default(0)
+  commissionCents    Int       @default(0)
+  refundCents        Int       @default(0)
+  /// What the ledger said was payable when the run was built.
+  balanceCents       Int       @default(0)
+  /// What is actually being handed over.
+  netCents           Int       @default(0)
+  /// CASH | CHECK | ACH | STRIPE | RENT_OFFSET
+  method             String    @default("")
+  reference          String    @default("")
+  /// PENDING | PAID | SKIPPED
+  status             String    @default("PENDING")
+  paidAt             DateTime?
+  paidBy             String    @default("")
+  ledgerEntryId      String    @default("")
+  createdAt          DateTime  @default(now())
+
+  @@unique([runId, vendorId])
+  @@index([vendorId])
+}
