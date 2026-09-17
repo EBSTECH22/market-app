@@ -71,7 +71,7 @@ function DeliveryCell({ d }: { d: Delivery | undefined }) {
   );
 }
 
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean } };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean } };
 
 /** One recorded open of a vendor's invoice — /api/admin/contracts/{id}/views. */
 type InvoiceView = { id: string; viewedAt: string; userAgent: string | null };
@@ -393,21 +393,50 @@ function RentLedgerCards({
   );
 }
 
-function InvoiceOpensCell({ v, owes }: { v: Contract["invoiceViews"]; owes: number }) {
+/**
+ * Where one vendor's invoice stands, in the agreements table.
+ *
+ * THE BUG THIS FIXES: opening the invoice used to win over everything. The
+ * first branch was `if (count > 0)` and returned "Invoice opened 3×" and
+ * stopped — so the only vendors who could ever show "Invoice paid" were the
+ * ones who had NEVER opened it. Anybody who looked at their invoice and then
+ * paid it still read as unpaid forever.
+ *
+ * Paid comes first now. Opens are context underneath, which is all they ever
+ * were.
+ */
+function InvoiceOpensCell({
+  v, owes, rentDue, rentCharged,
+}: {
+  v: Contract["invoiceViews"];
+  /** What the whole account is short, if anything. */
+  owes: number;
+  /** Rent charged minus rent paid — the invoice question specifically. */
+  rentDue: number;
+  rentCharged: number;
+}) {
   const count = v?.count ?? 0;
+  /* relTime already reads as a phrase ("yesterday", "2 days ago"), so
+     "Last …" would produce "Last yesterday". */
+  const opens = count > 0
+    ? <span className="t-xs t-muted truncate">Opened {count}&times;{v?.lastAt ? ` · ${relTime(v.lastAt)}` : ""}</span>
+    : null;
 
-  if (count > 0) {
-    return (
-      <div className="stack g-1" style={{ minWidth: 0 }}>
-        <Badge tone="info" icon="eye">Invoice opened {count}&times;</Badge>
-        {/* relTime already reads as a phrase ("yesterday", "2 days ago"), so
-            "Last …" would produce "Last yesterday". */}
-        {v?.lastAt ? <span className="t-xs t-muted truncate">Last opened {relTime(v.lastAt)}</span> : null}
-      </div>
-    );
-  }
+  const wrap = (badge: ReactNode) => (
+    <div className="stack g-1" style={{ minWidth: 0 }}>{badge}{opens}</div>
+  );
 
-  if (owes <= 0) return <Badge tone="success" icon="checkCircle">Invoice paid</Badge>;
+  // Nothing has been billed yet, so there is no invoice to have paid.
+  if (rentCharged === 0) return wrap(<Badge tone="neutral">Not billed yet</Badge>);
+
+  if (rentDue <= 0) return wrap(<Badge tone="success" icon="checkCircle">Invoice paid</Badge>);
+
+  /* Rent outstanding but the account is square — their sales credits or an
+     adjustment cover it. Nothing to chase, but they didn't pay it. */
+  if (owes <= 0) return wrap(<Badge tone="info" dot>Covered by their sales</Badge>);
+
+  if (count > 0) return wrap(<Badge tone="warn" icon="eye">Opened, not paid</Badge>);
+
   if (v?.tracked === false) {
     return (
       <span title="Their invoice was sent before open-tracking existed, so there is nothing recorded either way.">
@@ -7658,7 +7687,12 @@ export default function AdminPage() {
                     <div className="stack g-1" style={{ minWidth: 0 }}>
                       <DeliveryCell d={c.delivery} />
                       {c.vendorSignedAt && c.marketSignedAt ? (
-                        <InvoiceOpensCell v={c.invoiceViews} owes={Math.max(0, -(c.vendorBalanceCents ?? 0))} />
+                        <InvoiceOpensCell
+                          v={c.invoiceViews}
+                          owes={Math.max(0, -(c.vendorBalanceCents ?? 0))}
+                          rentDue={c.rentDueCents ?? 0}
+                          rentCharged={c.rentChargedCents ?? 0}
+                        />
                       ) : null}
                     </div>
                   ),
@@ -7863,9 +7897,11 @@ export default function AdminPage() {
                           <span className="t-muted">
                             {iv.tracked === false
                               ? "Their invoice was sent before open-tracking existed, so there's nothing recorded either way."
-                              : (c.vendorBalanceCents ?? 0) >= 0
-                                ? "Nothing outstanding — they've paid."
-                                : "They haven\u2019t opened it yet."}
+                              : (c.rentChargedCents ?? 0) === 0
+                                ? "Nothing has been billed to them yet."
+                                : (c.rentDueCents ?? 0) <= 0
+                                  ? "Paid in full — they never needed to open it."
+                                  : "They haven\u2019t opened it yet."}
                           </span>
                         ) : (
                           <>
@@ -7873,6 +7909,15 @@ export default function AdminPage() {
                             {iv.lastAt ? (
                               <span className="t-muted">
                                 , most recently {relTime(iv.lastAt)} ({fmtDateTime(iv.lastAt)})
+                              </span>
+                            ) : null}
+                            {/* Opens without this read as a complaint about a
+                                vendor who has already paid. */}
+                            {(c.rentChargedCents ?? 0) > 0 ? (
+                              <span className="t-muted">
+                                {" "}— {(c.rentDueCents ?? 0) <= 0
+                                  ? "and it's paid."
+                                  : `and ${money(c.rentDueCents ?? 0)} of rent is still outstanding.`}
                               </span>
                             ) : null}
                           </>
