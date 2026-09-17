@@ -710,11 +710,13 @@ export default function Storefront({ params }: { params: { code: string } }) {
                                 <Badge tone="danger">{i.salePercent}% off</Badge>
                               </span>
                             ) : null}
-                            {i.quantity <= 3 ? (
-                              <span style={{ position: "absolute", top: 8, right: 8 }}>
-                                <Badge tone="warn">{i.quantity} left</Badge>
-                              </span>
-                            ) : null}
+                            {/* No "3 left" badge here on purpose. The booth
+                                count is only right if every single sale went
+                                through the register, and at a market it
+                                doesn't — a vendor sells two at their own booth
+                                and the shelf figure is wrong until somebody
+                                fixes it. A public page promising "2 left" when
+                                there are none is worse than saying nothing. */}
                           </span>
 
                           <span className="stack g-1" style={{ padding: "0 var(--sp-3) var(--sp-3)" }}>
@@ -1002,17 +1004,11 @@ export default function Storefront({ params }: { params: { code: string } }) {
                   which can be zero for a product that pre-orders fine. */}
               {openShop ? (
                 <>
-                  <Badge tone={openItem.onlineQuantity <= 3 ? "warn" : "success"} dot>
-                    {openItem.onlineQuantity <= 3
-                      ? `Only ${openItem.onlineQuantity} to pre-order`
-                      : `${openItem.onlineQuantity} available to pre-order`}
-                  </Badge>
+                  <Badge tone="success" dot>Available to pre-order</Badge>
                   {openItem.inStock ? <Badge tone="neutral">Also in the booth today</Badge> : null}
                 </>
               ) : (
-                <Badge tone={openItem.quantity <= 3 ? "warn" : "success"} dot>
-                  {openItem.quantity <= 3 ? `Only ${openItem.quantity} left` : "In stock"}
-                </Badge>
+                <Badge tone="success" dot>In the booth today</Badge>
               )}
             </div>
 

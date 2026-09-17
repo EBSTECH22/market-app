@@ -14,7 +14,7 @@ import { subscribeToPush } from "@/lib/pushclient";
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
 };
 type Thread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; last: { sender: string; body: string } | null };
@@ -72,8 +72,15 @@ const THREAD_ICON = (type: string): IconName =>
 const effectivePriceCents = (it: Item): number =>
   Math.max(0, Math.round((it.priceCents * (100 - Math.min(90, Math.max(0, it.salePercent || 0)))) / 100));
 
-/** Anything at or below this gets a badge so a thin shelf is obvious. */
-const LOW_STOCK = 3;
+/**
+ * Default warning threshold for a vendor who has never changed it.
+ *
+ * It is a DEFAULT, not a rule. A vendor selling one-of-a-kind work keeps every
+ * item at a quantity of one on purpose, and a fixed threshold stamped "low
+ * stock" across their whole booth and then nagged them about it on the
+ * dashboard. Each vendor sets their own now, and 0 turns it off.
+ */
+const LOW_STOCK_DEFAULT = 3;
 
 /**
  * One password form, used by both the forced first-change screen and the
@@ -592,6 +599,21 @@ export default function VendorDashboard() {
     } finally { setBusy(false); }
   };
 
+  /** Save the vendor's own low-stock threshold. 0 turns the warnings off. */
+  const saveLowStock = async (raw: string) => {
+    const n = Math.max(0, Math.min(99, Math.round(Number(raw) || 0)));
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lowStockThreshold: n }),
+      });
+      if (!r.ok) { toast.error("Couldn't save that"); return; }
+      await load();
+      toast.success(n === 0 ? "Low stock warnings off" : `Warning at ${n} or fewer`);
+    } finally { setBusy(false); }
+  };
+
   const savePublic = async () => {
     setBusy(true);
     try {
@@ -989,7 +1011,9 @@ export default function VendorDashboard() {
   const activeItems = me.items.filter((it) => it.active);
   const retiredItems = me.items.filter((it) => !it.active);
   const floorUnits = me.items.reduce((n, i) => n + (i.active ? i.quantity : 0), 0);
-  const lowStock = activeItems.filter((it) => it.quantity <= LOW_STOCK).length;
+  /* 0 means the vendor has switched these warnings off entirely. */
+  const lowStockAt = me.vendor.lowStockThreshold ?? LOW_STOCK_DEFAULT;
+  const lowStock = lowStockAt > 0 ? activeItems.filter((it) => it.quantity <= lowStockAt).length : 0;
   const onSale = activeItems.filter((it) => (it.salePercent || 0) > 0).length;
   const meta = TAB_META[tab];
   const editing = activeItems.find((it) => it.id === editItem) || null;
@@ -1037,7 +1061,7 @@ export default function VendorDashboard() {
           <span className="num">{it.quantity}</span>
           {it.quantity === 0 ? (
             <Badge tone="danger" dot>Sold out</Badge>
-          ) : it.quantity <= LOW_STOCK ? (
+          ) : lowStockAt > 0 && it.quantity <= lowStockAt ? (
             <Badge tone="warn" dot>Low stock</Badge>
           ) : null}
         </span>
@@ -1229,7 +1253,8 @@ export default function VendorDashboard() {
                   title={`${plural(lowStock, "item is", "items are")} running low`}
                   action={<Button size="sm" variant="secondary" onClick={() => go("items")}>See items</Button>}
                 >
-                  Anything at {LOW_STOCK} units or fewer is close to selling out. Restock it on your next trip in.
+                  Anything at {lowStockAt} {lowStockAt === 1 ? "unit" : "units"} or fewer. If you sell one-of-a-kind
+                  pieces, set this to 0 on the Items tab and these warnings stop.
                 </Note>
               ) : null}
 
@@ -1452,6 +1477,31 @@ export default function VendorDashboard() {
                       </Button>
                     ) : null}
                   </>
+                }
+                footer={
+                  /* In the footer because this is where a vendor is standing
+                     when the badges annoy them, and it saves on change — a
+                     one-field form with a Save button is a form nobody
+                     finishes. */
+                  <div className="row wrap g-3" style={{ alignItems: "center" }}>
+                    <label className="t-sm" htmlFor="lowstock">Low stock warning at or below</label>
+                    <Input
+                      id="lowstock"
+                      type="number"
+                      min="0"
+                      max="99"
+                      inputMode="numeric"
+                      value={String(lowStockAt)}
+                      disabled={busy}
+                      style={{ width: 88 }}
+                      onChange={(e) => void saveLowStock(e.target.value)}
+                    />
+                    <span className="t-sm t-muted">
+                      {lowStockAt === 0
+                        ? "units — off. Nothing gets a low-stock badge."
+                        : `${lowStockAt === 1 ? "unit" : "units"} left. Set it to 0 if you sell one-of-a-kind pieces.`}
+                    </span>
+                  </div>
                 }
                 flush
               >

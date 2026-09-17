@@ -248,7 +248,9 @@ export default function MarketDirectory() {
                             {sale ? " " : ""}
                             <b className={sale ? "t-danger" : undefined}>{money(i.priceCents)}</b>
                             {sale ? ` · ${i.salePercent}% off` : ""}
-                            {i.quantity <= 3 ? ` · ${i.quantity} left` : ""}
+                            {/* No "2 left" here either — see the note on the
+                                vendor storefront. Shelf counts drift the
+                                moment a vendor sells one at their own booth. */}
                           </span>
                         );
                       })}

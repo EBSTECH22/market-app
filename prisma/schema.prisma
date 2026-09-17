@@ -20,6 +20,11 @@ model Vendor {
   acceptsPreorders  Boolean  @default(false)
   acceptsRequests   Boolean  @default(false)
   allowSelfCheckout Boolean  @default(true)
+  // Warn this vendor when an item drops to this many units. 0 turns it off —
+  // which is the right setting for anyone selling one-of-a-kind goods, where
+  // every item legitimately sits at a quantity of one forever and a fixed
+  // threshold painted "low stock" across their entire booth.
+  lowStockThreshold Int      @default(3)
   lastRestockAlertAt DateTime?
   portalLocked     Boolean @default(false)
   stripeCustomerId String  @default("")

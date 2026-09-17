@@ -20,7 +20,7 @@ import { auditLabel, actorLabel } from "@/lib/auditkinds";
 import { newSaleKey } from "@/lib/offline";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
-type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string };
+type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string };
 /** Computed server-side in /api/admin/contracts — see src/lib/agreement.ts. */
@@ -9725,7 +9725,20 @@ function downloadReportCsv(r: Report, scopeLabel: string) {
    uses it rather than in the page-level pile of hooks.
    ========================================================================== */
 
-const LOW_STOCK = 3;
+/**
+ * Fallback only, for a row that arrived before vendors had their own setting.
+ *
+ * Each vendor sets their own threshold in their portal and 0 means never flag
+ * it — the fixed rule used to stamp "running low" across every item of anyone
+ * selling one-of-a-kind work, where a quantity of one is the normal state.
+ */
+const LOW_STOCK_DEFAULT = 3;
+
+/** Is this row actually low, by its own vendor's rule? */
+const isLow = (i: FloorItem): boolean => {
+  const at = i.lowStockAt ?? LOW_STOCK_DEFAULT;
+  return at > 0 && i.quantity > 0 && i.quantity <= at;
+};
 
 function FloorStockCard({
   items,
@@ -9743,7 +9756,7 @@ function FloorStockCard({
     : items;
 
   const outCount = items.filter((i) => i.quantity === 0).length;
-  const lowCount = items.filter((i) => i.quantity > 0 && i.quantity <= LOW_STOCK).length;
+  const lowCount = items.filter(isLow).length;
   const unitCount = items.reduce((s, i) => s + i.quantity, 0);
 
   const columns: Column<FloorItem>[] = [
@@ -9785,7 +9798,7 @@ function FloorStockCard({
       cell: (i) =>
         i.quantity === 0 ? (
           <Badge tone="danger" dot>Out of stock</Badge>
-        ) : i.quantity <= LOW_STOCK ? (
+        ) : isLow(i) ? (
           <Badge tone="warn" dot>Only {i.quantity} left</Badge>
         ) : (
           <span className="num">{i.quantity}</span>

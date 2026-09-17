@@ -22,7 +22,7 @@ export async function GET() {
     db.refund.findMany({ where: { createdAt: { gte: monthStart }, note: { not: { startsWith: "VOID" } } } }),
     db.item.findMany({
       where: { active: true, vendor: { active: true } },
-      include: { vendor: { select: { businessName: true, code: true } } },
+      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true } } },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     }),
     db.vendor.count({ where: { active: true } }),
@@ -42,6 +42,10 @@ export async function GET() {
       salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity,
       taxClass: String(i.taxClass || "STANDARD"),
       vendorName: i.vendor.businessName, vendorCode: i.vendor.code,
+      /* Each vendor's own threshold travels with the row, so the market's floor
+         list doesn't flag a one-of-a-kind booth as running low when the vendor
+         has told us that's just how they stock. 0 means never flag it. */
+      lowStockAt: i.vendor.lowStockThreshold,
     })),
   });
 }
