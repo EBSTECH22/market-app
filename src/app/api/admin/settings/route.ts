@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { denyUnless } from "@/lib/perm";
 import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent } from "@/lib/settings";
 import { getApprovalThresholdCents, setApprovalThresholdCents, recordAudit } from "@/lib/audit";
+import { getPayoutFee, setPayoutFee } from "@/lib/payouts";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 export async function GET() {
   // The register and the kiosk read the tax rates from here on every load.
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents() });
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee() });
 }
 
 /** Every change to a market-wide setting goes in the log, with what it was. */
@@ -74,6 +75,24 @@ export async function POST(req: NextRequest) {
         : `Refunds of $${(v / 100).toFixed(2)} or more now need a manager's PIN (was $${(before / 100).toFixed(2)})`
     );
     return NextResponse.json({ ok: true, refundApprovalCents: Math.round(v) });
+  }
+
+  if (body.payoutFeePercent !== undefined || body.payoutFeeFixedCents !== undefined) {
+    const before = await getPayoutFee();
+    const percent = body.payoutFeePercent === undefined ? before.percent : Number(body.payoutFeePercent);
+    const fixed = body.payoutFeeFixedCents === undefined ? before.fixedCents : Number(body.payoutFeeFixedCents);
+    if (!Number.isFinite(percent) || percent < 0 || percent > 5) {
+      return NextResponse.json({ error: "Payout fee percent must be between 0 and 5%." }, { status: 400 });
+    }
+    if (!Number.isFinite(fixed) || fixed < 0 || fixed > 1000) {
+      return NextResponse.json({ error: "Fixed payout fee must be between $0 and $10." }, { status: 400 });
+    }
+    await setPayoutFee(percent, fixed);
+    await auditSetting(
+      req, "payoutFee", before, { percent, fixedCents: Math.round(fixed) },
+      `Vendor payout fee set to ${percent}% + $${(fixed / 100).toFixed(2)} (was ${before.percent}% + $${(before.fixedCents / 100).toFixed(2)})`
+    );
+    return NextResponse.json({ ok: true, payoutFee: { percent, fixedCents: Math.round(fixed) } });
   }
 
   if (body.cardAdjustPercent !== undefined) {

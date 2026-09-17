@@ -579,6 +579,15 @@ type PayoutRow = {
   status: string;
   paidAt: string | null;
   paidBy: string;
+  transferId?: string;
+  feeCents?: number;
+  failureReason?: string;
+  /** Live from the vendor row, not frozen into the run. */
+  payoutsEnabled: boolean;
+  hasAccount: boolean;
+  accountNote: string;
+  quotedFeeCents: number;
+  quotedSendCents: number;
 };
 
 const DENOMS: [string, string, number][] = [
@@ -933,6 +942,8 @@ export default function AdminPage() {
   /* Dollars as typed, not cents — the field is a text input and rounding it on
      every keystroke fights the person using it. */
   const [approvalDollars, setApprovalDollars] = useState("50");
+  const [feePercentInput, setFeePercentInput] = useState("0.25");
+  const [feeFixedInput, setFeeFixedInput] = useState("0.25");
   const [cardConfirm, setCardConfirm] = useState(false);
   /* Cash used to book the instant you pressed the button — no tender, no
      change, nothing on the receipt saying what was handed over. */
@@ -1044,7 +1055,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); if (sd.payoutFee) { setFeePercentInput(String(sd.payoutFee.percent)); setFeeFixedInput((sd.payoutFee.fixedCents / 100).toFixed(2)); } }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -1256,6 +1267,8 @@ export default function AdminPage() {
   const [payRuns, setPayRuns] = useState<PayoutRunRow[]>([]);
   const [payRunId, setPayRunId] = useState("");
   const [payouts, setPayouts] = useState<PayoutRow[]>([]);
+  const [stripeBalance, setStripeBalance] = useState<number | null>(null);
+  const [payoutFee, setPayoutFee] = useState<{ percent: number; fixedCents: number }>({ percent: 0.25, fixedCents: 25 });
   const [payFromDate, setPayFromDate] = useState(() => `${isoDate().slice(0, 7)}-01`);
   const [payToDate, setPayToDate] = useState(() => isoDate());
   const [payErr, setPayErr] = useState("");
@@ -1266,7 +1279,80 @@ export default function AdminPage() {
     setPayRuns((d.runs || []) as PayoutRunRow[]);
     setPayRunId(String(d.runId || ""));
     setPayouts((d.payouts || []) as PayoutRow[]);
+    setStripeBalance(typeof d.stripeBalanceCents === "number" ? d.stripeBalanceCents : null);
+    if (d.fee) setPayoutFee(d.fee as { percent: number; fixedCents: number });
   }, []);
+
+  /** Send one vendor their money by bank transfer. */
+  const sendPayout = async (p: PayoutRow) => {
+    const yes = await dialog.confirm({
+      title: `Send ${money(p.quotedSendCents)} to ${p.vendorName}?`,
+      body: (
+        <>
+          <p>
+            They&rsquo;re owed {money(p.netCents)}. {money(p.quotedFeeCents)} comes off as the transfer fee, so
+            <b> {money(p.quotedSendCents)}</b> reaches their bank in a day or two.
+          </p>
+          <p style={{ marginTop: 8 }}>This moves real money out of your Stripe balance and can&rsquo;t be pulled back.</p>
+        </>
+      ),
+      confirmLabel: "Send it",
+      tone: "danger",
+    });
+    if (!yes) return;
+
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/payouts", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payoutId: p.id, method: "STRIPE" }),
+      });
+      if (!ok) { toast.error(`Couldn't pay ${p.vendorName}`, String(data.error || "")); await loadPayouts(payRunId); return; }
+      toast.success(`${p.vendorName} paid`, `${money(Number(data.sentCents) || 0)} on its way to their bank.`);
+      await loadPayouts(payRunId);
+      await loadAll();
+    } finally { setBusy(false); }
+  };
+
+  /** The whole run, in one go. */
+  const payEveryone = async () => {
+    const payable = payouts.filter((p) => p.status === "PENDING" && p.netCents > 0 && p.payoutsEnabled);
+    if (!payable.length) { toast.error("Nobody to pay", "No one on this run has a connected bank account."); return; }
+    const total = payable.reduce((n, p) => n + p.quotedSendCents, 0);
+
+    const yes = await dialog.confirm({
+      title: `Pay ${plural(payable.length, "vendor")}?`,
+      body: (
+        <p>
+          {money(total)} leaves your Stripe balance and lands in their banks in a day or two. Anyone who
+          hasn&rsquo;t connected a bank account is skipped and stays on the run.
+        </p>
+      ),
+      confirmLabel: `Send ${money(total)}`,
+      tone: "danger",
+      typeToConfirm: "PAY",
+    });
+    if (!yes) return;
+
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/payouts", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pay_all", runId: payRunId }),
+      });
+      if (!ok) { toast.error("Couldn't run the payouts", String(data.error || "")); return; }
+      const failed = (data.failed as { vendorName: string; reason: string }[]) || [];
+      toast.success(
+        `${plural(Number(data.paidCount) || 0, "vendor")} paid`,
+        `${money(Number(data.paidCents) || 0)} sent.${failed.length ? ` ${plural(failed.length, "vendor")} couldn't be paid — see the run.` : ""}`
+      );
+      if (data.stopped) {
+        await dialog.alert({ title: "The run stopped early", body: String(data.stopped), tone: "warn" });
+      }
+      await loadPayouts(payRunId);
+      await loadAll();
+    } finally { setBusy(false); }
+  };
 
   useEffect(() => {
     if (authed && allowed("financials") && tab === "reports") { loadTaxReport(taxMonth); loadAudit(auditFilter, auditDays); }
@@ -5657,6 +5743,15 @@ export default function AdminPage() {
                       sub={`${payouts.filter((p) => p.status === "PENDING").length} vendors`}
                       icon="dollar"
                     />
+                    {/* Transfers come out of this, and cash taken at the
+                        register never reaches it. Worth seeing before you
+                        press pay, not after a transfer bounces. */}
+                    <Stat
+                      label="Stripe balance"
+                      value={stripeBalance === null ? "—" : money(stripeBalance)}
+                      sub="What you can send today"
+                      icon="bank"
+                    />
                     <Stat
                       label="Paid on this run"
                       value={money(payouts.filter((p) => p.status === "PAID").reduce((n, p) => n + p.netCents, 0))}
@@ -5668,6 +5763,43 @@ export default function AdminPage() {
                       sub={`${payouts.filter((p) => p.balanceCents < 0).length} vendors behind`}
                     />
                   </div>
+
+                  {(() => {
+                    const pending = payouts.filter((p) => p.status === "PENDING" && p.netCents > 0);
+                    const ready = pending.filter((p) => p.payoutsEnabled);
+                    const notConnected = pending.filter((p) => !p.payoutsEnabled);
+                    const needed = ready.reduce((n, p) => n + p.quotedSendCents, 0);
+                    const short = stripeBalance !== null && needed > stripeBalance;
+                    return (
+                      <div className="stack g-3">
+                        {short ? (
+                          <Note tone="warn" title="Your Stripe balance won't cover this run">
+                            {money(needed)} to send, {money(stripeBalance || 0)} available. Card sales and card rent
+                            payments fund that balance — cash taken at the register doesn&rsquo;t. Add funds in Stripe,
+                            or pay the difference from the till and mark those by hand.
+                          </Note>
+                        ) : null}
+
+                        {notConnected.length ? (
+                          <Note tone="info">
+                            {plural(notConnected.length, "vendor")} can&rsquo;t be paid by bank yet — they haven&rsquo;t
+                            finished connecting an account in their portal. They&rsquo;ll be skipped and stay on the run.
+                          </Note>
+                        ) : null}
+
+                        {ready.length ? (
+                          <div className="row wrap g-2">
+                            <Button size="lg" icon="bank" disabled={busy} onClick={payEveryone}>
+                              Pay {plural(ready.length, "vendor")} — {money(needed)}
+                            </Button>
+                            <span className="t-xs t-muted" style={{ alignSelf: "center" }}>
+                              Fee of {payoutFee.percent}% + {money(payoutFee.fixedCents)} per vendor comes off their payout.
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
 
                   <DataTable
                     rows={payouts}
@@ -5702,16 +5834,34 @@ export default function AdminPage() {
                       {
                         key: "status",
                         header: "Status",
-                        cell: (p) =>
-                          p.status === "PAID" ? (
-                            <Badge tone="success" dot>
-                              {p.method === "CHECK" && p.reference ? `Check ${p.reference}` : "Paid"}
-                            </Badge>
-                          ) : p.status === "SKIPPED" ? (
-                            <Badge tone="neutral">Nothing owed</Badge>
-                          ) : (
-                            <Badge tone="warn" dot>To pay</Badge>
-                          ),
+                        cell: (p) => (
+                          <span className="stack g-1">
+                            {p.status === "PAID" ? (
+                              <Badge tone="success" dot>
+                                {p.method === "STRIPE" ? "Sent to bank"
+                                  : p.method === "CHECK" && p.reference ? `Check ${p.reference}`
+                                  : "Paid"}
+                              </Badge>
+                            ) : p.status === "SKIPPED" ? (
+                              <Badge tone="neutral">Nothing owed</Badge>
+                            ) : p.status === "SENDING" ? (
+                              <Badge tone="info" dot>Sending…</Badge>
+                            ) : p.payoutsEnabled ? (
+                              <Badge tone="warn" dot>Ready to send</Badge>
+                            ) : p.hasAccount ? (
+                              <Badge tone="neutral" dot>Bank setup unfinished</Badge>
+                            ) : (
+                              <Badge tone="neutral" dot>No bank connected</Badge>
+                            )}
+                            {p.status === "PAID" && (p.feeCents || 0) > 0 ? (
+                              <span className="t-xs t-muted">less {money(p.feeCents || 0)} fee</span>
+                            ) : null}
+                            {p.failureReason ? <span className="t-xs t-danger">{p.failureReason}</span> : null}
+                            {p.status === "PENDING" && !p.payoutsEnabled && p.accountNote ? (
+                              <span className="t-xs t-muted">{p.accountNote}</span>
+                            ) : null}
+                          </span>
+                        ),
                       },
                       {
                         key: "action",
@@ -5719,7 +5869,19 @@ export default function AdminPage() {
                         align: "right",
                         cell: (p) =>
                           p.status === "PENDING" ? (
-                            <Button size="sm" disabled={busy} onClick={() => markPayoutPaid(p)}>Mark paid</Button>
+                            <span className="row wrap g-2 end">
+                              {p.payoutsEnabled ? (
+                                <Button size="sm" icon="bank" disabled={busy} onClick={() => void sendPayout(p)}>
+                                  Send {money(p.quotedSendCents)}
+                                </Button>
+                              ) : null}
+                              {/* Cash and checks stay possible, just not the
+                                  default — some vendor will always refuse to
+                                  hand their bank details to anyone. */}
+                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => markPayoutPaid(p)}>
+                                By hand
+                              </Button>
+                            </span>
                           ) : p.status === "PAID" ? (
                             <span className="t-xs t-muted">{p.paidBy ? `by ${p.paidBy}` : ""} {p.paidAt ? fmtDateShort(p.paidAt) : ""}</span>
                           ) : null,
@@ -8699,6 +8861,57 @@ export default function AdminPage() {
                   ) : null}
                   <Note tone="info">
                     Check Noble&rsquo;s current combined rate with the Oklahoma Tax Commission before opening day.
+                  </Note>
+                </div>
+              </Card>
+
+              <Card
+                className="mb-4"
+                title="Vendor payout fee"
+                subtitle="What each vendor is charged when their balance is sent to their bank."
+              >
+                <div className="stack g-3">
+                  <div className="row wrap g-3">
+                    <Field label="Percent of the payout" className="grow">
+                      {(p) => (
+                        <Input {...p} type="number" min="0" max="5" step="0.05" inputMode="decimal"
+                          value={feePercentInput} onChange={(e) => setFeePercentInput(e.target.value)} />
+                      )}
+                    </Field>
+                    <Field label="Plus, per payout ($)" className="grow">
+                      {(p) => (
+                        <Input {...p} type="number" min="0" max="10" step="0.05" inputMode="decimal"
+                          value={feeFixedInput} onChange={(e) => setFeeFixedInput(e.target.value)} />
+                      )}
+                    </Field>
+                  </div>
+                  <Button
+                    icon="check"
+                    loading={pending === "payoutfee"}
+                    onClick={async () => {
+                      setPending("payoutfee");
+                      try {
+                        const r = await fetch("/api/admin/settings", {
+                          method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            payoutFeePercent: Number(feePercentInput),
+                            payoutFeeFixedCents: Math.round(Number(feeFixedInput) * 100),
+                          }),
+                        });
+                        if (!r.ok) {
+                          const d = await r.json().catch(() => ({}));
+                          toast.error("Couldn't save the payout fee", String(d.error || ""));
+                          return;
+                        }
+                        toast.success("Payout fee saved", "It comes off each vendor's payout and shows on their statement.");
+                      } finally { setPending(""); }
+                    }}
+                  >
+                    Save payout fee
+                  </Button>
+                  <Note tone="info">
+                    Stripe charges you 0.25% + $0.25 per payout, plus $2 a month per vendor you actually pay that
+                    month. The default here passes on the per-payout part and absorbs the $2.
                   </Note>
                 </div>
               </Card>

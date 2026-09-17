@@ -5,6 +5,7 @@ import { finalizeRentAndNotify } from "@/lib/rentfinalize";
 import { finalizeSelfCartIfPaid } from "@/lib/selfcheckout";
 import { finalizeIfPaid as finalizePreorderIfPaid } from "@/lib/preorder";
 import { finalizeTentIfPaid } from "@/lib/tents";
+import { refreshAccountStatus } from "@/lib/payouts";
 
 /**
  * Stripe's server-to-server notification that money actually moved.
@@ -20,9 +21,16 @@ import { finalizeTentIfPaid } from "@/lib/tents";
  * matters because Stripe delivers at least once and can retry.
  *
  * SETUP: add this URL in the Stripe dashboard under Developers → Webhooks,
- * listening for `checkout.session.completed`, then put the signing secret in
- * STRIPE_WEBHOOK_SECRET. Without that variable this endpoint refuses
- * everything — it will not process unverified events.
+ * listening for `checkout.session.completed` and `account.updated`, then put
+ * the signing secret in STRIPE_WEBHOOK_SECRET. Without that variable this
+ * endpoint refuses everything — it will not process unverified events.
+ *
+ * `account.updated` has to be enabled for CONNECTED ACCOUNTS (the "listen to
+ * events on connected accounts" checkbox), because it is about a vendor's own
+ * Stripe account rather than the market's. It is what keeps "can this vendor be
+ * paid" honest: onboarding can stall days later when Stripe asks for another
+ * document, and without this event the app would keep believing the answer it
+ * got the day they signed up.
  */
 
 // Node runtime: signature verification needs the raw body, and the Stripe SDK
@@ -62,6 +70,8 @@ export async function POST(req: NextRequest) {
   try {
     if (event.type === "checkout.session.completed") {
       await handleCompletedSession(event.data.object);
+    } else if (event.type === "account.updated") {
+      await handleAccountUpdated(event.data.object);
     }
     // Other event types are acknowledged and ignored — returning non-200 would
     // make Stripe retry something we were never going to act on.
@@ -73,6 +83,21 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ received: true });
+}
+
+/**
+ * A vendor's connected account changed — verified, or newly blocked.
+ *
+ * The account id is looked up rather than trusted: the event carries whatever
+ * Stripe sends, and the vendor row is only touched when the id actually matches
+ * one of ours.
+ */
+async function handleAccountUpdated(account: Record<string, unknown>): Promise<void> {
+  const accountId = String(account.id || "");
+  if (!accountId) return;
+  const vendor = await db.vendor.findFirst({ where: { stripeAccountId: accountId }, select: { id: true } });
+  if (!vendor) return;
+  await refreshAccountStatus(vendor.id);
 }
 
 /**

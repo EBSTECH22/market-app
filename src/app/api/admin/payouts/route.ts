@@ -4,6 +4,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
 import { centralInputToDate, centralMonthStart } from "@/lib/time";
+import { transferToVendor, stripeBalanceCents, getPayoutFee, feeFor, refreshAccountStatus } from "@/lib/payouts";
 
 export const dynamic = "force-dynamic";
 
@@ -47,13 +48,16 @@ type PeriodRow = {
   refundCents: number;
   balanceCents: number;
   netCents: number;
+  /** Whether Stripe will accept a transfer to them right now. */
+  payoutsEnabled: boolean;
+  hasAccount: boolean;
 };
 
 /** What each vendor sold in the window, and what the books say they're owed now. */
 async function buildRows(periodStart: Date, periodEnd: Date): Promise<PeriodRow[]> {
   const vendors = await db.vendor.findMany({
     where: { active: true },
-    select: { id: true, code: true, businessName: true },
+    select: { id: true, code: true, businessName: true, stripeAccountId: true, payoutsEnabled: true },
     orderBy: { code: "asc" },
   });
 
@@ -99,6 +103,8 @@ async function buildRows(periodStart: Date, periodEnd: Date): Promise<PeriodRow[
         refundCents: refunded.get(v.id) || 0,
         balanceCents,
         netCents: balanceCents > 0 ? balanceCents : 0,
+        payoutsEnabled: !!v.payoutsEnabled,
+        hasAccount: !!v.stripeAccountId,
       };
     })
     .filter((r) => r.grossCents > 0 || r.balanceCents !== 0)
@@ -149,11 +155,56 @@ export async function GET(req: NextRequest) {
     }));
 
     const openId = runId || list[0]?.id || "";
-    const payouts = openId
+    const stored = openId
       ? await db.payout.findMany({ where: { runId: openId }, orderBy: { netCents: "desc" } })
       : [];
 
-    return NextResponse.json({ runs: list, runId: openId, payouts, methodLabels: METHOD_LABEL });
+    /* Whether each vendor can actually be sent money today. Read fresh rather
+       than frozen into the run: a vendor who connects their bank on Tuesday
+       should be payable on a run built on Monday. */
+    const runVendorIds = [...new Set(stored.map((x) => x.vendorId))];
+    const connectRows = runVendorIds.length
+      ? await db.vendor.findMany({
+          where: { id: { in: runVendorIds } },
+          select: { id: true, stripeAccountId: true, payoutsEnabled: true, payoutStatusNote: true },
+        })
+      : [];
+    type Connect = { id: string; stripeAccountId: string; payoutsEnabled: boolean; payoutStatusNote: string };
+    const connectOf = new Map<string, Connect>(connectRows.map((v) => [v.id, v] as [string, Connect]));
+
+    const fee0 = await getPayoutFee();
+    const payouts = stored.map((x) => {
+      const c = connectOf.get(x.vendorId);
+      const quote = feeFor(x.netCents, fee0);
+      return {
+        ...x,
+        payoutsEnabled: !!c?.payoutsEnabled,
+        hasAccount: !!c?.stripeAccountId,
+        accountNote: c?.payoutStatusNote || "",
+        /* What a bank transfer would cost and deliver, quoted before anyone
+           commits to it — the fee comes off the vendor, so they should never
+           find out what it was from the statement afterwards. */
+        quotedFeeCents: x.status === "PAID" ? x.feeCents : quote.feeCents,
+        quotedSendCents: x.status === "PAID" ? x.netCents - x.feeCents : quote.sendableCents,
+      };
+    });
+
+    /* The Stripe balance sits next to the run total on screen for one reason:
+       transfers come out of it, and cash taken at the register never lands
+       there. Finding that out from a failed transfer mid-run is a bad way to
+       learn it. */
+    const [balanceCents, fee] = await Promise.all([stripeBalanceCents(), getPayoutFee()]);
+    const payableCents = payouts.filter((p2) => p2.status === "PENDING").reduce((n, p2) => n + p2.netCents, 0);
+
+    return NextResponse.json({
+      runs: list,
+      runId: openId,
+      payouts,
+      methodLabels: METHOD_LABEL,
+      stripeBalanceCents: balanceCents,
+      shortfallCents: balanceCents === null ? 0 : Math.max(0, payableCents - balanceCents),
+      fee,
+    });
   });
 }
 
@@ -223,6 +274,101 @@ export async function POST(req: NextRequest) {
   });
 }
 
+/**
+ * Send one payout by bank transfer and write it into the books.
+ *
+ * ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE. The row is claimed FIRST, with a
+ * conditional update, and only then is the money sent. Claiming afterwards
+ * would leave a window where two clicks both see PENDING and both transfer —
+ * and a transfer, unlike a ledger row, cannot be undone from here. If the
+ * transfer then fails, the claim is released and the reason is stored, so the
+ * row goes back to being payable rather than being stuck as paid.
+ *
+ * Stripe is also given the payout id as an idempotency key, so even a retry
+ * that gets past this code can only ever produce one transfer.
+ */
+async function payByTransfer(
+  payout: { id: string; vendorId: string; vendorCode: string; vendorName: string; netCents: number; status: string; runId: string },
+  paidBy: string,
+  req: NextRequest
+) {
+  const claimed = await db.payout.updateMany({
+    where: { id: payout.id, status: "PENDING" },
+    data: { status: "SENDING", method: "STRIPE", paidBy },
+  });
+  if (claimed.count === 0) {
+    return { ok: false as const, error: "That payout is already being paid.", code: "BUSY" };
+  }
+
+  const result = await transferToVendor(
+    payout.vendorId,
+    payout.netCents,
+    payout.id,
+    `Community Harvest payout — ${payout.vendorName} (${payout.vendorCode})`
+  );
+
+  if (!result.ok) {
+    // Put it back. A failed transfer must not leave a row that looks paid.
+    await db.payout.update({
+      where: { id: payout.id },
+      data: { status: "PENDING", method: "", failureReason: result.error.slice(0, 200) },
+    });
+    return { ok: false as const, error: result.error, code: result.code };
+  }
+
+  await db.payout.update({
+    where: { id: payout.id },
+    data: {
+      status: "PAID",
+      method: "STRIPE",
+      transferId: result.transferId,
+      feeCents: result.feeCents,
+      reference: result.transferId,
+      paidAt: new Date(),
+      paidBy,
+      failureReason: "",
+    },
+  });
+
+  /* Two ledger entries, not one. The vendor was owed the full amount; part of
+     it went to them and part covered the transfer fee. Netting those into a
+     single line would leave a statement that doesn't explain itself when the
+     vendor adds up what they received. */
+  const entry = await db.ledgerEntry.create({
+    data: {
+      vendorId: payout.vendorId,
+      type: "PAYOUT",
+      amountCents: -result.sentCents,
+      note: `Paid to your bank (Stripe ${result.transferId.slice(-8)})`,
+    },
+  });
+  if (result.feeCents > 0) {
+    await db.ledgerEntry.create({
+      data: {
+        vendorId: payout.vendorId,
+        type: "PAYOUT_FEE",
+        amountCents: -result.feeCents,
+        note: "Bank transfer fee",
+      },
+    });
+  }
+  await db.payout.update({ where: { id: payout.id }, data: { ledgerEntryId: entry.id } });
+
+  await recordAudit(
+    {
+      action: "PAYOUT_PAID",
+      targetType: "VENDOR",
+      targetId: payout.vendorId,
+      targetLabel: `${payout.vendorCode} — ${payout.vendorName}`,
+      amountCents: payout.netCents,
+      detail: `Bank transfer of $${(result.sentCents / 100).toFixed(2)}${result.feeCents ? ` (after a $${(result.feeCents / 100).toFixed(2)} fee)` : ""} — Stripe ${result.transferId}`,
+    },
+    req
+  );
+
+  return { ok: true as const, transferId: result.transferId, sentCents: result.sentCents, feeCents: result.feeCents };
+}
+
 // PATCH { payoutId, method, reference } — mark one vendor paid
 // PATCH { payoutId, status: "SKIPPED" } — hold one back
 // PATCH { runId, action: "close" } — close the run
@@ -231,6 +377,58 @@ export async function PATCH(req: NextRequest) {
     // Money going out of the market, not just reading the books.
     { const denied = await denyUnless("money"); if (denied) return denied; }
     const body = await req.json();
+
+    /* ------------------------------------------------------- pay everyone -- */
+    if (body.action === "pay_all") {
+      const runId = String(body.runId || "");
+      const pending = await db.payout.findMany({
+        where: { runId, status: "PENDING", netCents: { gt: 0 } },
+        orderBy: { netCents: "desc" },
+      });
+      if (!pending.length) return NextResponse.json({ error: "Nothing left to pay on this run." }, { status: 400 });
+
+      const actor = await currentAuditActor();
+      const paidBy = actor.actorName || (actor.actorType === "OWNER_KEY" ? "Owner password" : "");
+
+      const paid: { vendorName: string; sentCents: number }[] = [];
+      const failed: { vendorName: string; reason: string; code: string }[] = [];
+      let stopped = "";
+
+      for (const p2 of pending) {
+        const r = await payByTransfer(p2, paidBy, req);
+        if (r.ok) {
+          paid.push({ vendorName: p2.vendorName, sentCents: r.sentCents });
+          continue;
+        }
+        failed.push({ vendorName: p2.vendorName, reason: r.error, code: String(r.code || "") });
+        /* Running out of money is not a per-vendor problem, it is the end of
+           the run. Carrying on would produce one failure per remaining vendor
+           and bury the actual message. */
+        if (r.code === "NO_FUNDS") {
+          stopped = "Your Stripe balance ran out part way through. Everyone still listed is untouched.";
+          break;
+        }
+      }
+
+      return NextResponse.json({
+        ok: true,
+        paidCount: paid.length,
+        paidCents: paid.reduce((n, x) => n + x.sentCents, 0),
+        failed,
+        stopped,
+      });
+    }
+
+    /* Ask Stripe where each vendor's onboarding stands. Cheap, and the answer
+       moves without anyone here doing anything. */
+    if (body.action === "refresh_accounts") {
+      const vendors = await db.vendor.findMany({
+        where: { active: true, stripeAccountId: { not: "" } },
+        select: { id: true },
+      });
+      for (const v of vendors) await refreshAccountStatus(v.id);
+      return NextResponse.json({ ok: true, checked: vendors.length });
+    }
 
     if (body.action === "close") {
       const run = await db.payoutRun.findUnique({ where: { id: String(body.runId || "") } });
@@ -261,6 +459,18 @@ export async function PATCH(req: NextRequest) {
     const actor = await currentAuditActor();
     const paidBy = actor.actorName || (actor.actorType === "OWNER_KEY" ? "Owner password" : "");
     const reference = String(body.reference || "").slice(0, 80);
+
+    /* ---------------------------------------------- paid by bank transfer -- */
+    if (method === "STRIPE") {
+      const result = await payByTransfer(payout, paidBy, req);
+      if (!result.ok) return NextResponse.json({ error: result.error, code: result.code }, { status: 400 });
+      return NextResponse.json({
+        ok: true,
+        transferId: result.transferId,
+        sentCents: result.sentCents,
+        feeCents: result.feeCents,
+      });
+    }
 
     /* Conditional update, not a read-then-write. Two clicks on "Mark paid" a
        moment apart would otherwise both see PENDING and both post a ledger

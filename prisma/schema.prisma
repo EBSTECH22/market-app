@@ -25,6 +25,22 @@ model Vendor {
   stripeCustomerId String  @default("")
   stripePmId       String  @default("")
   cardLast4        String  @default("")
+  // Their own Stripe Express account, for being PAID. Separate from the three
+  // fields above, which are about charging them rent — a vendor can have a card
+  // on file and no way to receive money, or the reverse.
+  //
+  // Nothing about their bank account is stored here. Stripe holds it; this is
+  // only the id that lets us send money to it, which means a copy of this
+  // database is not a pile of vendors' bank details.
+  stripeAccountId  String  @default("")
+  // Mirrors Stripe's own answer to "can this account receive money yet", kept
+  // current by the account.updated webhook. Onboarding can stall days later
+  // when Stripe asks for another document, so this is never assumed from the
+  // fact that they finished the form once.
+  payoutsEnabled   Boolean @default(false)
+  // What Stripe is still waiting on, in plain words, so the vendor portal can
+  // say something more useful than "pending".
+  payoutStatusNote String  @default("")
   publicBlurb       String   @default("")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
@@ -594,6 +610,12 @@ model Payout {
   /// CASH | CHECK | ACH | STRIPE | RENT_OFFSET
   method             String    @default("")
   reference          String    @default("")
+  /// The Stripe transfer, when it was paid by bank rather than by hand.
+  transferId         String    @default("")
+  /// Payout processing charged to the vendor, deducted from what's sent.
+  feeCents           Int       @default(0)
+  /// Why a bank transfer didn't go through, in Stripe's words.
+  failureReason      String    @default("")
   /// PENDING | PAID | SKIPPED
   status             String    @default("PENDING")
   paidAt             DateTime?

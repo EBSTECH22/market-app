@@ -256,6 +256,33 @@ export default function VendorDashboard() {
   useEffect(() => { if (tab === "insights") { void loadStats(); void loadBench(); } }, [tab, loadStats, loadBench]);
   useEffect(() => { if (tab === "money" && !statement) void loadStatement(); }, [tab, statement, loadStatement]);
 
+  /* ---- getting paid ---------------------------------------------------- */
+
+  type PayoutAccount = {
+    hasAccount: boolean; payoutsEnabled: boolean; needsInfo: boolean; note: string;
+    owedCents: number; feeCents: number; sendableCents: number;
+    feePercent: number; feeFixedCents: number;
+  };
+  const [payAcct, setPayAcct] = useState<PayoutAccount | null>(null);
+  const loadPayAcct = useCallback(async () => {
+    const r = await fetch("/api/vendor/payout-account");
+    if (r.ok) setPayAcct(await r.json());
+  }, []);
+  useEffect(() => { if (tab === "money") void loadPayAcct(); }, [tab, loadPayAcct]);
+
+  const startBankSetup = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/vendor/payout-account", { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.url) { toast.error("Couldn't start the setup", String(d.error || "Try again in a minute.")); return; }
+      /* Stripe's own hosted form. Same window rather than a popup: phone
+         browsers block popups, and this is the one flow that must not fail
+         silently on a phone. */
+      window.location.href = String(d.url);
+    } finally { setBusy(false); }
+  };
+
   const load = useCallback(async () => {
     const res = await fetch("/api/vendor/me");
     if (!res.ok) { window.location.href = "/"; return; }
@@ -1862,6 +1889,63 @@ export default function VendorDashboard() {
                     </p>
                   </div>
                 )}
+              </Card>
+
+              {/* ---- getting paid ---------------------------------------- */}
+              <Card
+                title="Where your money goes"
+                subtitle="Connect your bank once and your balance is sent to you automatically — no more waiting on a check."
+              >
+                <div className="stack g-4">
+                  {payAcct?.payoutsEnabled ? (
+                    <>
+                      <div className="row between wrap g-3">
+                        <span className="row g-2">
+                          <Icon name="bank" size={16} />
+                          <b>Your bank account is connected</b>
+                        </span>
+                        <Badge tone="success" dot>Ready</Badge>
+                      </div>
+                      <p className="t-sm t-secondary">
+                        When the market pays out, your balance goes straight to your bank and usually lands within a
+                        couple of business days. A {payAcct.feePercent}% + {money(payAcct.feeFixedCents)} transfer fee
+                        comes off each payout.
+                      </p>
+                      {payAcct.owedCents > 0 ? (
+                        <Note tone="info">
+                          You&rsquo;re owed <b>{money(payAcct.owedCents)}</b> right now — {money(payAcct.sendableCents)} after
+                          the transfer fee. The market releases payouts on its own schedule.
+                        </Note>
+                      ) : null}
+                      <Button variant="secondary" icon="edit" loading={busy} onClick={startBankSetup}>
+                        Update my bank details
+                      </Button>
+                    </>
+                  ) : payAcct?.hasAccount ? (
+                    <>
+                      <Note tone="warn" title="Your setup isn't finished">
+                        {payAcct.note || "Stripe still needs a couple of details before money can be sent to you."}
+                      </Note>
+                      <Button variant="primary" icon="bank" loading={busy} onClick={startBankSetup}>
+                        Finish setting up payouts
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="t-sm t-secondary">
+                        Setup takes about three minutes and happens on Stripe&rsquo;s own secure form — the market never
+                        sees your bank details or your Social Security number. You&rsquo;ll need your bank account and
+                        routing numbers.
+                      </p>
+                      <Button variant="primary" icon="bank" loading={busy} onClick={startBankSetup}>
+                        Connect my bank account
+                      </Button>
+                      <p className="t-xs t-muted">
+                        Prefer a check? Tell the market — this just makes it faster and automatic.
+                      </p>
+                    </>
+                  )}
+                </div>
               </Card>
 
               {me.balance < 0 ? (
