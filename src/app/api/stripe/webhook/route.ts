@@ -45,8 +45,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not configured." }, { status: 500 });
   }
 
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) {
+  /* One secret, or several separated by commas.
+     Stripe's dashboard sometimes wants events from the market's own account and
+     events from vendors' connected accounts registered as TWO endpoints, and
+     each endpoint has its own signing secret. Accepting a list means both can
+     point at this URL without one of them silently failing verification for
+     the rest of time. */
+  const secrets = String(process.env.STRIPE_WEBHOOK_SECRET || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (!secrets.length) {
     // Fail closed. An unverified body is just a stranger claiming someone paid.
     console.error("[stripe webhook] STRIPE_WEBHOOK_SECRET is not set — refusing the event");
     return NextResponse.json({ error: "Webhook not configured." }, { status: 500 });
@@ -59,11 +68,19 @@ export async function POST(req: NextRequest) {
   // exact bytes, so re-serialising JSON would break it.
   const raw = await req.text();
 
-  let event: { id: string; type: string; data: { object: Record<string, unknown> } };
-  try {
-    event = stripe.webhooks.constructEvent(raw, signature, secret) as unknown as typeof event;
-  } catch (err) {
-    console.error("[stripe webhook] signature verification failed:", err instanceof Error ? err.message : err);
+  type StripeEvent = { id: string; type: string; data: { object: Record<string, unknown> } };
+  let event: StripeEvent | null = null;
+  let lastError: unknown = null;
+  for (const secret of secrets) {
+    try {
+      event = stripe.webhooks.constructEvent(raw, signature, secret) as unknown as StripeEvent;
+      break;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (!event) {
+    console.error("[stripe webhook] signature verification failed:", lastError instanceof Error ? lastError.message : lastError);
     return NextResponse.json({ error: "Bad signature." }, { status: 400 });
   }
 
