@@ -24,6 +24,19 @@ export const dynamic = "force-dynamic";
  * they'll quote at you. Sales credits, payouts and manual adjustments all move
  * that number, which is why "rent charged" and "rent paid" are shown as their
  * own columns rather than being subtracted from each other.
+ *
+ * WHAT THE BADGE MEANS, and why it is NOT the same question. The badge used to
+ * be driven by that whole-account balance, which made it lie in both
+ * directions: a vendor who paid their invoice in full went back to "Unpaid" the
+ * moment anything else moved their balance — a payout, a manual adjustment, or
+ * simply next month's rent posting — and a vendor who had never paid a cent
+ * showed "Paid" as soon as their sales credits happened to cover the account.
+ *
+ * So the badge is now answered from RENT CHARGED vs RENT PAID alone, which is
+ * the question being asked: have they paid their rent? The account balance
+ * keeps its own column. The one case where the two disagree honestly — rent
+ * unpaid but the account square because their sales cover it — gets its own
+ * state (COVERED) rather than being flattened into either answer.
  */
 export async function GET() {
   return runRoute("admin/rent-ledger GET", async () => {
@@ -43,7 +56,7 @@ export async function GET() {
     if (contracts.length === 0) {
       return NextResponse.json({
         invoices: [], neverPaid: [],
-        totals: { invoicedCents: 0, collectedCents: 0, outstandingCents: 0, unpaidCount: 0, neverPaidCount: 0 },
+        totals: { invoicedCents: 0, collectedCents: 0, outstandingCents: 0, rentDueCents: 0, unpaidCount: 0, neverPaidCount: 0 },
         trackingSince: (await viewTrackingSince()).toISOString(),
       });
     }
@@ -89,6 +102,14 @@ export async function GET() {
 
     const trackingSince = await viewTrackingSince();
 
+    /* A vendor renting two booths has two executed agreements and ONE ledger.
+       Every figure below is account-wide, so showing it on both rows and then
+       adding the rows up counted that vendor's rent twice in the totals. The
+       rows still appear (booths are how the market thinks), but the totals are
+       summed over vendors, and a shared account says so on the row. */
+    const contractsPerVendor = new Map<string, number>();
+    for (const c of contracts) contractsPerVendor.set(c.vendorId, (contractsPerVendor.get(c.vendorId) || 0) + 1);
+
     const invoices = contracts.map((c) => {
       const agg = byVendor.get(c.vendorId) ?? new Map<string, Agg>();
       const rent = agg.get("RENT");
@@ -101,6 +122,19 @@ export async function GET() {
 
       const balanceCents = [...agg.values()].reduce((n, a) => n + a.sum, 0);
       const outstandingCents = balanceCents < 0 ? -balanceCents : 0;
+
+      /* Rent only. Nothing else on the account can move this number, which is
+         the entire point: paying an invoice makes it say Paid and it stays
+         that way until the next month's rent is charged. */
+      const rentDueCents = Math.max(0, chargedCents - paidCents);
+
+      /* When rent is unpaid but the account is square, WHAT squared it matters.
+         A vendor whose sales credits cover the rent is a different
+         conversation from one whose balance was written off by hand, and
+         labelling both "covered by sales" would be a guess presented as a
+         fact. */
+      const adjustCents = agg.get("ADJUST")?.sum ?? 0;
+      const salesCreditCents = agg.get("SALE")?.sum ?? 0;
 
       const executedAt =
         c.vendorSignedAt && c.marketSignedAt
@@ -130,8 +164,28 @@ export async function GET() {
         paymentCount,
         balanceCents,
         outstandingCents,
-        status: outstandingCents === 0 ? "PAID" : paymentCount > 0 ? "PARTIAL" : "UNPAID",
+        rentDueCents,
+        boothsOnAccount: contractsPerVendor.get(c.vendorId) || 1,
+        coveredBy: adjustCents > 0 && adjustCents >= salesCreditCents ? "ADJUSTMENT" : "SALES",
+        /* Order matters here:
+             NOT_INVOICED — executed, but no rent has posted yet. Saying
+               "Unpaid" about a bill nobody has been sent is how a brand new
+               vendor ends up on a chase list on day one.
+             PAID         — rent charged has been covered by rent payments.
+             COVERED      — rent is still outstanding but the account is square,
+               because their sales credits or a write-off cover it. Nothing is
+               owed and nothing should be chased, but they didn't pay it, and
+               calling that "Paid" is what hid the freeloaders.
+             PARTIAL      — some rent paid, some still due.
+             UNPAID       — charged, nothing paid, money still owed. */
+        status:
+          chargedCents === 0 ? "NOT_INVOICED"
+          : rentDueCents === 0 ? "PAID"
+          : outstandingCents === 0 ? "COVERED"
+          : paymentCount > 0 ? "PARTIAL"
+          : "UNPAID",
         lastPaymentAt: payment?.last ?? null,
+        lastChargeAt: rent?.last ?? null,
         cardLast4: c.vendor.cardLast4 || "",
         opens: { count: open?.count ?? 0, lastAt: open?.lastAt ?? null, tracked: openTracked },
       };
@@ -144,18 +198,31 @@ export async function GET() {
        season. Ended and withdrawn agreements are excluded — chasing someone who
        already left is noise. */
     const neverPaid = invoices
-      .filter((i) => i.paymentCount === 0 && i.contractStatus !== "ENDED" && i.contractStatus !== "WITHDRAWN")
+      .filter((i) => i.paymentCount === 0 && i.chargedCents > 0 && i.contractStatus !== "ENDED" && i.contractStatus !== "WITHDRAWN")
       .sort((a, b) => (a.executedAt?.getTime() ?? 0) - (b.executedAt?.getTime() ?? 0));
 
+    /* Summed over VENDORS, not rows. Two booths on one account share one
+       ledger, so adding the rows up billed that vendor twice. */
+    const seenVendors = new Set<string>();
+    const perVendor = invoices.filter((i) => {
+      if (seenVendors.has(i.vendorId)) return false;
+      seenVendors.add(i.vendorId);
+      return true;
+    });
+
     const totals = {
-      invoicedCents: invoices.reduce((n, i) => n + i.chargedCents, 0),
-      collectedCents: invoices.reduce((n, i) => n + i.paidCents, 0),
-      outstandingCents: invoices.reduce((n, i) => n + i.outstandingCents, 0),
-      unpaidCount: invoices.filter((i) => i.outstandingCents > 0).length,
-      neverPaidCount: neverPaid.length,
+      invoicedCents: perVendor.reduce((n, i) => n + i.chargedCents, 0),
+      collectedCents: perVendor.reduce((n, i) => n + i.paidCents, 0),
+      outstandingCents: perVendor.reduce((n, i) => n + i.outstandingCents, 0),
+      rentDueCents: perVendor.reduce((n, i) => n + i.rentDueCents, 0),
+      unpaidCount: perVendor.filter((i) => i.rentDueCents > 0 && i.outstandingCents > 0).length,
+      neverPaidCount: new Set(neverPaid.map((i) => i.vendorId)).size,
     };
 
-    invoices.sort((a, b) => b.outstandingCents - a.outstandingCents);
+    /* Whoever owes the most rent first; the account balance breaks ties, so a
+       vendor whose rent is covered by sales drops below one who actually owes
+       money rather than sitting at the top of a chase list. */
+    invoices.sort((a, b) => b.rentDueCents - a.rentDueCents || b.outstandingCents - a.outstandingCents);
 
     return NextResponse.json({
       invoices,

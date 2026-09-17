@@ -111,8 +111,14 @@ type InvoiceRow = {
   monthlyRentCents: number; contractStatus: string; executedAt: string | null;
   chargedCents: number; paidCents: number; paymentCount: number;
   balanceCents: number; outstandingCents: number;
-  status: "PAID" | "PARTIAL" | "UNPAID";
-  lastPaymentAt: string | null; cardLast4: string;
+  /* Rent charged minus rent paid — what the badge is actually about. The old
+     badge read the whole account balance, so it flipped back to Unpaid the
+     moment anything else moved: next month's rent, a payout, an adjustment. */
+  rentDueCents: number;
+  boothsOnAccount: number;
+  coveredBy: "SALES" | "ADJUSTMENT";
+  status: "PAID" | "PARTIAL" | "UNPAID" | "COVERED" | "NOT_INVOICED";
+  lastPaymentAt: string | null; lastChargeAt: string | null; cardLast4: string;
   opens: { count: number; lastAt: string | null; tracked: boolean };
 };
 
@@ -121,7 +127,7 @@ type RentLedger = {
   neverPaid: InvoiceRow[];
   totals: {
     invoicedCents: number; collectedCents: number; outstandingCents: number;
-    unpaidCount: number; neverPaidCount: number;
+    rentDueCents: number; unpaidCount: number; neverPaidCount: number;
   };
   trackingSince: string;
 };
@@ -137,21 +143,31 @@ type RentLedger = {
  * precisely the one you don't want to discover in December.
  */
 function RentLedgerCards({
-  ledger, filter, onFilter, busy, onSendLink,
+  ledger, filter, onFilter, busy, onSendLink, onRecordPayment,
 }: {
   ledger: RentLedger | null;
   filter: "OWING" | "ALL" | "PAID";
   onFilter: (f: "OWING" | "ALL" | "PAID") => void;
   busy: boolean;
   onSendLink: (row: InvoiceRow) => void;
+  onRecordPayment: (row: InvoiceRow) => void;
 }) {
   const t = ledger?.totals;
+  /* Filtering on the badge, not on the balance. "Still owing" used to include
+     anyone whose account was negative for any reason — including a vendor who
+     had paid their rent and was simply owed a payout. */
   const rows = (ledger?.invoices || []).filter((i) =>
-    filter === "ALL" ? true : filter === "PAID" ? i.outstandingCents === 0 : i.outstandingCents > 0
+    filter === "ALL" ? true
+    : filter === "PAID" ? (i.status === "PAID" || i.status === "COVERED")
+    : i.rentDueCents > 0
   );
 
   const statusBadge = (i: InvoiceRow) =>
     i.status === "PAID" ? <Badge tone="success" dot>Paid</Badge>
+    : i.status === "COVERED" ? (
+      <Badge tone="info" dot>{i.coveredBy === "ADJUSTMENT" ? "Settled by adjustment" : "Covered by sales"}</Badge>
+    )
+    : i.status === "NOT_INVOICED" ? <Badge tone="neutral">Not billed yet</Badge>
     : i.status === "PARTIAL" ? <Badge tone="warn" dot>Part paid</Badge>
     : <Badge tone="danger" dot>Unpaid</Badge>;
 
@@ -164,7 +180,12 @@ function RentLedgerCards({
       cell: (i) => (
         <span className="stack g-1">
           <span style={{ fontWeight: 600 }}>{i.businessName}</span>
-          <span className="t-xs t-muted">{i.code} · Booth {i.boothLabel}</span>
+          <span className="t-xs t-muted">
+            {i.code} · Booth {i.boothLabel}
+            {/* One ledger per vendor, so a second booth shows the same figures.
+                Better to say so than to let it read as double the rent. */}
+            {i.boothsOnAccount > 1 ? ` · one account across ${i.boothsOnAccount} booths` : ""}
+          </span>
         </span>
       ),
     },
@@ -189,12 +210,22 @@ function RentLedgerCards({
     },
     {
       key: "owed",
-      header: "Still owed",
+      header: "Rent still owed",
       align: "right",
-      sortBy: (i) => i.outstandingCents,
+      sortBy: (i) => i.rentDueCents,
       cell: (i) => (
-        <span className={`num ${i.outstandingCents > 0 ? "t-danger" : "t-accent"}`}>
-          {money(i.outstandingCents)}
+        <span className="stack g-1" style={{ alignItems: "flex-end" }}>
+          <span className={`num ${i.rentDueCents > 0 ? "t-danger" : "t-accent"}`}>
+            {money(i.rentDueCents)}
+          </span>
+          {/* The two numbers answer different questions and only clutter the
+              row when they disagree: rent owed is what to chase, the account
+              balance is what the vendor's own invoice page shows them. */}
+          {i.outstandingCents !== i.rentDueCents ? (
+            <span className="t-xs t-muted">
+              {i.outstandingCents > 0 ? `${money(i.outstandingCents)} on the account` : "account square"}
+            </span>
+          ) : null}
         </span>
       ),
     },
@@ -228,7 +259,16 @@ function RentLedgerCards({
               <Icon name="receipt" size={14} /> View
             </a>
           ) : null}
-          {i.outstandingCents > 0 ? (
+          {/* The button that was missing. Rent paid in cash or by check had
+              nowhere to go except an adjustment, which never counts as a
+              payment — so the invoice stayed unpaid no matter what was
+              actually handed over. */}
+          {i.rentDueCents > 0 ? (
+            <Button size="sm" variant="secondary" icon="checkCircle" disabled={busy} onClick={() => onRecordPayment(i)}>
+              Record payment
+            </Button>
+          ) : null}
+          {i.rentDueCents > 0 && i.outstandingCents > 0 ? (
             <Button size="sm" icon="mail" disabled={busy} onClick={() => onSendLink(i)}>
               Send again
             </Button>
@@ -283,7 +323,10 @@ function RentLedgerCards({
   return (
     <>
       <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
-        <Stat feature label="Still owed" value={money(t?.outstandingCents || 0)}
+        {/* Rent owed, not the net of every account. A vendor who is owed a
+            payout used to quietly cancel out one who owes rent, and the number
+            you chase people with was the difference between the two. */}
+        <Stat feature label="Rent still owed" value={money(t?.rentDueCents || 0)}
           sub={t ? `${plural(t.unpaidCount, "vendor")} behind` : "Loading…"} icon="alert" />
         <Stat label="Collected" value={money(t?.collectedCents || 0)} sub="Rent paid to date" icon="checkCircle" />
         <Stat label="Rent charged" value={money(t?.invoicedCents || 0)} sub="Across every invoice sent" icon="receipt" />
@@ -300,7 +343,7 @@ function RentLedgerCards({
             value={filter}
             onChange={onFilter}
             options={[
-              { value: "OWING", label: `Still owing (${(ledger?.invoices || []).filter((i) => i.outstandingCents > 0).length})` },
+              { value: "OWING", label: `Still owing (${(ledger?.invoices || []).filter((i) => i.rentDueCents > 0).length})` },
               { value: "PAID", label: "Settled" },
               { value: "ALL", label: "All" },
             ]}
@@ -451,6 +494,32 @@ type AuditRow = {
 };
 
 /* ---- payout runs ------------------------------------------------------- */
+
+/* Rows from /api/admin/stripe-reconcile — Stripe's record of rent payments,
+   matched against the ledger. */
+type ReconcileRow = {
+  paymentIntentId: string;
+  paidAt: string;
+  vendorId: string;
+  code: string;
+  businessName: string;
+  dueCents: number;
+  feeCents: number;
+  chargedCents: number;
+  last4: string;
+  description: string;
+  verdict: "MISSING" | "RECORDED" | "PROBABLY_RECORDED" | "NO_VENDOR" | "NO_AMOUNT";
+  matchedEntryId: string;
+};
+
+type Reconcile = {
+  days: number;
+  rows: ReconcileRow[];
+  missingCount: number;
+  missingCents: number;
+  webhookConfigured: boolean;
+  checkedCount: number;
+};
 
 type PayoutRunRow = {
   id: string;
@@ -1115,6 +1184,46 @@ export default function AdminPage() {
     setAuditOut(Number(d.moneyOutCents) || 0);
   }, []);
 
+  const [recon, setRecon] = useState<Reconcile | null>(null);
+  const [reconLoading, setReconLoading] = useState(false);
+  const [reconErr, setReconErr] = useState("");
+  const loadRecon = useCallback(async () => {
+    setReconLoading(true); setReconErr("");
+    try {
+      const r = await fetch("/api/admin/stripe-reconcile?days=180");
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setReconErr(String(d.error || "Couldn't read your Stripe payments."));
+        return;
+      }
+      setRecon(await r.json());
+    } catch {
+      setReconErr("Couldn't reach Stripe just now.");
+    } finally { setReconLoading(false); }
+  }, []);
+
+  const postMissingPayments = async (ids: string[]) => {
+    if (!ids.length) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/stripe-reconcile", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentIntentIds: ids }),
+      });
+      if (!ok) { toast.error("Couldn't post those", String(data.error || "")); return; }
+      const postedList = (data.posted as { amountCents: number }[]) || [];
+      const total = postedList.reduce((n, p) => n + p.amountCents, 0);
+      toast.success(
+        `${plural(postedList.length, "payment")} posted`,
+        `${money(total)} matched from Stripe into the ledger.`
+      );
+      await loadRecon();
+      const r = await fetch("/api/admin/rent-ledger");
+      if (r.ok) setLedger(await r.json());
+      await loadAll();
+    } finally { setBusy(false); }
+  };
+
   const [payRuns, setPayRuns] = useState<PayoutRunRow[]>([]);
   const [payRunId, setPayRunId] = useState("");
   const [payouts, setPayouts] = useState<PayoutRow[]>([]);
@@ -1134,8 +1243,8 @@ export default function AdminPage() {
     if (authed && allowed("financials") && tab === "reports") { loadTaxReport(taxMonth); loadAudit(auditFilter, auditDays); }
   }, [authed, caps, tab, taxMonth, auditFilter, auditDays, loadTaxReport, loadAudit]);
   useEffect(() => {
-    if (authed && allowed("financials") && tab === "bank") loadPayouts();
-  }, [authed, caps, tab, loadPayouts]);
+    if (authed && allowed("financials") && tab === "bank") { loadPayouts(); loadRecon(); }
+  }, [authed, caps, tab, loadPayouts, loadRecon]);
 
   const buildPayoutRun = async () => {
     setPayErr("");
@@ -2078,31 +2187,60 @@ export default function AdminPage() {
     } finally { setBusy(false); }
   };
 
-  const ledgerEntry = async (v: Vendor, type: "RENT" | "PAYOUT" | "ADJUST") => {
+  const ledgerEntry = async (
+    v: { id: string; businessName: string; balance: number },
+    type: "RENT" | "RENT_PAYMENT" | "PAYOUT" | "ADJUST",
+    presetCents?: number
+  ) => {
     const copy = {
       RENT:   { title: `Charge rent to ${v.businessName}`, label: "Rent to charge", note: "Booth rent",
                 body: "Adds a debit to their account. It shows on their next statement." },
+      RENT_PAYMENT: { title: `Record a rent payment from ${v.businessName}`, label: "Amount received", note: "Rent paid",
+                body: "Cash, check or bank transfer. Card payments post themselves. This is what marks their invoice paid." },
       PAYOUT: { title: `Pay out ${v.businessName}`, label: "Payout amount", note: "Payout",
                 body: `Record money you're handing them. Their balance is currently ${money(v.balance)}.` },
       ADJUST: { title: `Adjust ${v.businessName}'s balance`, label: "Adjustment", note: "",
-                body: "Use a minus sign to take money off their balance, no sign to add it." },
+                body: "Use a minus sign to take money off their balance, no sign to add it. An adjustment is NOT a payment — to mark rent paid, use Record payment." },
     }[type];
 
     const cents = await dialog.money({
       title: copy.title,
       body: copy.body,
       label: copy.label,
-      defaultCents: type === "PAYOUT" ? Math.max(0, v.balance) : undefined,
+      defaultCents:
+        type === "PAYOUT" ? Math.max(0, v.balance)
+        : type === "RENT_PAYMENT" ? presetCents
+        : undefined,
       allowNegative: type === "ADJUST",
       confirmLabel: "Next",
     });
     if (cents === null) return;
 
+    /* How it arrived, on a payment. It ends up in the statement note, which is
+       the only place anyone will look when a vendor says "I paid that in
+       cash in October". */
+    let how = "";
+    if (type === "RENT_PAYMENT") {
+      how = (await dialog.choose({
+        title: "How did they pay?",
+        label: "Method",
+        options: [
+          { value: "Cash", label: "Cash" },
+          { value: "Check", label: "Check" },
+          { value: "Bank transfer", label: "Bank transfer", hint: "Zelle, Venmo, ACH" },
+          { value: "Other", label: "Other" },
+        ],
+        defaultValue: "Cash",
+        confirmLabel: "Next",
+      })) || "";
+      if (!how) return;
+    }
+
     const note = await dialog.prompt({
       title: "What should this say on their statement?",
       body: `${money(cents)} — ${copy.title.toLowerCase()}.`,
       label: "Note",
-      defaultValue: copy.note,
+      defaultValue: type === "RENT_PAYMENT" ? `Rent paid — ${how.toLowerCase()}` : copy.note,
       placeholder: "Booth rent for October",
       confirmLabel: "Post to ledger",
     });
@@ -5339,6 +5477,106 @@ export default function AdminPage() {
 
       {tab === "bank" && (
         <div className="stack g-4">
+          {/* ---- Stripe vs the books --------------------------------------- */}
+          {(() => {
+            const missing = (recon?.rows || []).filter((r) => r.verdict === "MISSING");
+            /* The card is only worth the space when there is something to say:
+               money Stripe took that never landed, or a safety net that isn't
+               switched on. A reconciled account should not nag. */
+            if (!recon && !reconLoading && !reconErr) return null;
+            if (recon && missing.length === 0 && recon.webhookConfigured) return null;
+            return (
+              <Card
+                title="Stripe payments vs your books"
+                subtitle="Rent Stripe collected, matched against what the ledger recorded."
+                actions={
+                  <Button size="sm" variant="secondary" icon="refresh" loading={reconLoading} onClick={() => void loadRecon()}>
+                    Re-check
+                  </Button>
+                }
+              >
+                <div className="stack g-4">
+                  {reconErr ? <Note tone="error">{reconErr}</Note> : null}
+                  {reconLoading && !recon ? <Skeleton height={80} /> : null}
+
+                  {recon && !recon.webhookConfigured ? (
+                    <Note tone="error" title="Stripe can't tell the app when someone pays">
+                      A payment only reaches the ledger if the vendor&rsquo;s browser makes it back to the
+                      success page — pay and close the tab, and the money is in Stripe and the invoice still
+                      says unpaid. Fixing it is two steps: add a webhook in Stripe pointing at{" "}
+                      <span className="mono">market.dailybreadbaked.com/api/stripe/webhook</span> listening for{" "}
+                      <span className="mono">checkout.session.completed</span>, then put its signing secret in
+                      Vercel as <span className="mono">STRIPE_WEBHOOK_SECRET</span> and redeploy.
+                    </Note>
+                  ) : null}
+
+                  {recon && missing.length > 0 ? (
+                    <>
+                      <div className="stats">
+                        <Stat
+                          feature
+                          label="Taken by Stripe, not in the books"
+                          value={money(recon.missingCents)}
+                          sub={`${plural(missing.length, "payment")} · last ${recon.days} days`}
+                          icon="alert"
+                        />
+                        <Stat label="Payments checked" value={String(recon.checkedCount)} sub="Succeeded rent charges in Stripe" />
+                      </div>
+
+                      <DataTable
+                        rows={missing}
+                        rowKey={(r) => r.paymentIntentId}
+                        mobileCards
+                        columns={[
+                          {
+                            key: "vendor",
+                            header: "Vendor",
+                            primary: true,
+                            cell: (r) => (
+                              <span className="stack g-1">
+                                <span style={{ fontWeight: 600 }}>{r.businessName}</span>
+                                <span className="t-xs t-muted">{r.code}{r.last4 ? ` · ····${r.last4}` : ""}</span>
+                              </span>
+                            ),
+                          },
+                          { key: "when", header: "Paid", cell: (r) => fmtDate(r.paidAt) },
+                          { key: "amt", header: "Rent", align: "right", cell: (r) => <b className="num">{money(r.dueCents)}</b> },
+                          {
+                            key: "act",
+                            header: "",
+                            align: "right",
+                            cell: (r) => (
+                              <Button size="sm" disabled={busy} onClick={() => void postMissingPayments([r.paymentIntentId])}>
+                                Post to ledger
+                              </Button>
+                            ),
+                          },
+                        ]}
+                      />
+
+                      <div className="row wrap g-2">
+                        <Button
+                          icon="check"
+                          disabled={busy}
+                          onClick={() => void postMissingPayments(missing.map((r) => r.paymentIntentId))}
+                        >
+                          Post all {plural(missing.length, "payment")} ({money(recon.missingCents)})
+                        </Button>
+                      </div>
+
+                      <p className="t-xs t-muted">
+                        Each one is matched by its Stripe payment id, so posting it twice isn&rsquo;t possible —
+                        anything already on the ledger is skipped.
+                      </p>
+                    </>
+                  ) : recon && recon.webhookConfigured ? (
+                    <Note tone="success">Every rent payment Stripe has taken is on the ledger.</Note>
+                  ) : null}
+                </div>
+              </Card>
+            );
+          })()}
+
           {/* ---- paying the vendors --------------------------------------- */}
           <Card
             title="Vendor payouts"
@@ -5578,6 +5816,15 @@ export default function AdminPage() {
             onFilter={setLedgerFilter}
             busy={busy}
             onSendLink={(row) => sendRentLinkFor(row)}
+            onRecordPayment={async (row) => {
+              await ledgerEntry(
+                { id: row.vendorId, businessName: row.businessName, balance: row.balanceCents },
+                "RENT_PAYMENT",
+                row.rentDueCents
+              );
+              const r = await fetch("/api/admin/rent-ledger");
+              if (r.ok) setLedger(await r.json());
+            }}
           />
 
           {!bank ? (
@@ -5845,6 +6092,7 @@ export default function AdminPage() {
                     <p className="t-label">Ledger</p>
                     <div className="row wrap g-2">
                       <Button size="sm" icon="receipt" disabled={busy} onClick={() => ledgerEntry(v, "RENT")}>Charge rent</Button>
+                      <Button size="sm" icon="checkCircle" disabled={busy} onClick={() => ledgerEntry(v, "RENT_PAYMENT", Math.max(0, -v.balance))}>Record payment</Button>
                       <Button size="sm" icon="cash" disabled={busy} onClick={() => ledgerEntry(v, "PAYOUT")}>Record payout</Button>
                       <Button size="sm" icon="edit" disabled={busy} onClick={() => ledgerEntry(v, "ADJUST")}>Adjust balance</Button>
                     </div>

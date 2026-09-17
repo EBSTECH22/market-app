@@ -117,6 +117,9 @@ export async function POST(req: NextRequest) {
     const ym = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" }).format(new Date());
     const idempotencyKey = `settle:${vendor.id}:${chargeTotal}:${ym}`;
 
+    // Hoisted: the ledger note below stamps this id, and the intent itself is
+    // created inside the try.
+    let paymentIntentId = "";
     try {
       const pi = await stripe.paymentIntents.create(
         {
@@ -129,6 +132,7 @@ export async function POST(req: NextRequest) {
         { idempotencyKey }
       );
       if (pi.status !== "succeeded") return NextResponse.json({ error: `Charge not completed (status: ${pi.status}).` }, { status: 400 });
+      paymentIntentId = pi.id;
     } catch (err) {
       // Stripe messages can name internal ids and account details — log them,
       // don't hand them to the browser.
@@ -139,7 +143,12 @@ export async function POST(req: NextRequest) {
     await db.ledgerEntry.create({
       data: {
         vendorId: vendor.id, type: "RENT_PAYMENT", amountCents: dueCents,
-        note: `Rent balance paid by card on file ····${vendor.cardLast4}: $${(chargeTotal / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, 3%)`,
+        /* The PaymentIntent id is stamped in the note the same way the vendor's
+           own payment path does it. That marker is what lets the Stripe
+           reconciler tell a payment that's already in the books from one that
+           never made it — without it, this entry looks like a missing payment
+           and gets offered for posting a second time. */
+        note: `Rent balance paid by card on file ····${vendor.cardLast4}: $${(chargeTotal / 100).toFixed(2)} charged (includes $${(feeCents / 100).toFixed(2)} card-processing adjustment, 3%) [ck ${paymentIntentId.slice(-10)}]`,
       },
     });
     await recordAudit(
