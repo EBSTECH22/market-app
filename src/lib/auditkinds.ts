@@ -22,6 +22,7 @@ export type AuditAction =
   | "PAYOUT_RUN"
   | "PAYOUT_PAID"
   | "ORDER_COLLECTED"
+  | "REVIEW_DELETE"
   | "DRAWER_CLOSE";
 
 export const AUDIT_LABEL: Record<AuditAction, string> = {
@@ -37,6 +38,7 @@ export const AUDIT_LABEL: Record<AuditAction, string> = {
   PAYOUT_RUN: "Payout run created",
   PAYOUT_PAID: "Vendor paid",
   ORDER_COLLECTED: "Online order handed over",
+  REVIEW_DELETE: "Review removed",
   DRAWER_CLOSE: "Drawer closed",
 };
 

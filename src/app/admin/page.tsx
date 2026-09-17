@@ -879,6 +879,7 @@ export default function AdminPage() {
   const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; phoneType?: string; notes: string; adminNotes?: string; stage?: string; viewingAt?: string; createdAt: string }[]>([]);
   const [appOpen, setAppOpen] = useState<string | null>(null);
   const [complaints, setComplaints] = useState<{ id: string; status: string; customerName: string; email: string; phone: string; vendor: { code: string; businessName: string } | null; messages: { sender: string; body: string }[] }[]>([]);
+  const [reviews, setReviews] = useState<{ id: string; vendor: { code: string; businessName: string } | null; name: string; rating: number; body: string; likes: number; createdAt: string; comments: { id: string; name: string; body: string; createdAt: string }[] }[]>([]);
   const [punchName, setPunchName] = useState("");
   const [punchPin, setPunchPin] = useState("");
   const [punchMsg, setPunchMsg] = useState("");
@@ -1185,6 +1186,7 @@ export default function AdminPage() {
     if (authed && allowed("market") && tab === "vendors") {
       fetch("/api/admin/complaints").then(async (r) => { if (r.ok) setComplaints((await r.json()).complaints || []); });
       fetch("/api/admin/applications").then(async (r) => { if (r.ok) setApplications((await r.json()).applications || []); });
+      fetch("/api/admin/reviews").then(async (r) => { if (r.ok) setReviews((await r.json()).reviews || []); });
     }
   }, [authed, role, tab]);
   useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ); }, [authed, tab, ticketQ, loadTickets]);
@@ -1313,6 +1315,63 @@ export default function AdminPage() {
     setStripeBalance(typeof d.stripeBalanceCents === "number" ? d.stripeBalanceCents : null);
     if (d.fee) setPayoutFee(d.fee as { percent: number; fixedCents: number });
   }, []);
+
+  const loadReviews = useCallback(async () => {
+    const r = await fetch("/api/admin/reviews");
+    if (r.ok) setReviews((await r.json()).reviews || []);
+  }, []);
+
+  /* Taking a review down is permanent and it is visible to the vendor it was
+     about, so it asks first and says out loud what gets logged. */
+  const removeReview = async (rv: { id: string; name: string; rating: number; body: string; comments: { id: string }[] }) => {
+    const yes = await dialog.confirm({
+      title: `Remove this ${rv.rating}-star review?`,
+      body: (
+        <>
+          <p style={{ fontStyle: "italic" }}>&ldquo;{rv.body.slice(0, 240)}{rv.body.length > 240 ? "…" : ""}&rdquo;</p>
+          <p style={{ marginTop: 8 }}>
+            Posted by {rv.name || "someone who left no name"}.
+            {rv.comments.length ? ` Its ${plural(rv.comments.length, "reply")} go with it.` : ""}
+          </p>
+          <p style={{ marginTop: 8 }}>
+            It disappears from their public page straight away and can&rsquo;t be restored. The activity log keeps a
+            record of what it said and who removed it.
+          </p>
+        </>
+      ),
+      confirmLabel: "Remove it",
+      tone: "danger",
+    });
+    if (!yes) return;
+    const res = await fetch("/api/admin/reviews", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewId: rv.id }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      toast.error("Couldn't remove it", String(d.error || "Give it another go."));
+      return;
+    }
+    toast.success("Review removed", "It's off their page and in the activity log.");
+    await loadReviews();
+  };
+
+  const removeReviewComment = async (c: { id: string; name: string; body: string }) => {
+    const yes = await dialog.confirm({
+      title: "Remove this reply?",
+      body: <p style={{ fontStyle: "italic" }}>&ldquo;{c.body.slice(0, 240)}{c.body.length > 240 ? "…" : ""}&rdquo; — {c.name || "no name"}</p>,
+      confirmLabel: "Remove it",
+      tone: "danger",
+    });
+    if (!yes) return;
+    const res = await fetch("/api/admin/reviews", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commentId: c.id }),
+    });
+    if (!res.ok) { toast.error("Couldn't remove it"); return; }
+    toast.success("Reply removed");
+    await loadReviews();
+  };
 
   /** Send one vendor their money by bank transfer. */
   const sendPayout = async (p: PayoutRow) => {
@@ -6746,6 +6805,67 @@ export default function AdminPage() {
                         <b>{m.sender === "CUSTOMER" ? c.customerName : "Vendor"}:</b> {m.body}
                       </p>
                     ))}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          {/* Reviews, with the ability to take one down. There was no way to do
+              this at all before — a review posted to a vendor's public page was
+              permanent, whatever it said. Vendors deliberately can't reach
+              this: a vendor who deletes their own bad reviews makes every other
+              rating on the site worthless. */}
+          <Card
+            className="mb-4"
+            title="Reviews"
+            subtitle="Every review left on any vendor's page, newest first. Removing one is permanent and goes in the activity log."
+            actions={
+              <Button size="sm" variant="ghost" icon="refresh" onClick={() => void loadReviews()}>
+                Refresh
+              </Button>
+            }
+          >
+            {reviews.length === 0 ? (
+              <EmptyState
+                icon="star"
+                title="No reviews yet"
+                body="Anything a shopper leaves on a vendor's page turns up here."
+              />
+            ) : (
+              <ul className="stack g-4" style={{ listStyle: "none" }}>
+                {reviews.map((rv) => (
+                  <li key={rv.id} className="stack g-2" style={{ paddingBottom: "var(--sp-4)", borderBottom: "1px solid var(--border)" }}>
+                    <div className="row between wrap g-2">
+                      <b>{rv.vendor ? `${rv.vendor.code} · ${rv.vendor.businessName}` : "Unknown vendor"}</b>
+                      <Badge tone={rv.rating <= 2 ? "danger" : rv.rating === 3 ? "warn" : "success"}>
+                        {rv.rating}/5
+                      </Badge>
+                    </div>
+                    <p className="t-xs t-muted">
+                      {rv.name || "No name given"} · {relTime(rv.createdAt)}
+                      {rv.likes ? ` · ${plural(rv.likes, "like")}` : ""}
+                    </p>
+                    <p className="t-sm" style={{ paddingLeft: "var(--sp-3)", borderLeft: "2px solid var(--border)" }}>
+                      {rv.body}
+                    </p>
+
+                    {rv.comments.map((c) => (
+                      <div key={c.id} className="row between wrap g-2" style={{ paddingLeft: "var(--sp-5)" }}>
+                        <p className="t-sm t-muted grow" style={{ margin: 0 }}>
+                          <b>{c.name || "No name"}:</b> {c.body}
+                        </p>
+                        <Button size="sm" variant="ghost" onClick={() => void removeReviewComment(c)}>
+                          Remove reply
+                        </Button>
+                      </div>
+                    ))}
+
+                    <div className="row g-2">
+                      <Button size="sm" variant="danger" icon="trash" onClick={() => void removeReview(rv)}>
+                        Remove review
+                      </Button>
+                    </div>
                   </li>
                 ))}
               </ul>
