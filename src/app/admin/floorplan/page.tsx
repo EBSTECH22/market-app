@@ -7,10 +7,11 @@ import {
 } from "@/components/ui";
 import { money, plural } from "@/lib/format";
 import {
-  parseLength, fmtLength, fmtSize, sqFt, wallPoints, roomPolygon, closureGapIn,
+  parseLength, fmtLength, fmtSize, wallPoints, roomPolygon, closureGapIn,
   roomAreaSqFt, bounds, footprint, overlaps, spaceInsideRoom, snap,
   wallSolids, openingPoints, overlapProblem, rentable, nearestWall, openingMeasures, projectOnSegment,
   centreOf, centroid, outwardNormal, offsetPt,
+  outline, isCorner, spaceSqFt, describeSize, legThickness,
   STATUS_LABEL, KIND_LABEL, KIND_PRESETS, OPENING_LABEL, OPENING_PRESETS, SPACE_KINDS,
   type Wall, type Space, type Opening, type SpaceKind, type Pt,
 } from "@/lib/floorplan";
@@ -158,7 +159,13 @@ export default function FloorPlanPage() {
      drawing you can't read. */
   const [showAllDims, setShowAllDims] = useState(false);
   const [newKind, setNewKind] = useState<SpaceKind>("BOOTH");
-  const [newSize, setNewSize] = useState("60x60");
+  /* Typed, not picked. Presets are shortcuts that fill these boxes — every
+     market ends up with a booth nobody sells, and a shelf is whatever length
+     of wall is left over. Both accept 5, 5'6", 66" or 5 6. */
+  const [newW, setNewW] = useState("5'");
+  const [newD, setNewD] = useState("5'");
+  const [newShape, setNewShape] = useState<"RECT" | "LCORNER">("RECT");
+  const [newLeg, setNewLeg] = useState('16"');
 
   const load = useCallback(async () => {
     setErr("");
@@ -289,9 +296,17 @@ export default function FloorPlanPage() {
 
   const addSpace = async () => {
     if (!plan) return;
-    const [w, dp] = newSize.split("x").map(Number);
+    /* Read what was typed. A size that can't be read stops the add rather than
+       quietly becoming a 5x5 — a booth the wrong size on the map is worse than
+       no booth at all. */
+    const w = parseLength(newW);
+    const dp = parseLength(newD);
+    if (w === null || w < 6) { toast.error("Check the width", "Try 5, 5'6\" or 66\"."); return; }
+    if (dp === null || dp < 6) { toast.error("Check the depth", "Try 5, 5'6\" or 66\"."); return; }
+    const leg = newShape === "LCORNER" ? parseLength(newLeg) : 0;
+    if (newShape === "LCORNER" && (leg === null || leg < 2)) { toast.error("Check the shelf depth", "Try 16\" or 1'6\"."); return; }
     const sameKind = plan.spaces.filter((sp) => (sp.kind || "BOOTH") === newKind).length;
-    const prefix: Record<string, string> = { BOOTH: "B", TABLE: "T", DESK: "Desk", FIXTURE: "F", WALKWAY: "Aisle" };
+    const prefix: Record<string, string> = { BOOTH: "B", SHELF: "S", TABLE: "T", DESK: "Desk", FIXTURE: "F", WALKWAY: "Aisle" };
     /* Dropped near the top-left of the room rather than at 0,0 — a booth
        exactly on the corner is hard to grab, and it reads as a mistake. */
     const x = snap(box.minX + 12, plan.gridIn || 1);
@@ -305,6 +320,7 @@ export default function FloorPlanPage() {
           kind: newKind,
           label: `${prefix[newKind] || "B"}${sameKind + 1}`,
           xIn: x, yIn: y, widthIn: w, depthIn: dp, rotationDeg: 0,
+          shape: newShape, legIn: leg || 0,
         }),
       });
       const d = await r.json().catch(() => ({}));
@@ -554,7 +570,10 @@ export default function FloorPlanPage() {
                             /* Switch the size list with it — a walkway offered a
                                5×5 default was a walkway nobody used. */
                             const first = KIND_PRESETS[k][0];
-                            setNewSize(`${first.widthIn}x${first.depthIn}`);
+                            setNewW(fmtLength(first.widthIn).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"')));
+                            setNewD(fmtLength(first.depthIn).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"')));
+                            setNewShape((first.shape as "RECT" | "LCORNER") || "RECT");
+                            if (first.legIn) setNewLeg(fmtLength(first.legIn).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"')));
                           }}
                         >
                           {SPACE_KINDS.map((k) => (
@@ -563,15 +582,61 @@ export default function FloorPlanPage() {
                         </Select>
                       )}
                     </Field>
-                    <Field label="Size">
+                    {/* Presets only fill the boxes below. Whatever gets typed
+                        wins, because no two markets rent the same sizes. */}
+                    <Field label="Preset">
                       {(p) => (
-                        <Select {...p} value={newSize} onChange={(e) => setNewSize(e.target.value)} style={{ width: 170 }}>
+                        <Select
+                          {...p}
+                          value=""
+                          style={{ width: 175 }}
+                          onChange={(e) => {
+                            const pre = KIND_PRESETS[newKind].find((o) => o.label === e.target.value);
+                            if (!pre) return;
+                            const t = (v: number) => fmtLength(v).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"'));
+                            setNewW(t(pre.widthIn));
+                            setNewD(t(pre.depthIn));
+                            setNewShape((pre.shape as "RECT" | "LCORNER") || "RECT");
+                            if (pre.legIn) setNewLeg(t(pre.legIn));
+                          }}
+                        >
+                          <option value="">Pick a size…</option>
                           {KIND_PRESETS[newKind].map((s) => (
-                            <option key={s.label} value={`${s.widthIn}x${s.depthIn}`}>{s.label}</option>
+                            <option key={s.label} value={s.label}>{s.label}</option>
                           ))}
                         </Select>
                       )}
                     </Field>
+                    <Field label={newShape === "LCORNER" ? "Arm one" : "Width"} hint="5, 5&apos;6&quot; or 66&quot;">
+                      {(p) => (
+                        <Input {...p} value={newW} style={{ width: 92 }} onChange={(e) => setNewW(e.target.value)} />
+                      )}
+                    </Field>
+                    <Field label={newShape === "LCORNER" ? "Arm two" : "Depth"}>
+                      {(p) => (
+                        <Input {...p} value={newD} style={{ width: 92 }} onChange={(e) => setNewD(e.target.value)} />
+                      )}
+                    </Field>
+                    <Field label="Shape">
+                      {(p) => (
+                        <Select
+                          {...p}
+                          value={newShape}
+                          style={{ width: 140 }}
+                          onChange={(e) => setNewShape(e.target.value as "RECT" | "LCORNER")}
+                        >
+                          <option value="RECT">Straight</option>
+                          <option value="LCORNER">Corner (L)</option>
+                        </Select>
+                      )}
+                    </Field>
+                    {newShape === "LCORNER" ? (
+                      <Field label="Shelf depth" hint="How deep the shelf itself is">
+                        {(p) => (
+                          <Input {...p} value={newLeg} style={{ width: 92 }} onChange={(e) => setNewLeg(e.target.value)} />
+                        )}
+                      </Field>
+                    ) : null}
                     <Button variant="primary" icon="plus" disabled={busy || plan.walls.length === 0} onClick={() => void addSpace()}>
                       Add {KIND_LABEL[newKind].toLowerCase()}
                     </Button>
@@ -723,9 +788,9 @@ export default function FloorPlanPage() {
                     {plan.spaces.filter((sp) => sp.kind === "WALKWAY").map((sp) => {
                       const c = centreOf(sp);
                       return (
-                        <rect
+                        <polygon
                           key={sp.id}
-                          x={sp.xIn} y={sp.yIn} width={sp.widthIn} height={sp.depthIn}
+                          points={outline({ ...sp, rotationDeg: 0 }).map((q) => `${q.x},${q.y}`).join(" ")}
                           transform={`rotate(${sp.rotationDeg || 0} ${c.x} ${c.y})`}
                           fill="var(--info-soft)" opacity={0.55}
                           stroke="var(--info)" strokeWidth="1" strokeDasharray="8 5"
@@ -864,8 +929,17 @@ export default function FloorPlanPage() {
 
                     {/* Everything standing on the floor. Walkways already drawn. */}
                     {plan.spaces.filter((sp) => sp.kind !== "WALKWAY").map((s) => {
-                      const f = { w: s.widthIn, h: s.depthIn };
                       const c = centreOf(s);
+                      /* Drawn unrotated, because the group around it already
+                         turns — rotating the points as well would turn it
+                         twice. */
+                      const pts = outline({ ...s, rotationDeg: 0 }).map((q) => `${q.x},${q.y}`).join(" ");
+                      /* An L's centre is in the notch — thin air. Its name goes
+                         on the long arm instead, or it floats off the shelf. */
+                      const corner = isCorner(s);
+                      const t = corner ? legThickness(s) : 0;
+                      const tx = corner ? s.xIn + s.widthIn / 2 : c.x;
+                      const ty = corner ? s.yIn + t / 2 : c.y;
                       const bad = problems.overlapping.has(s.id) || problems.outside.has(s.id) || problems.blocking.has(s.id);
                       const isSel = s.id === selected;
                       return (
@@ -878,30 +952,30 @@ export default function FloorPlanPage() {
                           onPointerDown={(e) => onDown(e, s)}
                           style={{ cursor: "grab" }}
                         >
-                          <rect
-                            x={s.xIn} y={s.yIn} width={f.w} height={f.h}
-                            rx={2}
+                          <polygon
+                            points={pts}
                             fill={fillFor(s)}
                             stroke={bad ? "var(--danger)" : isSel ? "var(--accent)" : strokeFor(s)}
                             strokeWidth={isSel ? 3 : bad ? 3 : 1.5}
+                            strokeLinejoin="round"
                           />
                           <text
-                            x={c.x} y={c.y - 7}
+                            x={tx} y={corner ? ty - 5 : c.y - 7}
                             textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontSize: 10, fontWeight: 700, fill: "var(--text)", pointerEvents: "none" }}
+                            style={{ fontSize: corner ? 9 : 10, fontWeight: 700, fill: "var(--text)", pointerEvents: "none" }}
                           >
                             {s.label}
                           </text>
                           <text
-                            x={c.x} y={c.y + 5}
+                            x={tx} y={corner ? ty + 5 : c.y + 5}
                             textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontSize: 8, fill: "var(--text-muted)", pointerEvents: "none" }}
+                            style={{ fontSize: corner ? 7 : 8, fill: "var(--text-muted)", pointerEvents: "none" }}
                           >
-                            {fmtSize(s.widthIn, s.depthIn)}
+                            {isCorner(s) ? `${fmtSize(s.widthIn, s.depthIn)} L` : fmtSize(s.widthIn, s.depthIn)}
                           </text>
                           {s.vendorName ? (
                             <text
-                              x={c.x} y={c.y + 16}
+                              x={tx} y={corner ? ty + 14 : c.y + 16}
                               textAnchor="middle" dominantBaseline="middle"
                               style={{ fontSize: 7.5, fill: "var(--accent-text)", pointerEvents: "none" }}
                             >
@@ -1023,7 +1097,7 @@ export default function FloorPlanPage() {
                 <Card
                   title={`${sel.label || KIND_LABEL[(sel.kind || "BOOTH") as SpaceKind]}`}
                   subtitle={
-                    `${fmtSize(sel.widthIn, sel.depthIn)} ft · ${sqFt(sel.widthIn, sel.depthIn)} sq ft` +
+                    `${describeSize(sel)} · ${spaceSqFt(sel)} sq ft` +
                     `${(sel.rotationDeg || 0) !== 0 ? ` · turned ${sel.rotationDeg}°` : ""}` +
                     ` · ${fmtLength(sel.xIn)} from the left, ${fmtLength(sel.yIn)} down`
                   }
@@ -1049,25 +1123,94 @@ export default function FloorPlanPage() {
                             onChange={(e) => void patchSpace(sel.id, { label: e.target.value })} />
                         )}
                       </Field>
-                      <Field label="Size">
+                      {/* Typed, so an existing booth can be resized to whatever
+                          it really is. Blur commits; a size that can't be read
+                          is left alone rather than guessed at. */}
+                      <Field label={isCorner(sel) ? "Arm one" : "Width"} hint="5, 5&apos;6&quot; or 66&quot;">
+                        {(p) => (
+                          <Input
+                            {...p}
+                            key={`w${sel.id}${sel.widthIn}`}
+                            defaultValue={fmtLength(sel.widthIn).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"'))}
+                            style={{ width: 92 }}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              if (v !== null && v >= 6) void patchSpace(sel.id, { widthIn: v });
+                            }}
+                          />
+                        )}
+                      </Field>
+                      <Field label={isCorner(sel) ? "Arm two" : "Depth"}>
+                        {(p) => (
+                          <Input
+                            {...p}
+                            key={`d${sel.id}${sel.depthIn}`}
+                            defaultValue={fmtLength(sel.depthIn).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"'))}
+                            style={{ width: 92 }}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              if (v !== null && v >= 6) void patchSpace(sel.id, { depthIn: v });
+                            }}
+                          />
+                        )}
+                      </Field>
+                      <Field label="Shape">
                         {(p) => (
                           <Select
                             {...p}
-                            value={`${sel.widthIn}x${sel.depthIn}`}
-                            style={{ width: 150 }}
+                            value={(sel.shape as string) || "RECT"}
+                            style={{ width: 140 }}
                             onChange={(e) => {
-                              const [w, d] = e.target.value.split("x").map(Number);
-                              void patchSpace(sel.id, { widthIn: w, depthIn: d });
+                              const shape = e.target.value;
+                              /* Turning a straight shelf into a corner with no
+                                 depth set would draw a rectangle and look
+                                 broken, so it gets a sensible depth on the way. */
+                              const legIn = shape === "LCORNER" && !(sel.legIn || 0)
+                                ? Math.max(6, Math.min(18, Math.floor(Math.min(sel.widthIn, sel.depthIn) / 2)))
+                                : undefined;
+                              void patchSpace(sel.id, legIn === undefined ? { shape } : { shape, legIn });
                             }}
                           >
+                            <option value="RECT">Straight</option>
+                            <option value="LCORNER">Corner (L)</option>
+                          </Select>
+                        )}
+                      </Field>
+                      {((sel.shape as string) || "RECT") === "LCORNER" ? (
+                        <Field label="Shelf depth">
+                          {(p) => (
+                            <Input
+                              {...p}
+                              key={`g${sel.id}${sel.legIn}`}
+                              defaultValue={fmtLength(legThickness(sel)).replace(/[\u2032\u2033]/g, (c) => (c === "\u2032" ? "'" : '"'))}
+                              style={{ width: 92 }}
+                              onBlur={(e) => {
+                                const v = parseLength(e.target.value);
+                                if (v !== null && v >= 2) void patchSpace(sel.id, { legIn: v });
+                              }}
+                            />
+                          )}
+                        </Field>
+                      ) : null}
+                      <Field label="Preset">
+                        {(p) => (
+                          <Select
+                            {...p}
+                            value=""
+                            style={{ width: 175 }}
+                            onChange={(e) => {
+                              const pre = (KIND_PRESETS[(sel.kind || "BOOTH") as SpaceKind] || []).find((o) => o.label === e.target.value);
+                              if (!pre) return;
+                              void patchSpace(sel.id, {
+                                widthIn: pre.widthIn, depthIn: pre.depthIn,
+                                shape: pre.shape || "RECT", legIn: pre.legIn || 0,
+                              });
+                            }}
+                          >
+                            <option value="">Pick a size…</option>
                             {(KIND_PRESETS[(sel.kind || "BOOTH") as SpaceKind] || []).map((o) => (
-                              <option key={o.label} value={`${o.widthIn}x${o.depthIn}`}>{o.label}</option>
+                              <option key={o.label} value={o.label}>{o.label}</option>
                             ))}
-                            {/* Whatever it is now, even if it isn't a preset —
-                                otherwise picking a kind silently resizes it. */}
-                            {!(KIND_PRESETS[(sel.kind || "BOOTH") as SpaceKind] || []).some((o) => o.widthIn === sel.widthIn && o.depthIn === sel.depthIn) ? (
-                              <option value={`${sel.widthIn}x${sel.depthIn}`}>{fmtSize(sel.widthIn, sel.depthIn)} ft</option>
-                            ) : null}
                           </Select>
                         )}
                       </Field>

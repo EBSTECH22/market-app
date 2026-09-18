@@ -791,7 +791,7 @@ model FloorSpace {
   id          String    @id @default(cuid())
   planId      String
   plan        FloorPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
-  // BOOTH | TABLE | DESK | FIXTURE | WALKWAY. One shape with a kind rather than
+  // BOOTH | SHELF | TABLE | DESK | FIXTURE | WALKWAY. One shape with a kind rather than
   // a table per thing: a register desk and a 5x5 booth are both a rectangle
   // that must sit somewhere exact and not overlap anything, so they share all
   // the placement code and differ only in what they are called and whether a
@@ -802,8 +802,17 @@ model FloorSpace {
   yIn         Int       @default(0)
   widthIn     Int       @default(60)
   depthIn     Int       @default(60)
-  // 0, 90, 180 or 270 only — real booths sit square to the room.
+  // Any angle, 0-359, turned about the rectangle's own centre. Quarter turns
+  // only was wrong twice over: turning a square booth did nothing visible, and
+  // a booth against an angled wall could not be drawn at the wall's angle.
   rotationDeg Int       @default(0)
+  // RECT | LCORNER. An L is the bounding box minus a notch, so widthIn and
+  // depthIn stay the two ARM LENGTHS and legIn is the shelf's own depth. A
+  // corner unit is then described the way it is measured and bought rather
+  // than as two rectangles somebody has to keep pushed together.
+  shape       String    @default("RECT")
+  // Shelf depth in inches. Only meaningful when shape is LCORNER.
+  legIn       Int       @default(0)
   // AVAILABLE | HELD | TAKEN
   status      String    @default("AVAILABLE")
   // Who is in it. Plain ids rather than relations: a vendor leaving should not

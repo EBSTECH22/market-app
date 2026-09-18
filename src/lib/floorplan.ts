@@ -61,11 +61,12 @@ export type Wall = {
  * dragging, snapping, rotating and collision code, and only differ in what
  * they are called and whether a vendor can be put in one.
  */
-export const SPACE_KINDS = ["BOOTH", "TABLE", "DESK", "FIXTURE", "WALKWAY"] as const;
+export const SPACE_KINDS = ["BOOTH", "SHELF", "TABLE", "DESK", "FIXTURE", "WALKWAY"] as const;
 export type SpaceKind = (typeof SPACE_KINDS)[number];
 
 export const KIND_LABEL: Record<SpaceKind, string> = {
   BOOTH: "Booth",
+  SHELF: "Shelf",
   TABLE: "Table",
   DESK: "Counter / desk",
   FIXTURE: "Fixture",
@@ -103,6 +104,18 @@ export type Space = {
   depthIn: number;
   /** Any angle, 0-359, applied about the rectangle's own centre. */
   rotationDeg: number;
+  /**
+   * RECT, or LCORNER for a shelf that wraps a corner.
+   *
+   * An L is the bounding box minus a notch, so `widthIn` and `depthIn` stay the
+   * two arm LENGTHS and `legIn` is how deep the shelf itself is. That way a
+   * corner unit is described the way it is bought and measured — "4 foot one
+   * way, 3 foot the other, 18 inches deep" — instead of as two separate
+   * rectangles somebody has to keep touching.
+   */
+  shape?: string;
+  /** Shelf depth, in inches. Only meaningful when `shape` is LCORNER. */
+  legIn?: number;
   status: string;
   vendorId?: string | null;
   vendorName?: string | null;
@@ -294,6 +307,92 @@ export function footprint(s: Pick<Space, "widthIn" | "depthIn" | "rotationDeg">)
   };
 }
 
+/* ------------------------------------------------------- corner shapes -- */
+
+type ShapeLike = RectLike & { shape?: string; legIn?: number };
+
+/**
+ * Is this actually an L, or an L in name only?
+ *
+ * A leg as deep as the shape itself leaves no notch, so it IS a rectangle and
+ * is treated as one everywhere — better than drawing a degenerate polygon with
+ * two coincident corners and then wondering why the collision test is odd.
+ */
+export function isCorner(s: ShapeLike): boolean {
+  if ((s.shape || "RECT") !== "LCORNER") return false;
+  const t = Number(s.legIn || 0);
+  return t > 0 && t < Math.min(s.widthIn, s.depthIn);
+}
+
+/** Shelf depth, clamped so it can never be wider than the arms it sits on. */
+export function legThickness(s: ShapeLike): number {
+  return Math.max(1, Math.min(Number(s.legIn || 0), Math.min(s.widthIn, s.depthIn)));
+}
+
+function rotateAbout(local: Pt[], c: Pt, deg: number): Pt[] {
+  const rad = ((deg || 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return local.map((p) => ({
+    x: round(c.x + p.x * cos - p.y * sin),
+    y: round(c.y + p.x * sin + p.y * cos),
+  }));
+}
+
+/**
+ * The shape's real outline on the floor — 4 corners for a rectangle, 6 for an L.
+ *
+ * The notch is taken out of the bottom-right, so an unrotated corner shelf hugs
+ * the top and left walls. Turning it 90 degrees at a time walks it round the
+ * other three corners of a room, which is how somebody actually places one.
+ */
+export function outline(s: ShapeLike): Pt[] {
+  const c = centreOf(s);
+  const hw = s.widthIn / 2;
+  const hh = s.depthIn / 2;
+  const local: Pt[] = isCorner(s)
+    ? (() => {
+        const t = legThickness(s);
+        return [
+          { x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: -hh + t },
+          { x: -hw + t, y: -hh + t }, { x: -hw + t, y: hh }, { x: -hw, y: hh },
+        ];
+      })()
+    : [{ x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: hh }, { x: -hw, y: hh }];
+  return rotateAbout(local, c, s.rotationDeg || 0);
+}
+
+/**
+ * The shape as convex pieces, for collision.
+ *
+ * A rectangle is one piece. An L is its two arms, which overlap in the corner
+ * square — harmless, because the test only ever asks "does ANY piece of this
+ * touch ANY piece of that".
+ */
+export function shapeParts(s: ShapeLike): Pt[][] {
+  if (!isCorner(s)) return [corners(s)];
+  const c = centreOf(s);
+  const hw = s.widthIn / 2;
+  const hh = s.depthIn / 2;
+  const t = legThickness(s);
+  const armA: Pt[] = [{ x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: -hh + t }, { x: -hw, y: -hh + t }];
+  const armB: Pt[] = [{ x: -hw, y: -hh }, { x: -hw + t, y: -hh }, { x: -hw + t, y: hh }, { x: -hw, y: hh }];
+  return [rotateAbout(armA, c, s.rotationDeg || 0), rotateAbout(armB, c, s.rotationDeg || 0)];
+}
+
+/** Floor area the shape really covers — the L's notch is not floor it uses. */
+export function spaceSqFt(s: ShapeLike): number {
+  if (!isCorner(s)) return sqFt(s.widthIn, s.depthIn);
+  const t = legThickness(s);
+  return Math.round(((s.widthIn * t + t * s.depthIn - t * t) / 144) * 10) / 10;
+}
+
+/** How a size reads on the map and in a list. */
+export function describeSize(s: ShapeLike): string {
+  const base = fmtSize(s.widthIn, s.depthIn);
+  return isCorner(s) ? `${base} corner, ${fmtLength(legThickness(s))} deep` : base;
+}
+
 export function spaceRect(s: Space): { x: number; y: number; w: number; h: number } {
   const f = footprint(s);
   const c = centreOf(s);
@@ -309,8 +408,18 @@ export function spaceRect(s: Space): { x: number; y: number; w: number; h: numbe
  * intersect. Touching edges are fine; overlapping is not.
  */
 export function overlaps(a: Space, b: Space): boolean {
-  const pa = corners(a);
-  const pb = corners(b);
+  /* An L-shaped shelf is not convex, so it is tested as its two arms. Any arm
+     of one touching any arm of the other is a clash. */
+  for (const pa of shapeParts(a)) {
+    for (const pb of shapeParts(b)) {
+      if (convexOverlap(pa, pb)) return true;
+    }
+  }
+  return false;
+}
+
+/** Separating-axis test for two convex polygons. Touching edges are fine. */
+export function convexOverlap(pa: Pt[], pb: Pt[]): boolean {
   for (const poly of [pa, pb]) {
     for (let i = 0; i < poly.length; i++) {
       const p1 = poly[i];
@@ -363,9 +472,10 @@ export function pointInPolygon(pt: Pt, poly: Pt[]): boolean {
 /** Is every corner of this booth inside the room? */
 export function spaceInsideRoom(s: Space, poly: Pt[]): boolean {
   if (poly.length < 3) return true; // nothing drawn yet — don't cry about it
-  /* Its real corners, so a booth turned to follow an angled wall isn't
-     reported as sticking through it. */
-  return corners(s).every((c) => pointInPolygon(c, poly));
+  /* Its real outline, so a booth turned to follow an angled wall isn't
+     reported as sticking through it — and so an L is judged by the shape it
+     actually is rather than by the box it would fill if it were solid. */
+  return outline(s).every((c) => pointInPolygon(c, poly));
 }
 
 /** Snap a measurement to the nearest grid step. */
@@ -462,8 +572,20 @@ export const OPENING_PRESETS: { label: string; kind: Opening["kind"]; widthIn: n
 ];
 
 /** Starting sizes by kind, so adding a walkway doesn't hand you a 5×5 square. */
-export const KIND_PRESETS: Record<SpaceKind, { label: string; widthIn: number; depthIn: number }[]> = {
+export const SHELF_PRESETS: { label: string; widthIn: number; depthIn: number; shape?: string; legIn?: number }[] = [
+  { label: "Shelf 2′ × 12″", widthIn: 24, depthIn: 12 },
+  { label: "Shelf 3′ × 12″", widthIn: 36, depthIn: 12 },
+  { label: "Shelf 4′ × 16″", widthIn: 48, depthIn: 16 },
+  { label: "Shelf 4′ × 18″", widthIn: 48, depthIn: 18 },
+  { label: "Shelf 6′ × 18″", widthIn: 72, depthIn: 18 },
+  { label: "Corner 3′ × 3′ × 12″", widthIn: 36, depthIn: 36, shape: "LCORNER", legIn: 12 },
+  { label: "Corner 4′ × 4′ × 16″", widthIn: 48, depthIn: 48, shape: "LCORNER", legIn: 16 },
+  { label: "Corner 4′ × 3′ × 18″", widthIn: 48, depthIn: 36, shape: "LCORNER", legIn: 18 },
+];
+
+export const KIND_PRESETS: Record<SpaceKind, { label: string; widthIn: number; depthIn: number; shape?: string; legIn?: number }[]> = {
   BOOTH: SIZE_PRESETS,
+  SHELF: SHELF_PRESETS,
   TABLE: [
     { label: "6′ table", widthIn: 72, depthIn: 30 },
     { label: "8′ table", widthIn: 96, depthIn: 30 },

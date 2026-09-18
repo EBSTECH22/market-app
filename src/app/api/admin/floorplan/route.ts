@@ -138,6 +138,7 @@ export async function GET() {
             xIn: s.xIn, yIn: s.yIn,
             widthIn: s.widthIn, depthIn: s.depthIn,
             rotationDeg: s.rotationDeg,
+            shape: s.shape, legIn: s.legIn,
             status: s.status,
             vendorId: s.vendorId,
             contractId: s.contractId,
@@ -201,6 +202,8 @@ export async function POST(req: NextRequest) {
           widthIn: Math.max(6, int(body.widthIn, 60)),
           depthIn: Math.max(6, int(body.depthIn, 60)),
           rotationDeg: rot(body.rotationDeg),
+          shape: shapeOf(body.shape),
+          legIn: Math.max(0, int(body.legIn, 0)),
         },
       }));
       return NextResponse.json({ ok: true, id: space.id });
@@ -219,8 +222,22 @@ const kindOf = (v: unknown): string => {
   return (SPACE_KINDS as readonly string[]).includes(k) ? k : "BOOTH";
 };
 
-/** Booths sit square to the room, so rotation is one of four values. */
-const rot = (v: unknown): number => (((Math.round(Number(v) / 90) * 90) % 360) + 360) % 360 || 0;
+/**
+ * Any angle, 0–359.
+ *
+ * It used to snap to quarter turns. A booth set against an angled wall has to
+ * match that wall, and "the nearest 90°" is not a match.
+ */
+/** RECT unless it is plainly an L — an unknown word is never a new shape. */
+const shapeOf = (v: unknown): string => {
+  const k = String(v || "RECT").toUpperCase();
+  return k === "LCORNER" ? "LCORNER" : "RECT";
+};
+
+const rot = (v: unknown): number => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? ((n % 360) + 360) % 360 : 0;
+};
 
 /** PATCH — rename a room, redraw its walls, or move/assign a space. */
 export async function PATCH(req: NextRequest) {
@@ -251,6 +268,8 @@ export async function PATCH(req: NextRequest) {
       if (body.yIn !== undefined) data.yIn = int(body.yIn, existing.yIn);
       if (body.widthIn !== undefined) data.widthIn = Math.max(6, int(body.widthIn, existing.widthIn));
       if (body.depthIn !== undefined) data.depthIn = Math.max(6, int(body.depthIn, existing.depthIn));
+      if (body.shape !== undefined) data.shape = shapeOf(body.shape);
+      if (body.legIn !== undefined) data.legIn = Math.max(0, int(body.legIn, existing.legIn));
       if (body.rotationDeg !== undefined) data.rotationDeg = rot(body.rotationDeg);
       if (body.status !== undefined) {
         const v = String(body.status).toUpperCase();
