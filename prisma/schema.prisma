@@ -791,6 +791,12 @@ model FloorSpace {
   id          String    @id @default(cuid())
   planId      String
   plan        FloorPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  // BOOTH | TABLE | DESK | FIXTURE | WALKWAY. One shape with a kind rather than
+  // a table per thing: a register desk and a 5x5 booth are both a rectangle
+  // that must sit somewhere exact and not overlap anything, so they share all
+  // the placement code and differ only in what they are called and whether a
+  // vendor can be put in one.
+  kind        String    @default("BOOTH")
   label       String    @default("")
   xIn         Int       @default(0)
   yIn         Int       @default(0)

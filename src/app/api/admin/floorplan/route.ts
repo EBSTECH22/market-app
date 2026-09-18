@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit } from "@/lib/audit";
-import { closureGapIn, roomAreaSqFt, type Wall } from "@/lib/floorplan";
+import { closureGapIn, roomAreaSqFt, SPACE_KINDS, type Wall, type Opening } from "@/lib/floorplan";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +33,36 @@ function cleanWalls(raw: unknown): Wall[] {
            so a stray keystroke can't spin the drawing into orbit. */
         turnDeg: Number.isFinite(turnDeg) ? Math.max(-180, Math.min(180, turnDeg)) : 90,
         label: String(o.label || "").slice(0, 60),
+        openings: cleanOpenings(o.openings, lengthIn),
       };
     })
-    .filter((w): w is { lengthIn: number; turnDeg: number; label: string } => w !== null)
+    .filter((w): w is { lengthIn: number; turnDeg: number; label: string; openings: Opening[] } => w !== null)
     .slice(0, 200);
+}
+
+/** Doors, arches and windows, kept inside the wall they belong to. */
+function cleanOpenings(raw: unknown, wallLengthIn: number): Opening[] {
+  if (!Array.isArray(raw)) return [];
+  const kinds = ["DOOR", "ARCH", "WINDOW", "SERVICE"];
+  return raw
+    .map((o) => {
+      const v = (o || {}) as Record<string, unknown>;
+      const widthIn = Math.round(Number(v.widthIn));
+      const offsetIn = Math.round(Number(v.offsetIn));
+      if (!Number.isFinite(widthIn) || widthIn <= 0) return null;
+      const kind = String(v.kind || "DOOR").toUpperCase();
+      return {
+        kind: (kinds.includes(kind) ? kind : "DOOR") as Opening["kind"],
+        /* Clamped rather than rejected: a door typed past the end of its wall
+           is a mistyped offset, and sliding it to the end is more useful than
+           dropping it silently. */
+        widthIn: Math.max(1, Math.min(widthIn, wallLengthIn)),
+        offsetIn: Math.max(0, Math.min(Number.isFinite(offsetIn) ? offsetIn : 0, Math.max(0, wallLengthIn - 1))),
+        label: String(v.label || "").slice(0, 40),
+      };
+    })
+    .filter((o): o is { kind: Opening["kind"]; widthIn: number; offsetIn: number; label: string } => o !== null)
+    .slice(0, 40);
 }
 
 export async function GET() {
@@ -83,6 +109,7 @@ export async function GET() {
           areaSqFt: roomAreaSqFt(walls),
           spaces: p.spaces.map((s) => ({
             id: s.id,
+            kind: s.kind,
             label: s.label,
             xIn: s.xIn, yIn: s.yIn,
             widthIn: s.widthIn, depthIn: s.depthIn,
@@ -109,13 +136,19 @@ export async function GET() {
   });
 }
 
-/** POST — create a plan, or add a space to one. */
+/**
+ * POST — create a plan, or add a space to one.
+ *
+ * `what` says which, NOT `kind`: a space carries its own `kind` (BOOTH, DESK,
+ * WALKWAY…) in the same body, and using one word for both meant adding a
+ * walkway sent `kind: "space"` and created a booth.
+ */
 export async function POST(req: NextRequest) {
   return runRoute("admin/floorplan POST", async () => {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json().catch(() => ({}));
 
-    if (body.kind === "plan") {
+    if (body.what === "plan") {
       const count = await db.floorPlan.count();
       const plan = await db.floorPlan.create({
         data: {
@@ -128,7 +161,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, id: plan.id });
     }
 
-    if (body.kind === "space") {
+    if (body.what === "space") {
       const planId = String(body.planId || "");
       const plan = await db.floorPlan.findUnique({ where: { id: planId }, select: { id: true } });
       if (!plan) return NextResponse.json({ error: "That room is gone." }, { status: 404 });
@@ -136,6 +169,7 @@ export async function POST(req: NextRequest) {
       const space = await db.floorSpace.create({
         data: {
           planId,
+          kind: kindOf(body.kind),
           label: String(body.label || "").slice(0, 40),
           xIn: int(body.xIn, 0), yIn: int(body.yIn, 0),
           widthIn: Math.max(6, int(body.widthIn, 60)),
@@ -154,6 +188,11 @@ const int = (v: unknown, fallback: number): number => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? n : fallback;
 };
+const kindOf = (v: unknown): string => {
+  const k = String(v || "BOOTH").toUpperCase();
+  return (SPACE_KINDS as readonly string[]).includes(k) ? k : "BOOTH";
+};
+
 /** Booths sit square to the room, so rotation is one of four values. */
 const rot = (v: unknown): number => (((Math.round(Number(v) / 90) * 90) % 360) + 360) % 360 || 0;
 
@@ -163,7 +202,7 @@ export async function PATCH(req: NextRequest) {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json().catch(() => ({}));
 
-    if (body.kind === "plan") {
+    if (body.what === "plan") {
       const data: Record<string, unknown> = {};
       if (body.name !== undefined) data.name = String(body.name).slice(0, 80);
       if (body.notes !== undefined) data.notes = String(body.notes).slice(0, 1000);
@@ -173,12 +212,13 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    if (body.kind === "space") {
+    if (body.what === "space") {
       const id = String(body.id || "");
       const existing = await db.floorSpace.findUnique({ where: { id } });
       if (!existing) return NextResponse.json({ error: "That space is gone." }, { status: 404 });
 
       const data: Record<string, unknown> = {};
+      if (body.kind !== undefined) data.kind = kindOf(body.kind);
       if (body.label !== undefined) data.label = String(body.label).slice(0, 40);
       if (body.notes !== undefined) data.notes = String(body.notes).slice(0, 500);
       if (body.xIn !== undefined) data.xIn = int(body.xIn, existing.xIn);

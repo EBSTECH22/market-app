@@ -28,7 +28,7 @@ export async function GET() {
       where: { id: { in: planIds } },
       include: {
         spaces: {
-          select: { id: true, xIn: true, yIn: true, widthIn: true, depthIn: true, rotationDeg: true },
+          select: { id: true, kind: true, xIn: true, yIn: true, widthIn: true, depthIn: true, rotationDeg: true },
         },
       },
     });
@@ -51,7 +51,7 @@ export async function GET() {
           /* Neighbours as bare rectangles: shape only, no names, no rents. */
           others: (plan?.spaces || [])
             .filter((o) => o.id !== s.id)
-            .map((o) => ({ id: o.id, xIn: o.xIn, yIn: o.yIn, widthIn: o.widthIn, depthIn: o.depthIn, rotationDeg: o.rotationDeg })),
+            .map((o) => ({ id: o.id, kind: o.kind, xIn: o.xIn, yIn: o.yIn, widthIn: o.widthIn, depthIn: o.depthIn, rotationDeg: o.rotationDeg })),
         };
       }),
     });

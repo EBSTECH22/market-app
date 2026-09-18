@@ -16,7 +16,7 @@ type BoothSpot = {
   id: string; label: string; roomName: string;
   xIn: number; yIn: number; widthIn: number; depthIn: number; rotationDeg: number;
   polygon: Pt[];
-  others: { id: string; xIn: number; yIn: number; widthIn: number; depthIn: number; rotationDeg: number }[];
+  others: { id: string; kind?: string; xIn: number; yIn: number; widthIn: number; depthIn: number; rotationDeg: number }[];
 };
 
 /**
@@ -56,9 +56,16 @@ function BoothMap({ spots }: { spots: BoothSpot[] }) {
                 ) : null}
                 {s.others.map((o) => {
                   const of_ = footprint(o);
+                  /* Aisles drawn as aisles, so a vendor can see which side of
+                     their booth people walk past. */
+                  const aisle = o.kind === "WALKWAY";
                   return (
                     <rect key={o.id} x={o.xIn} y={o.yIn} width={of_.w} height={of_.h}
-                      fill="var(--bg-sunken)" stroke="var(--border-strong)" strokeWidth="1" rx="2" />
+                      fill={aisle ? "var(--info-soft)" : "var(--bg-sunken)"}
+                      opacity={aisle ? 0.5 : 1}
+                      stroke={aisle ? "var(--info)" : "var(--border-strong)"}
+                      strokeDasharray={aisle ? "8 5" : undefined}
+                      strokeWidth="1" rx="2" />
                   );
                 })}
                 <rect x={s.xIn} y={s.yIn} width={f.w} height={f.h}

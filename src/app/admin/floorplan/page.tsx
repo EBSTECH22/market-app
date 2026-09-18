@@ -9,7 +9,9 @@ import { money, plural } from "@/lib/format";
 import {
   parseLength, fmtLength, fmtSize, sqFt, wallPoints, roomPolygon, closureGapIn,
   roomAreaSqFt, bounds, footprint, overlaps, spaceInsideRoom, snap,
-  SIZE_PRESETS, STATUS_LABEL, type Wall, type Space,
+  wallSolids, openingPoints, overlapProblem, rentable,
+  STATUS_LABEL, KIND_LABEL, KIND_PRESETS, OPENING_LABEL, OPENING_PRESETS, SPACE_KINDS,
+  type Wall, type Space, type Opening, type SpaceKind,
 } from "@/lib/floorplan";
 
 /**
@@ -27,7 +29,7 @@ import {
  * don't return to their starting corner the gap is reported in inches instead.
  */
 
-type PlanSpace = Space & { contractId: string; notes: string; vendorCode: string };
+type PlanSpace = Space & { kind: string; contractId: string; notes: string; vendorCode: string };
 type Plan = {
   id: string; name: string; gridIn: number; notes: string;
   walls: Wall[]; gapIn: number; areaSqFt: number; spaces: PlanSpace[];
@@ -48,6 +50,30 @@ const STATUS_STROKE: Record<string, string> = {
   TAKEN: "var(--accent)",
 };
 
+/* Fixtures aren't rented, so they don't take a status colour — a register desk
+   shown as "available" would be nonsense. They read as part of the building. */
+const KIND_FILL: Record<string, string> = {
+  DESK: "var(--bg-sunken)",
+  FIXTURE: "var(--bg-sunken)",
+  TABLE: "var(--bg-elevated)",
+  WALKWAY: "transparent",
+};
+const KIND_STROKE: Record<string, string> = {
+  DESK: "var(--text-muted)",
+  FIXTURE: "var(--text-muted)",
+  TABLE: "var(--border-strong)",
+  WALKWAY: "var(--info)",
+};
+
+function fillFor(s: PlanSpace): string {
+  if (s.kind && s.kind !== "BOOTH" && KIND_FILL[s.kind] !== undefined) return KIND_FILL[s.kind];
+  return STATUS_FILL[s.status] || STATUS_FILL.AVAILABLE;
+}
+function strokeFor(s: PlanSpace): string {
+  if (s.kind && s.kind !== "BOOTH" && KIND_STROKE[s.kind]) return KIND_STROKE[s.kind];
+  return STATUS_STROKE[s.status] || STATUS_STROKE.AVAILABLE;
+}
+
 export default function FloorPlanPage() {
   const toast = useToast();
   const dialog = useDialog();
@@ -62,6 +88,7 @@ export default function FloorPlanPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [wallsOpen, setWallsOpen] = useState(false);
   const [assignFor, setAssignFor] = useState<string | null>(null);
+  const [newKind, setNewKind] = useState<SpaceKind>("BOOTH");
   const [newSize, setNewSize] = useState("60x60");
 
   const load = useCallback(async () => {
@@ -88,17 +115,27 @@ export default function FloorPlanPage() {
   /* Problems, worked out once and shown in one place rather than as surprises
      while dragging: booths on top of each other, and booths outside the room. */
   const problems = useMemo(() => {
-    if (!plan) return { overlapping: new Set<string>(), outside: new Set<string>() };
     const overlapping = new Set<string>();
+    const blocking = new Set<string>();
     const outside = new Set<string>();
+    if (!plan) return { overlapping, blocking, outside };
     for (let i = 0; i < plan.spaces.length; i++) {
       const a = plan.spaces[i];
       if (!spaceInsideRoom(a, poly)) outside.add(a.id);
       for (let j = i + 1; j < plan.spaces.length; j++) {
-        if (overlaps(a, plan.spaces[j])) { overlapping.add(a.id); overlapping.add(plan.spaces[j].id); }
+        const b = plan.spaces[j];
+        if (!overlaps(a, b)) continue;
+        /* Two walkways crossing is a junction. A booth in a walkway is the
+           blocked aisle this map exists to catch, and it's a different warning
+           from two booths on top of each other. */
+        const kind = overlapProblem(a, b);
+        if (kind === "COLLISION") { overlapping.add(a.id); overlapping.add(b.id); }
+        else if (kind === "BLOCKS_WALKWAY") {
+          blocking.add(a.kind === "WALKWAY" ? b.id : a.id);
+        }
       }
     }
-    return { overlapping, outside };
+    return { overlapping, blocking, outside };
   }, [plan, poly]);
 
   /* ------------------------------------------------------------- saving -- */
@@ -112,7 +149,7 @@ export default function FloorPlanPage() {
     }
     const r = await fetch("/api/admin/floorplan", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "space", id, ...body }),
+      body: JSON.stringify({ what: "space", id, ...body }),
     });
     if (!r.ok) { toast.error("That didn't save"); await load(); }
     else if (!optimistic) await load();
@@ -122,7 +159,7 @@ export default function FloorPlanPage() {
     if (!plan) return;
     const r = await fetch("/api/admin/floorplan", {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "plan", id: plan.id, ...body }),
+      body: JSON.stringify({ what: "plan", id: plan.id, ...body }),
     });
     if (!r.ok) toast.error("Couldn't save the room");
     await load();
@@ -140,7 +177,7 @@ export default function FloorPlanPage() {
     try {
       const r = await fetch("/api/admin/floorplan", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "plan", name, walls: [] }),
+        body: JSON.stringify({ what: "plan", name, walls: [] }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { toast.error("Couldn't add it"); return; }
@@ -153,6 +190,8 @@ export default function FloorPlanPage() {
   const addSpace = async () => {
     if (!plan) return;
     const [w, dp] = newSize.split("x").map(Number);
+    const sameKind = plan.spaces.filter((sp) => (sp.kind || "BOOTH") === newKind).length;
+    const prefix: Record<string, string> = { BOOTH: "B", TABLE: "T", DESK: "Desk", FIXTURE: "F", WALKWAY: "Aisle" };
     /* Dropped near the top-left of the room rather than at 0,0 — a booth
        exactly on the corner is hard to grab, and it reads as a mistake. */
     const x = snap(box.minX + 12, plan.gridIn || 1);
@@ -162,8 +201,9 @@ export default function FloorPlanPage() {
       const r = await fetch("/api/admin/floorplan", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          kind: "space", planId: plan.id,
-          label: `B${plan.spaces.length + 1}`,
+          what: "space", planId: plan.id,
+          kind: newKind,
+          label: `${prefix[newKind] || "B"}${sameKind + 1}`,
           xIn: x, yIn: y, widthIn: w, depthIn: dp, rotationDeg: 0,
         }),
       });
@@ -369,17 +409,38 @@ export default function FloorPlanPage() {
               >
                 <div className="stack g-3">
                   <div className="row wrap g-3" style={{ alignItems: "flex-end" }}>
-                    <Field label="Booth size">
+                    <Field label="Add">
                       {(p) => (
-                        <Select {...p} value={newSize} onChange={(e) => setNewSize(e.target.value)} style={{ width: 150 }}>
-                          {SIZE_PRESETS.map((s) => (
-                            <option key={s.label} value={`${s.widthIn}x${s.depthIn}`}>{s.label} ft</option>
+                        <Select
+                          {...p}
+                          value={newKind}
+                          style={{ width: 150 }}
+                          onChange={(e) => {
+                            const k = e.target.value as SpaceKind;
+                            setNewKind(k);
+                            /* Switch the size list with it — a walkway offered a
+                               5×5 default was a walkway nobody used. */
+                            const first = KIND_PRESETS[k][0];
+                            setNewSize(`${first.widthIn}x${first.depthIn}`);
+                          }}
+                        >
+                          {SPACE_KINDS.map((k) => (
+                            <option key={k} value={k}>{KIND_LABEL[k]}</option>
+                          ))}
+                        </Select>
+                      )}
+                    </Field>
+                    <Field label="Size">
+                      {(p) => (
+                        <Select {...p} value={newSize} onChange={(e) => setNewSize(e.target.value)} style={{ width: 170 }}>
+                          {KIND_PRESETS[newKind].map((s) => (
+                            <option key={s.label} value={`${s.widthIn}x${s.depthIn}`}>{s.label}</option>
                           ))}
                         </Select>
                       )}
                     </Field>
                     <Button variant="primary" icon="plus" disabled={busy || plan.walls.length === 0} onClick={() => void addSpace()}>
-                      Add booth
+                      Add {KIND_LABEL[newKind].toLowerCase()}
                     </Button>
                     <Field label="Snap to">
                       {(p) => (
@@ -394,10 +455,11 @@ export default function FloorPlanPage() {
                     </Field>
                   </div>
 
-                  {problems.overlapping.size > 0 || problems.outside.size > 0 ? (
+                  {problems.overlapping.size > 0 || problems.outside.size > 0 || problems.blocking.size > 0 ? (
                     <Note tone="warn">
-                      {problems.overlapping.size > 0 ? `${plural(problems.overlapping.size, "booth")} overlapping. ` : ""}
-                      {problems.outside.size > 0 ? `${plural(problems.outside.size, "booth")} outside the room. ` : ""}
+                      {problems.overlapping.size > 0 ? `${plural(problems.overlapping.size, "thing")} overlapping. ` : ""}
+                      {problems.blocking.size > 0 ? `${plural(problems.blocking.size, "thing")} standing in a walkway. ` : ""}
+                      {problems.outside.size > 0 ? `${plural(problems.outside.size, "thing")} outside the room. ` : ""}
                       They&rsquo;re outlined in red below.
                     </Note>
                   ) : null}
@@ -428,10 +490,29 @@ export default function FloorPlanPage() {
                       <polygon points={poly.map((p) => `${p.x},${p.y}`).join(" ")} fill="url(#ft)" stroke="none" />
                     ) : null}
 
-                    {/* The walls, each labelled with what the tape said. */}
+                    {/* Walkways first, so they sit UNDER the things standing
+                        in them — an aisle is floor, not furniture. */}
+                    {plan.spaces.filter((sp) => sp.kind === "WALKWAY").map((sp) => {
+                      const f = footprint(sp);
+                      return (
+                        <rect
+                          key={sp.id}
+                          x={sp.xIn} y={sp.yIn} width={f.w} height={f.h}
+                          fill="var(--info-soft)" opacity={0.55}
+                          stroke="var(--info)" strokeWidth="1" strokeDasharray="8 5"
+                          onPointerDown={(e) => onDown(e, sp)}
+                          style={{ cursor: "grab" }}
+                        />
+                      );
+                    })}
+
+                    {/* The walls. Drawn as the SOLID stretches either side of
+                        every door, arch and window, so an opening is a real gap
+                        in the line rather than a symbol sitting on top of it. */}
                     {wallSegments.slice(0, -1).map((a, i) => {
                       const b = wallSegments[i + 1];
                       const w = plan.walls[i];
+                      const openings = w.openings || [];
                       const mx = (a.x + b.x) / 2;
                       const my = (a.y + b.y) / 2;
                       /* Nudge the label to the outside of the wall so it never
@@ -441,7 +522,46 @@ export default function FloorPlanPage() {
                       const ny = ((b.x - a.x) / len) * 14;
                       return (
                         <g key={i}>
-                          <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--text)" strokeWidth="3" strokeLinecap="square" />
+                          {wallSolids(a, b, openings).map((seg, k) => (
+                            <line
+                              key={k}
+                              x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y}
+                              stroke="var(--text)" strokeWidth="3" strokeLinecap="square"
+                            />
+                          ))}
+
+                          {openings.map((o, k) => {
+                            const pts = openingPoints(a, b, o);
+                            const ox = (pts.from.x + pts.to.x) / 2;
+                            const oy = (pts.from.y + pts.to.y) / 2;
+                            /* Each opening reads differently at a glance:
+                               a window keeps a thin line across the gap, an
+                               archway is dashed, a doorway is left open with a
+                               swing, a service hatch gets a bar. */
+                            return (
+                              <g key={`o${k}`}>
+                                {o.kind === "WINDOW" ? (
+                                  <line x1={pts.from.x} y1={pts.from.y} x2={pts.to.x} y2={pts.to.y} stroke="var(--info)" strokeWidth="1.5" />
+                                ) : o.kind === "ARCH" ? (
+                                  <line x1={pts.from.x} y1={pts.from.y} x2={pts.to.x} y2={pts.to.y} stroke="var(--text-muted)" strokeWidth="1.5" strokeDasharray="5 4" />
+                                ) : o.kind === "SERVICE" ? (
+                                  <line x1={pts.from.x} y1={pts.from.y} x2={pts.to.x} y2={pts.to.y} stroke="var(--warn)" strokeWidth="3" />
+                                ) : null}
+                                {/* End ticks, so a doorway reads as a measured
+                                    opening rather than a missing bit of wall. */}
+                                <circle cx={pts.from.x} cy={pts.from.y} r="2.5" fill="var(--text)" />
+                                <circle cx={pts.to.x} cy={pts.to.y} r="2.5" fill="var(--text)" />
+                                <text
+                                  x={ox + nx} y={oy + ny}
+                                  textAnchor="middle" dominantBaseline="middle"
+                                  style={{ fontSize: 7.5, fill: "var(--text-muted)" }}
+                                >
+                                  {o.label || OPENING_LABEL[o.kind]} {fmtLength(o.widthIn)}
+                                </text>
+                              </g>
+                            );
+                          })}
+
                           <text
                             x={mx - nx} y={my - ny}
                             textAnchor="middle" dominantBaseline="middle"
@@ -462,10 +582,10 @@ export default function FloorPlanPage() {
                       />
                     ) : null}
 
-                    {/* Booths. */}
-                    {plan.spaces.map((s) => {
+                    {/* Everything standing on the floor. Walkways already drawn. */}
+                    {plan.spaces.filter((sp) => sp.kind !== "WALKWAY").map((s) => {
                       const f = footprint(s);
-                      const bad = problems.overlapping.has(s.id) || problems.outside.has(s.id);
+                      const bad = problems.overlapping.has(s.id) || problems.outside.has(s.id) || problems.blocking.has(s.id);
                       const isSel = s.id === selected;
                       return (
                         <g
@@ -476,8 +596,8 @@ export default function FloorPlanPage() {
                           <rect
                             x={s.xIn} y={s.yIn} width={f.w} height={f.h}
                             rx={2}
-                            fill={STATUS_FILL[s.status] || STATUS_FILL.AVAILABLE}
-                            stroke={bad ? "var(--danger)" : isSel ? "var(--accent)" : STATUS_STROKE[s.status] || STATUS_STROKE.AVAILABLE}
+                            fill={fillFor(s)}
+                            stroke={bad ? "var(--danger)" : isSel ? "var(--accent)" : strokeFor(s)}
                             strokeWidth={isSel ? 3 : bad ? 3 : 1.5}
                           />
                           <text
@@ -513,12 +633,24 @@ export default function FloorPlanPage() {
               {/* ---- the selected booth ---- */}
               {sel ? (
                 <Card
-                  title={sel.label || "Booth"}
+                  title={`${sel.label || KIND_LABEL[(sel.kind || "BOOTH") as SpaceKind]}`}
                   subtitle={`${fmtSize(sel.widthIn, sel.depthIn)} ft · ${sqFt(sel.widthIn, sel.depthIn)} sq ft · ${fmtLength(sel.xIn)} from the left, ${fmtLength(sel.yIn)} down`}
                   actions={<Button size="sm" variant="ghost" onClick={() => setSelected(null)}>Close</Button>}
                 >
                   <div className="stack g-4">
                     <div className="row wrap g-3" style={{ alignItems: "flex-end" }}>
+                      <Field label="What it is">
+                        {(p) => (
+                          <Select
+                            {...p}
+                            value={(sel.kind || "BOOTH")}
+                            style={{ width: 150 }}
+                            onChange={(e) => void patchSpace(sel.id, { kind: e.target.value }, false)}
+                          >
+                            {SPACE_KINDS.map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+                          </Select>
+                        )}
+                      </Field>
                       <Field label="Name on the map">
                         {(p) => (
                           <Input {...p} value={sel.label} style={{ width: 140 }}
@@ -536,10 +668,12 @@ export default function FloorPlanPage() {
                               void patchSpace(sel.id, { widthIn: w, depthIn: d });
                             }}
                           >
-                            {SIZE_PRESETS.map((s) => (
-                              <option key={s.label} value={`${s.widthIn}x${s.depthIn}`}>{s.label} ft</option>
+                            {(KIND_PRESETS[(sel.kind || "BOOTH") as SpaceKind] || []).map((o) => (
+                              <option key={o.label} value={`${o.widthIn}x${o.depthIn}`}>{o.label}</option>
                             ))}
-                            {!SIZE_PRESETS.some((s) => s.widthIn === sel.widthIn && s.depthIn === sel.depthIn) ? (
+                            {/* Whatever it is now, even if it isn't a preset —
+                                otherwise picking a kind silently resizes it. */}
+                            {!(KIND_PRESETS[(sel.kind || "BOOTH") as SpaceKind] || []).some((o) => o.widthIn === sel.widthIn && o.depthIn === sel.depthIn) ? (
                               <option value={`${sel.widthIn}x${sel.depthIn}`}>{fmtSize(sel.widthIn, sel.depthIn)} ft</option>
                             ) : null}
                           </Select>
@@ -550,6 +684,7 @@ export default function FloorPlanPage() {
                       </Button>
                     </div>
 
+                    {rentable(sel.kind || "BOOTH") ? (
                     <div className="row wrap g-2">
                       {(["AVAILABLE", "HELD", "TAKEN"] as const).map((st) => (
                         <Button
@@ -562,21 +697,31 @@ export default function FloorPlanPage() {
                         </Button>
                       ))}
                     </div>
+                    ) : null}
 
-                    <div className="row wrap g-2" style={{ alignItems: "center" }}>
-                      {sel.vendorName ? (
-                        <>
-                          <Badge tone="success" dot>{sel.vendorCode} {sel.vendorName}</Badge>
-                          <Button size="sm" variant="ghost" onClick={() => void patchSpace(sel.id, { vendorId: "", contractId: "" }, false)}>
-                            Clear
+                    {/* A walkway or a structural fixture is not let to anybody,
+                        so it gets no status buttons and no vendor picker. */}
+                    {rentable(sel.kind || "BOOTH") ? (
+                      <div className="row wrap g-2" style={{ alignItems: "center" }}>
+                        {sel.vendorName ? (
+                          <>
+                            <Badge tone="success" dot>{sel.vendorCode} {sel.vendorName}</Badge>
+                            <Button size="sm" variant="ghost" onClick={() => void patchSpace(sel.id, { vendorId: "", contractId: "" }, false)}>
+                              Clear
+                            </Button>
+                          </>
+                        ) : (
+                          <Button size="sm" variant="secondary" icon="store" onClick={() => setAssignFor(sel.id)}>
+                            Put a vendor in it
                           </Button>
-                        </>
-                      ) : (
-                        <Button size="sm" variant="secondary" icon="store" onClick={() => setAssignFor(sel.id)}>
-                          Put a vendor in it
-                        </Button>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="t-xs t-muted">
+                        {KIND_LABEL[(sel.kind || "BOOTH") as SpaceKind]}s aren&rsquo;t let to anyone, so there&rsquo;s
+                        nothing to assign. {sel.kind === "WALKWAY" ? "Anything standing in this one is flagged above." : ""}
+                      </span>
+                    )}
 
                     <div>
                       <Button size="sm" variant="dangerSoft" icon="trash" onClick={() => void removeSpace(sel)}>
@@ -676,21 +821,29 @@ function WallEditor({
   onSave: (walls: Wall[], name: string) => void | Promise<void>;
 }) {
   const [name, setName] = useState(plan.name);
-  const [rows, setRows] = useState<{ raw: string; turnDeg: number; label: string }[]>([]);
+  const [rows, setRows] = useState<{ raw: string; turnDeg: number; label: string; openings: Opening[] }[]>([]);
+  /* Which wall's doors and windows are open for editing. Only one at a time —
+     five walls of expanded opening lists is a form nobody can read. */
+  const [openWall, setOpenWall] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setName(plan.name);
     setRows(
       plan.walls.length
-        ? plan.walls.map((w) => ({ raw: fmtLength(w.lengthIn).replace(/[′″]/g, (m) => (m === "′" ? "'" : '"')), turnDeg: w.turnDeg, label: w.label || "" }))
-        : [{ raw: "", turnDeg: 90, label: "" }]
+        ? plan.walls.map((w) => ({
+            raw: fmtLength(w.lengthIn).replace(/[′″]/g, (m) => (m === "′" ? "'" : '"')),
+            turnDeg: w.turnDeg,
+            label: w.label || "",
+            openings: w.openings || [],
+          }))
+        : [{ raw: "", turnDeg: 90, label: "", openings: [] }]
     );
   }, [open, plan]);
 
   const parsed: (Wall | null)[] = rows.map((r) => {
     const lengthIn = parseLength(r.raw);
-    return lengthIn === null ? null : { lengthIn, turnDeg: r.turnDeg, label: r.label };
+    return lengthIn === null ? null : { lengthIn, turnDeg: r.turnDeg, label: r.label, openings: r.openings };
   });
   const good = parsed.filter((w): w is Wall => w !== null);
   const gap = good.length >= 3 ? closureGapIn(good) : null;
@@ -756,16 +909,124 @@ function WallEditor({
                 <span className="t-xs t-muted" style={{ minWidth: 60 }}>
                   {inches !== null ? fmtLength(inches) : ""}
                 </span>
+                <Button
+                  size="sm"
+                  variant={r.openings.length ? "secondary" : "ghost"}
+                  onClick={() => setOpenWall(openWall === i ? null : i)}
+                >
+                  {r.openings.length ? `${r.openings.length} opening${r.openings.length === 1 ? "" : "s"}` : "Doors & windows"}
+                </Button>
                 <Button size="sm" variant="ghost" aria-label={`Remove wall ${i + 1}`} onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}>
                   ✕
                 </Button>
+
+                {openWall === i ? (
+                  <div
+                    className="stack g-2"
+                    style={{ width: "100%", padding: "var(--sp-3)", background: "var(--bg-sunken)", borderRadius: "var(--r-md)" }}
+                  >
+                    <span className="t-xs t-muted">
+                      Measured from the corner you started this wall at. A door 5 feet along is{" "}
+                      <b>5&rsquo;</b> from that corner.
+                    </span>
+
+                    {r.openings.map((o, k) => (
+                      <div key={k} className="row wrap g-2" style={{ alignItems: "flex-end" }}>
+                        <Field label="What">
+                          {(p) => (
+                            <Select
+                              {...p}
+                              value={o.kind}
+                              style={{ width: 150 }}
+                              onChange={(e) => setRows((rs) => rs.map((x, j) => j !== i ? x : {
+                                ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, kind: e.target.value as Opening["kind"] } : y)),
+                              }))}
+                            >
+                              {(Object.keys(OPENING_LABEL) as Opening["kind"][]).map((kk) => (
+                                <option key={kk} value={kk}>{OPENING_LABEL[kk]}</option>
+                              ))}
+                            </Select>
+                          )}
+                        </Field>
+                        <Field label="Starts at">
+                          {(p) => (
+                            <Input
+                              {...p}
+                              defaultValue={fmtLength(o.offsetIn).replace(/[′″]/g, (m) => (m === "′" ? "'" : '"'))}
+                              style={{ width: 100 }}
+                              onBlur={(e) => {
+                                const v = parseLength(e.target.value);
+                                if (v === null) return;
+                                setRows((rs) => rs.map((x, j) => j !== i ? x : {
+                                  ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, offsetIn: v } : y)),
+                                }));
+                              }}
+                            />
+                          )}
+                        </Field>
+                        <Field label="Wide">
+                          {(p) => (
+                            <Input
+                              {...p}
+                              defaultValue={fmtLength(o.widthIn).replace(/[′″]/g, (m) => (m === "′" ? "'" : '"'))}
+                              style={{ width: 100 }}
+                              onBlur={(e) => {
+                                const v = parseLength(e.target.value);
+                                if (v === null || v <= 0) return;
+                                setRows((rs) => rs.map((x, j) => j !== i ? x : {
+                                  ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, widthIn: v } : y)),
+                                }));
+                              }}
+                            />
+                          )}
+                        </Field>
+                        <Field label="Label">
+                          {(p) => (
+                            <Input
+                              {...p}
+                              defaultValue={o.label || ""}
+                              placeholder="Front door"
+                              style={{ width: 130 }}
+                              onBlur={(e) => setRows((rs) => rs.map((x, j) => j !== i ? x : {
+                                ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, label: e.target.value } : y)),
+                              }))}
+                            />
+                          )}
+                        </Field>
+                        <Button
+                          size="sm" variant="ghost" aria-label="Remove this opening"
+                          onClick={() => setRows((rs) => rs.map((x, j) => j !== i ? x : { ...x, openings: x.openings.filter((_, m) => m !== k) }))}
+                        >
+                          ✕
+                        </Button>
+                      </div>
+                    ))}
+
+                    <div className="row wrap g-2">
+                      {OPENING_PRESETS.map((preset) => (
+                        <Button
+                          key={preset.label}
+                          size="sm"
+                          variant="secondary"
+                          icon="plus"
+                          onClick={() => setRows((rs) => rs.map((x, j) => j !== i ? x : {
+                            ...x,
+                            openings: [...x.openings, { kind: preset.kind, widthIn: preset.widthIn, offsetIn: 0, label: "" }],
+                          }))}
+                        >
+                          {preset.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             );
           })}
         </div>
 
         <div>
-          <Button size="sm" variant="secondary" icon="plus" onClick={() => setRows((rs) => [...rs, { raw: "", turnDeg: 90, label: "" }])}>
+          <Button size="sm" variant="secondary" icon="plus" onClick={() => setRows((rs) => [...rs, { raw: "", turnDeg: 90, label: "", openings: [] }])}>
             Another wall
           </Button>
         </div>

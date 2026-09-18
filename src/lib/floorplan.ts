@@ -15,6 +15,29 @@
  * reported as a gap rather than quietly drawn as a wonky shape.
  */
 
+/**
+ * A hole in a wall: a doorway, an archway, a window, the register window.
+ *
+ * Measured the way you'd measure it standing there — how far along the wall it
+ * starts, and how wide it is — rather than as coordinates. Both in inches from
+ * the START of the wall, which is the corner you were standing at when you
+ * measured that wall.
+ */
+export type Opening = {
+  kind: "DOOR" | "ARCH" | "WINDOW" | "SERVICE";
+  /** Distance from the start of the wall to the near edge of the opening. */
+  offsetIn: number;
+  widthIn: number;
+  label?: string;
+};
+
+export const OPENING_LABEL: Record<Opening["kind"], string> = {
+  DOOR: "Doorway",
+  ARCH: "Archway",
+  WINDOW: "Window",
+  SERVICE: "Service window",
+};
+
 export type Wall = {
   /** Length of this wall, in inches. */
   lengthIn: number;
@@ -25,11 +48,54 @@ export type Wall = {
   turnDeg: number;
   /** "North wall", "behind the register" — optional, shown on the drawing. */
   label?: string;
+  /** Doors, arches and windows in this wall. */
+  openings?: Opening[];
 };
+
+/**
+ * What a rectangle on the floor IS.
+ *
+ * One shape with a kind, rather than a separate table per thing. A register
+ * desk and a 5×5 booth are both a rectangle that has to sit somewhere exact and
+ * must not end up inside something else — so they share every line of the
+ * dragging, snapping, rotating and collision code, and only differ in what
+ * they are called and whether a vendor can be put in one.
+ */
+export const SPACE_KINDS = ["BOOTH", "TABLE", "DESK", "FIXTURE", "WALKWAY"] as const;
+export type SpaceKind = (typeof SPACE_KINDS)[number];
+
+export const KIND_LABEL: Record<SpaceKind, string> = {
+  BOOTH: "Booth",
+  TABLE: "Table",
+  DESK: "Counter / desk",
+  FIXTURE: "Fixture",
+  WALKWAY: "Walkway",
+};
+
+/** Can a vendor be assigned to this? A walkway is floor nobody rents. */
+export function rentable(kind: string): boolean {
+  return kind !== "WALKWAY" && kind !== "FIXTURE";
+}
+
+/**
+ * Walkways are the exception to every overlap rule — in both directions.
+ *
+ * Two walkways crossing is a junction, which is normal. But a booth sitting in
+ * a walkway is the thing this map exists to prevent: an aisle that looked fine
+ * on paper and is four feet wide on opening day with a table in it.
+ */
+export function overlapProblem(a: { kind?: string }, b: { kind?: string }): "NONE" | "COLLISION" | "BLOCKS_WALKWAY" {
+  const aw = (a.kind || "BOOTH") === "WALKWAY";
+  const bw = (b.kind || "BOOTH") === "WALKWAY";
+  if (aw && bw) return "NONE";
+  if (aw || bw) return "BLOCKS_WALKWAY";
+  return "COLLISION";
+}
 
 export type Space = {
   id: string;
   label: string;
+  kind?: string;
   /** Top-left corner in plan inches, before rotation. */
   xIn: number;
   yIn: number;
@@ -251,4 +317,98 @@ export const STATUS_LABEL: Record<string, string> = {
   AVAILABLE: "Available",
   HELD: "On hold",
   TAKEN: "Taken",
+};
+
+/* ---------------------------------------------------------------- openings -- */
+
+/**
+ * Where an opening sits in real coordinates, so it can be drawn as a gap in the
+ * wall rather than a symbol floating near it.
+ *
+ * Returns the two points along the wall. Clamped to the wall it is in: a 4-foot
+ * door typed at 30 feet along a 20-foot wall is a typo, and sliding it back to
+ * the end of the wall is better than drawing it out in the car park.
+ */
+export function openingPoints(a: Pt, b: Pt, o: Opening): { from: Pt; to: Pt } {
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const width = Math.max(1, Math.min(o.widthIn, len));
+  const start = Math.max(0, Math.min(o.offsetIn, len - width));
+  return {
+    from: { x: a.x + ux * start, y: a.y + uy * start },
+    to: { x: a.x + ux * (start + width), y: a.y + uy * (start + width) },
+  };
+}
+
+/** The solid stretches of a wall — everything that isn't an opening. */
+export function wallSolids(a: Pt, b: Pt, openings: Opening[]): { from: Pt; to: Pt }[] {
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+
+  const cuts = openings
+    .map((o) => {
+      const width = Math.max(1, Math.min(o.widthIn, len));
+      const start = Math.max(0, Math.min(o.offsetIn, len - width));
+      return { start, end: start + width };
+    })
+    .sort((x, y) => x.start - y.start);
+
+  const solids: { from: Pt; to: Pt }[] = [];
+  let cursor = 0;
+  for (const c of cuts) {
+    /* Overlapping openings — a door and an arch typed over each other — merge
+       rather than producing a negative-length wall segment. */
+    if (c.start > cursor) {
+      solids.push({
+        from: { x: a.x + ux * cursor, y: a.y + uy * cursor },
+        to: { x: a.x + ux * c.start, y: a.y + uy * c.start },
+      });
+    }
+    cursor = Math.max(cursor, c.end);
+  }
+  if (cursor < len) {
+    solids.push({
+      from: { x: a.x + ux * cursor, y: a.y + uy * cursor },
+      to: { x: b.x, y: b.y },
+    });
+  }
+  return solids;
+}
+
+/** Common sizes, so nobody measures a standard door. */
+export const OPENING_PRESETS: { label: string; kind: Opening["kind"]; widthIn: number }[] = [
+  { label: "Single door (3′)", kind: "DOOR", widthIn: 36 },
+  { label: "Double door (6′)", kind: "DOOR", widthIn: 72 },
+  { label: "Archway (8′)", kind: "ARCH", widthIn: 96 },
+  { label: "Window (4′)", kind: "WINDOW", widthIn: 48 },
+  { label: "Service window (3′)", kind: "SERVICE", widthIn: 36 },
+];
+
+/** Starting sizes by kind, so adding a walkway doesn't hand you a 5×5 square. */
+export const KIND_PRESETS: Record<SpaceKind, { label: string; widthIn: number; depthIn: number }[]> = {
+  BOOTH: SIZE_PRESETS,
+  TABLE: [
+    { label: "6′ table", widthIn: 72, depthIn: 30 },
+    { label: "8′ table", widthIn: 96, depthIn: 30 },
+    { label: "4′ table", widthIn: 48, depthIn: 24 },
+    { label: "Round 5′", widthIn: 60, depthIn: 60 },
+  ],
+  DESK: [
+    { label: "Register desk 6′", widthIn: 72, depthIn: 30 },
+    { label: "Register desk 8′", widthIn: 96, depthIn: 30 },
+    { label: "Counter 10′", widthIn: 120, depthIn: 24 },
+  ],
+  FIXTURE: [
+    { label: "Shelf 4′", widthIn: 48, depthIn: 18 },
+    { label: "Fridge", widthIn: 36, depthIn: 30 },
+    { label: "Column 1′", widthIn: 12, depthIn: 12 },
+    { label: "Restroom 6×6", widthIn: 72, depthIn: 72 },
+  ],
+  WALKWAY: [
+    { label: "Aisle 4′ wide", widthIn: 48, depthIn: 240 },
+    { label: "Aisle 5′ wide", widthIn: 60, depthIn: 240 },
+    { label: "Aisle 6′ wide", widthIn: 72, depthIn: 240 },
+  ],
 };
