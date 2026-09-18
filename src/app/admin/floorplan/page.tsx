@@ -9,7 +9,7 @@ import { money, plural } from "@/lib/format";
 import {
   parseLength, fmtLength, fmtSize, sqFt, wallPoints, roomPolygon, closureGapIn,
   roomAreaSqFt, bounds, footprint, overlaps, spaceInsideRoom, snap,
-  wallSolids, openingPoints, overlapProblem, rentable,
+  wallSolids, openingPoints, overlapProblem, rentable, nearestWall, openingMeasures, projectOnSegment,
   STATUS_LABEL, KIND_LABEL, KIND_PRESETS, OPENING_LABEL, OPENING_PRESETS, SPACE_KINDS,
   type Wall, type Space, type Opening, type SpaceKind,
 } from "@/lib/floorplan";
@@ -88,6 +88,15 @@ export default function FloorPlanPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [wallsOpen, setWallsOpen] = useState(false);
   const [assignFor, setAssignFor] = useState<string | null>(null);
+  /* Placing an opening: pick what it is, then click the wall where it goes.
+     Typing a distance from "the start of the wall" meant knowing which corner
+     the software counted from, which is not knowable standing in the room. */
+  const [placing, setPlacing] = useState<{ kind: Opening["kind"]; widthIn: number } | null>(null);
+  /* What the next opening will be. Kept separate from `placing` so the width
+     survives cancelling, and so nothing is armed until you say so. */
+  const [openKind, setOpenKind] = useState<Opening["kind"]>("DOOR");
+  const [openWidthRaw, setOpenWidthRaw] = useState("3'");
+  const [selOpening, setSelOpening] = useState<{ wall: number; index: number } | null>(null);
   const [newKind, setNewKind] = useState<SpaceKind>("BOOTH");
   const [newSize, setNewSize] = useState("60x60");
 
@@ -95,7 +104,11 @@ export default function FloorPlanPage() {
     setErr("");
     try {
       const r = await fetch("/api/admin/floorplan");
-      if (!r.ok) { setErr("Couldn't load the site map."); return; }
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setErr(String(d.error || "Couldn't load the site map."));
+        return;
+      }
       const d = await r.json();
       setPlans(d.plans || []);
       setContracts(d.contracts || []);
@@ -151,7 +164,11 @@ export default function FloorPlanPage() {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ what: "space", id, ...body }),
     });
-    if (!r.ok) { toast.error("That didn't save"); await load(); }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast.error("That didn't save", String(d.error || ""));
+      await load();
+    }
     else if (!optimistic) await load();
   };
 
@@ -161,8 +178,27 @@ export default function FloorPlanPage() {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ what: "plan", id: plan.id, ...body }),
     });
-    if (!r.ok) toast.error("Couldn't save the room");
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast.error("Couldn't save the room", String(d.error || ""));
+    }
     await load();
+  };
+
+  /** Replace one wall's openings and save the room. */
+  const setOpenings = async (wallIndex: number, openings: Opening[]) => {
+    if (!plan) return;
+    const walls = plan.walls.map((w, i) => (i === wallIndex ? { ...w, openings } : w));
+    setPlans((ps) => ps.map((pl) => (pl.id === plan.id ? { ...pl, walls } : pl)));
+    const r = await fetch("/api/admin/floorplan", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ what: "plan", id: plan.id, walls }),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast.error("Couldn't save that", String(d.error || ""));
+      await load();
+    }
   };
 
   const addRoom = async () => {
@@ -180,7 +216,10 @@ export default function FloorPlanPage() {
         body: JSON.stringify({ what: "plan", name, walls: [] }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast.error("Couldn't add it"); return; }
+      /* The server's own words. "Couldn't add it" on its own meant the one
+         thing most likely to be wrong — the SQL not having been run — was
+         indistinguishable from a typo in a room name. */
+      if (!r.ok) { toast.error("Couldn't add the room", String(d.error || "")); return; }
       await load();
       setPlanId(d.id);
       setWallsOpen(true);
@@ -208,7 +247,7 @@ export default function FloorPlanPage() {
         }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast.error("Couldn't add the booth"); return; }
+      if (!r.ok) { toast.error("Couldn't add it", String(d.error || "")); return; }
       await load();
       setSelected(d.id);
     } finally { setBusy(false); }
@@ -231,6 +270,7 @@ export default function FloorPlanPage() {
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const openDragRef = useRef<{ wall: number; index: number } | null>(null);
 
   /** Screen point → plan inches, via the SVG's own transform. No scale maths here. */
   const toPlan = (e: { clientX: number; clientY: number }) => {
@@ -253,6 +293,29 @@ export default function FloorPlanPage() {
   };
 
   const onMove = (e: React.PointerEvent) => {
+    /* Dragging a door slides it ALONG its wall — it can't leave the wall, so
+       the pointer is projected onto that one wall rather than followed. */
+    const od = openDragRef.current;
+    if (od && plan) {
+      const wall = plan.walls[od.wall];
+      const o = wall?.openings?.[od.index];
+      if (!wall || !o) return;
+      const a = wallSegments[od.wall];
+      const b = wallSegments[od.wall + 1];
+      if (!a || !b) return;
+      const p = toPlan(e);
+      const proj = projectOnSegment(p, a, b);
+      const step = plan.gridIn || 1;
+      const offsetIn = Math.max(0, Math.min(snap(proj.t - o.widthIn / 2, step), wall.lengthIn - o.widthIn));
+      setPlans((ps) => ps.map((pl) => pl.id !== plan.id ? pl : {
+        ...pl,
+        walls: pl.walls.map((w, i) => i !== od.wall ? w : {
+          ...w, openings: (w.openings || []).map((x, k) => (k === od.index ? { ...x, offsetIn } : x)),
+        }),
+      }));
+      return;
+    }
+
     const d = dragRef.current;
     if (!d || !plan) return;
     const p = toPlan(e);
@@ -265,6 +328,13 @@ export default function FloorPlanPage() {
   };
 
   const onUp = async () => {
+    const od = openDragRef.current;
+    openDragRef.current = null;
+    if (od && plan) {
+      await setOpenings(od.wall, plan.walls[od.wall]?.openings || []);
+      return;
+    }
+
     const d = dragRef.current;
     dragRef.current = null;
     if (!d || !plan) return;
@@ -442,6 +512,70 @@ export default function FloorPlanPage() {
                     <Button variant="primary" icon="plus" disabled={busy || plan.walls.length === 0} onClick={() => void addSpace()}>
                       Add {KIND_LABEL[newKind].toLowerCase()}
                     </Button>
+                  </div>
+
+                  {/* Openings go in by pointing at the wall, not by typing a
+                      distance from a corner the drawing never named. The width
+                      is typed BEFORE placing: every door in a real building is
+                      its own size, and the presets are only shortcuts. */}
+                  <div className="row wrap g-3" style={{ alignItems: "flex-end" }}>
+                    <Field label="Opening">
+                      {(p) => (
+                        <Select
+                          {...p}
+                          value={openKind}
+                          style={{ width: 160 }}
+                          onChange={(e) => { setOpenKind(e.target.value as Opening["kind"]); setPlacing(null); }}
+                        >
+                          {(Object.keys(OPENING_LABEL) as Opening["kind"][]).map((kk) => (
+                            <option key={kk} value={kk}>{OPENING_LABEL[kk]}</option>
+                          ))}
+                        </Select>
+                      )}
+                    </Field>
+                    <Field
+                      label="How wide"
+                      error={openWidthRaw && parseLength(openWidthRaw) === null ? "Can't read that" : undefined}
+                    >
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={openWidthRaw}
+                          placeholder="3' 2&quot;"
+                          style={{ width: 110 }}
+                          onChange={(e) => { setOpenWidthRaw(e.target.value); setPlacing(null); }}
+                        />
+                      )}
+                    </Field>
+                    <Button
+                      variant={placing ? "primary" : "secondary"}
+                      icon="plus"
+                      disabled={plan.walls.length === 0 || parseLength(openWidthRaw) === null}
+                      onClick={() => {
+                        const w = parseLength(openWidthRaw);
+                        if (w === null || w <= 0) return;
+                        setPlacing((cur) => (cur ? null : { kind: openKind, widthIn: w }));
+                      }}
+                    >
+                      {placing ? "Cancel" : "Place it"}
+                    </Button>
+                    <span className="t-xs t-muted">
+                      or:{" "}
+                      {OPENING_PRESETS.map((preset, i) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          className="linklike"
+                          onClick={() => {
+                            setOpenKind(preset.kind);
+                            setOpenWidthRaw(fmtLength(preset.widthIn).replace(/[′″]/g, (c) => (c === "′" ? "'" : '"')));
+                            setPlacing({ kind: preset.kind, widthIn: preset.widthIn });
+                          }}
+                        >
+                          {preset.label}{i < OPENING_PRESETS.length - 1 ? ", " : ""}
+                        </button>
+                      ))}
+                    </span>
                     <Field label="Snap to">
                       {(p) => (
                         <Select {...p} value={String(plan.gridIn)} onChange={(e) => void patchPlan({ gridIn: Number(e.target.value) })} style={{ width: 130 }}>
@@ -454,6 +588,14 @@ export default function FloorPlanPage() {
                       )}
                     </Field>
                   </div>
+
+                  {placing ? (
+                    <Note tone="info">
+                      Now tap the wall where the {fmtLength(placing.widthIn)} {OPENING_LABEL[placing.kind].toLowerCase()}
+                      goes. It drops centred on the spot you tap, and you can drag it along the wall afterwards or
+                      type the exact distance from either corner.
+                    </Note>
+                  ) : null}
 
                   {problems.overlapping.size > 0 || problems.outside.size > 0 || problems.blocking.size > 0 ? (
                     <Note tone="warn">
@@ -476,7 +618,23 @@ export default function FloorPlanPage() {
                     onPointerMove={onMove}
                     onPointerUp={() => void onUp()}
                     onPointerLeave={() => void onUp()}
-                    onPointerDown={() => setSelected(null)}
+                    onPointerDown={(e) => {
+                      if (!placing || !plan) { setSelected(null); setSelOpening(null); return; }
+                      /* Clicked somewhere in the room with an opening in hand:
+                         drop it on whichever wall is nearest, centred on the
+                         click, so it lands where the finger pointed. */
+                      const pt = toPlan(e);
+                      const hit = nearestWall(pt, wallSegments);
+                      if (!hit) { toast.error("Click on a wall", "Openings live in walls — tap the wall where it goes."); return; }
+                      const wall = plan.walls[hit.index];
+                      const width = Math.min(placing.widthIn, wall.lengthIn);
+                      const step = plan.gridIn || 1;
+                      const offsetIn = Math.max(0, Math.min(snap(hit.t - width / 2, step), wall.lengthIn - width));
+                      const next = [...(wall.openings || []), { kind: placing.kind, widthIn: width, offsetIn, label: "" }];
+                      setSelOpening({ wall: hit.index, index: next.length - 1 });
+                      setPlacing(null);
+                      void setOpenings(hit.index, next);
+                    }}
                     role="img"
                     aria-label={`Scale drawing of ${plan.name}`}
                   >
@@ -538,8 +696,31 @@ export default function FloorPlanPage() {
                                a window keeps a thin line across the gap, an
                                archway is dashed, a doorway is left open with a
                                swing, a service hatch gets a bar. */
+                            const isSelOpening = selOpening?.wall === i && selOpening?.index === k;
                             return (
-                              <g key={`o${k}`}>
+                              <g
+                                key={`o${k}`}
+                                style={{ cursor: "grab" }}
+                                onPointerDown={(e) => {
+                                  e.stopPropagation();
+                                  (e.target as Element).setPointerCapture?.(e.pointerId);
+                                  setSelOpening({ wall: i, index: k });
+                                  setSelected(null);
+                                  openDragRef.current = { wall: i, index: k };
+                                }}
+                              >
+                                {/* A fat invisible grab strip: a 3px line is
+                                    impossible to hit with a thumb. */}
+                                <line
+                                  x1={pts.from.x} y1={pts.from.y} x2={pts.to.x} y2={pts.to.y}
+                                  stroke="transparent" strokeWidth="26" strokeLinecap="round"
+                                />
+                                {isSelOpening ? (
+                                  <line
+                                    x1={pts.from.x} y1={pts.from.y} x2={pts.to.x} y2={pts.to.y}
+                                    stroke="var(--accent)" strokeWidth="7" strokeLinecap="round" opacity={0.65}
+                                  />
+                                ) : null}
                                 {o.kind === "WINDOW" ? (
                                   <line x1={pts.from.x} y1={pts.from.y} x2={pts.to.x} y2={pts.to.y} stroke="var(--info)" strokeWidth="1.5" />
                                 ) : o.kind === "ARCH" ? (
@@ -629,6 +810,109 @@ export default function FloorPlanPage() {
                   </svg>
                 </div>
               </Card>
+
+              {/* ---- the selected door / window ---- */}
+              {selOpening && plan.walls[selOpening.wall]?.openings?.[selOpening.index] ? (() => {
+                const wall = plan.walls[selOpening.wall];
+                const o = wall.openings![selOpening.index];
+                const m = openingMeasures(o, wall.lengthIn);
+                const write = (patch: Partial<Opening>) =>
+                  void setOpenings(selOpening.wall, (wall.openings || []).map((x, k) => (k === selOpening.index ? { ...x, ...patch } : x)));
+                return (
+                  <Card
+                    title={o.label || OPENING_LABEL[o.kind]}
+                    subtitle={`In wall ${selOpening.wall + 1}${wall.label ? ` — ${wall.label}` : ""} · ${fmtLength(wall.lengthIn)} long`}
+                    actions={<Button size="sm" variant="ghost" onClick={() => setSelOpening(null)}>Close</Button>}
+                  >
+                    <div className="stack g-4">
+                      {/* Both ends, always. A single distance is only meaningful
+                          if you know which corner it counts from, and standing
+                          in the room you can measure from either. */}
+                      <div className="row wrap g-4">
+                        <div className="stack g-1">
+                          <span className="t-label">From the start of this wall</span>
+                          <Input
+                            defaultValue={fmtLength(m.fromStart).replace(/[′″]/g, (c) => (c === "′" ? "'" : '"'))}
+                            style={{ width: 120 }}
+                            key={`s${m.fromStart}`}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              if (v !== null) write({ offsetIn: v });
+                            }}
+                          />
+                        </div>
+                        <div className="stack g-1">
+                          <span className="t-label">From the far end</span>
+                          <Input
+                            defaultValue={fmtLength(m.fromEnd).replace(/[′″]/g, (c) => (c === "′" ? "'" : '"'))}
+                            style={{ width: 120 }}
+                            key={`e${m.fromEnd}`}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              /* Typed from the other corner, converted back —
+                                 so either number can be the one you measured. */
+                              if (v !== null) write({ offsetIn: Math.max(0, wall.lengthIn - o.widthIn - v) });
+                            }}
+                          />
+                        </div>
+                        <div className="stack g-1">
+                          <span className="t-label">Wide</span>
+                          <Input
+                            defaultValue={fmtLength(o.widthIn).replace(/[′″]/g, (c) => (c === "′" ? "'" : '"'))}
+                            style={{ width: 110 }}
+                            key={`w${o.widthIn}`}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              if (v !== null && v > 0) write({ widthIn: v });
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="row wrap g-3" style={{ alignItems: "flex-end" }}>
+                        <Field label="What it is">
+                          {(p) => (
+                            <Select {...p} value={o.kind} style={{ width: 160 }} onChange={(e) => write({ kind: e.target.value as Opening["kind"] })}>
+                              {(Object.keys(OPENING_LABEL) as Opening["kind"][]).map((kk) => (
+                                <option key={kk} value={kk}>{OPENING_LABEL[kk]}</option>
+                              ))}
+                            </Select>
+                          )}
+                        </Field>
+                        <Field label="Label">
+                          {(p) => (
+                            <Input
+                              {...p}
+                              defaultValue={o.label || ""}
+                              placeholder="Front door"
+                              style={{ width: 150 }}
+                              onBlur={(e) => write({ label: e.target.value })}
+                            />
+                          )}
+                        </Field>
+                      </div>
+
+                      <span className="t-xs t-muted">
+                        {fmtLength(m.fromStart)} from one corner, {fmtLength(m.fromEnd)} from the other, centre at{" "}
+                        {fmtLength(m.centre)}. Drag it along the wall on the drawing, or type either distance.
+                      </span>
+
+                      <div>
+                        <Button
+                          size="sm" variant="dangerSoft" icon="trash"
+                          onClick={() => {
+                            const next = (wall.openings || []).filter((_, k) => k !== selOpening.index);
+                            setSelOpening(null);
+                            void setOpenings(selOpening.wall, next);
+                          }}
+                        >
+                          Remove this {OPENING_LABEL[o.kind].toLowerCase()}
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })() : null}
 
               {/* ---- the selected booth ---- */}
               {sel ? (
@@ -822,9 +1106,6 @@ function WallEditor({
 }) {
   const [name, setName] = useState(plan.name);
   const [rows, setRows] = useState<{ raw: string; turnDeg: number; label: string; openings: Opening[] }[]>([]);
-  /* Which wall's doors and windows are open for editing. Only one at a time —
-     five walls of expanded opening lists is a form nobody can read. */
-  const [openWall, setOpenWall] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -860,6 +1141,9 @@ function WallEditor({
           Start in a corner and walk the room the same way round throughout. For each wall, type what the tape
           says and which way you turn at the end of it. <b>24&rsquo; 6&quot;</b>, <b>24 6</b> and <b>24.5</b> all
           mean the same thing.
+          <br />
+          Doors, archways and windows go in afterwards by tapping the wall on the drawing — you don&rsquo;t have
+          to work out which corner a distance counts from.
         </Note>
 
         <div className="stack g-2">
@@ -909,117 +1193,13 @@ function WallEditor({
                 <span className="t-xs t-muted" style={{ minWidth: 60 }}>
                   {inches !== null ? fmtLength(inches) : ""}
                 </span>
-                <Button
-                  size="sm"
-                  variant={r.openings.length ? "secondary" : "ghost"}
-                  onClick={() => setOpenWall(openWall === i ? null : i)}
-                >
-                  {r.openings.length ? `${r.openings.length} opening${r.openings.length === 1 ? "" : "s"}` : "Doors & windows"}
-                </Button>
+                <span className="t-xs t-muted" style={{ minWidth: 70 }}>
+                  {r.openings.length ? `${r.openings.length} opening${r.openings.length === 1 ? "" : "s"}` : ""}
+                </span>
                 <Button size="sm" variant="ghost" aria-label={`Remove wall ${i + 1}`} onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}>
                   ✕
                 </Button>
 
-                {openWall === i ? (
-                  <div
-                    className="stack g-2"
-                    style={{ width: "100%", padding: "var(--sp-3)", background: "var(--bg-sunken)", borderRadius: "var(--r-md)" }}
-                  >
-                    <span className="t-xs t-muted">
-                      Measured from the corner you started this wall at. A door 5 feet along is{" "}
-                      <b>5&rsquo;</b> from that corner.
-                    </span>
-
-                    {r.openings.map((o, k) => (
-                      <div key={k} className="row wrap g-2" style={{ alignItems: "flex-end" }}>
-                        <Field label="What">
-                          {(p) => (
-                            <Select
-                              {...p}
-                              value={o.kind}
-                              style={{ width: 150 }}
-                              onChange={(e) => setRows((rs) => rs.map((x, j) => j !== i ? x : {
-                                ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, kind: e.target.value as Opening["kind"] } : y)),
-                              }))}
-                            >
-                              {(Object.keys(OPENING_LABEL) as Opening["kind"][]).map((kk) => (
-                                <option key={kk} value={kk}>{OPENING_LABEL[kk]}</option>
-                              ))}
-                            </Select>
-                          )}
-                        </Field>
-                        <Field label="Starts at">
-                          {(p) => (
-                            <Input
-                              {...p}
-                              defaultValue={fmtLength(o.offsetIn).replace(/[′″]/g, (m) => (m === "′" ? "'" : '"'))}
-                              style={{ width: 100 }}
-                              onBlur={(e) => {
-                                const v = parseLength(e.target.value);
-                                if (v === null) return;
-                                setRows((rs) => rs.map((x, j) => j !== i ? x : {
-                                  ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, offsetIn: v } : y)),
-                                }));
-                              }}
-                            />
-                          )}
-                        </Field>
-                        <Field label="Wide">
-                          {(p) => (
-                            <Input
-                              {...p}
-                              defaultValue={fmtLength(o.widthIn).replace(/[′″]/g, (m) => (m === "′" ? "'" : '"'))}
-                              style={{ width: 100 }}
-                              onBlur={(e) => {
-                                const v = parseLength(e.target.value);
-                                if (v === null || v <= 0) return;
-                                setRows((rs) => rs.map((x, j) => j !== i ? x : {
-                                  ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, widthIn: v } : y)),
-                                }));
-                              }}
-                            />
-                          )}
-                        </Field>
-                        <Field label="Label">
-                          {(p) => (
-                            <Input
-                              {...p}
-                              defaultValue={o.label || ""}
-                              placeholder="Front door"
-                              style={{ width: 130 }}
-                              onBlur={(e) => setRows((rs) => rs.map((x, j) => j !== i ? x : {
-                                ...x, openings: x.openings.map((y, m) => (m === k ? { ...y, label: e.target.value } : y)),
-                              }))}
-                            />
-                          )}
-                        </Field>
-                        <Button
-                          size="sm" variant="ghost" aria-label="Remove this opening"
-                          onClick={() => setRows((rs) => rs.map((x, j) => j !== i ? x : { ...x, openings: x.openings.filter((_, m) => m !== k) }))}
-                        >
-                          ✕
-                        </Button>
-                      </div>
-                    ))}
-
-                    <div className="row wrap g-2">
-                      {OPENING_PRESETS.map((preset) => (
-                        <Button
-                          key={preset.label}
-                          size="sm"
-                          variant="secondary"
-                          icon="plus"
-                          onClick={() => setRows((rs) => rs.map((x, j) => j !== i ? x : {
-                            ...x,
-                            openings: [...x.openings, { kind: preset.kind, widthIn: preset.widthIn, offsetIn: 0, label: "" }],
-                          }))}
-                        >
-                          {preset.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
               </div>
             );
           })}

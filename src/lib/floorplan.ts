@@ -412,3 +412,61 @@ export const KIND_PRESETS: Record<SpaceKind, { label: string; widthIn: number; d
     { label: "Aisle 6′ wide", widthIn: 72, depthIn: 240 },
   ],
 };
+
+/* --------------------------------------------------- placing on the wall -- */
+
+/**
+ * Drop a point onto a wall.
+ *
+ * Returns how far along the wall it lands (`t`, in inches from the wall's
+ * start), how far off the wall it was (`dist`), and the point itself. This is
+ * what makes "click where the door goes" possible: a click is never exactly on
+ * a line, so it gets projected onto the nearest one.
+ */
+export function projectOnSegment(p: Pt, a: Pt, b: Pt): { t: number; dist: number; point: Pt } {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const len2 = vx * vx + vy * vy;
+  if (len2 === 0) return { t: 0, dist: Math.hypot(p.x - a.x, p.y - a.y), point: a };
+  /* Clamped to the segment: a click past the end of a wall belongs at that
+     end, not on the infinite line the wall sits on. */
+  const raw = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
+  const u = Math.max(0, Math.min(1, raw));
+  const point = { x: a.x + vx * u, y: a.y + vy * u };
+  return { t: round(u * Math.sqrt(len2)), dist: round(Math.hypot(p.x - point.x, p.y - point.y)), point };
+}
+
+/**
+ * Which wall was clicked, and where along it.
+ *
+ * `pts` is the corner list from wallPoints, so wall `i` runs pts[i] → pts[i+1]
+ * and lines up with the walls array. Returns null when nothing is near enough
+ * to be a deliberate click.
+ */
+export function nearestWall(p: Pt, pts: Pt[], maxDistIn = 36): { index: number; t: number; dist: number } | null {
+  let best: { index: number; t: number; dist: number } | null = null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const r = projectOnSegment(p, pts[i], pts[i + 1]);
+    if (!best || r.dist < best.dist) best = { index: i, t: r.t, dist: r.dist };
+  }
+  return best && best.dist <= maxDistIn ? best : null;
+}
+
+/**
+ * Where an opening sits, measured from BOTH ends of its wall.
+ *
+ * Both, because "5 feet along" is only meaningful if you know which corner it
+ * counts from — and standing in the room you can check either. Given both, the
+ * number is unambiguous whichever way you walked.
+ */
+export function openingMeasures(o: Opening, wallLengthIn: number): {
+  fromStart: number; fromEnd: number; centre: number;
+} {
+  const width = Math.max(1, Math.min(o.widthIn, wallLengthIn));
+  const start = Math.max(0, Math.min(o.offsetIn, wallLengthIn - width));
+  return {
+    fromStart: round(start),
+    fromEnd: round(wallLengthIn - (start + width)),
+    centre: round(start + width / 2),
+  };
+}

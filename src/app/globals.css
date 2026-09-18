@@ -801,6 +801,19 @@ legend { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary)
 .table tbody tr:hover { background: var(--surface-hover); }
 .table .right { text-align: right; }
 
+/* A word in a sentence that happens to be clickable — used for the shortcut
+   sizes next to a field, where a row of buttons would outweigh the field. */
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.linklike:hover { color: var(--accent); }
+
 /* Dense table: smaller type and tighter cells so a wide one fits on screen
    without scrolling sideways. Every column is still rendered — a table-wrap
    scrolls rather than truncating, and under 760px DataTable switches to cards

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { runRoute } from "@/lib/handler";
+import { runRoute, HttpError } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit } from "@/lib/audit";
 import { closureGapIn, roomAreaSqFt, SPACE_KINDS, type Wall, type Opening } from "@/lib/floorplan";
@@ -17,6 +17,30 @@ export const dynamic = "force-dynamic";
  * Gated on "market": the people who let booths. A cashier has no business
  * moving the floor around.
  */
+
+/**
+ * Turn "the tables aren't there" into a sentence somebody can act on.
+ *
+ * Without this, a missing table or column is an unhandled error, which the
+ * route wrapper quite correctly turns into "Something went wrong on our end" —
+ * safe, and useless. This feature ships with SQL that has to be run by hand, so
+ * the single most likely failure is that it hasn't been, and the app should say
+ * so rather than shrug.
+ */
+async function guardSchema<T>(fn: () => PromiseLike<T> | T): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const code = (e as { code?: string } | null)?.code;
+    if (code === "P2021" || code === "P2022") {
+      throw new HttpError(
+        503,
+        "The site map tables aren't in the database yet — the SQL for FloorPlan and FloorSpace hasn't been run. Run it, then reload this page."
+      );
+    }
+    throw e;
+  }
+}
 
 /** Trust nothing typed. A wall with a NaN length draws a room with no corners. */
 function cleanWalls(raw: unknown): Wall[] {
@@ -69,10 +93,10 @@ export async function GET() {
   return runRoute("admin/floorplan GET", async () => {
     { const denied = await denyUnless("market"); if (denied) return denied; }
 
-    const plans = await db.floorPlan.findMany({
+    const plans = await guardSchema(() => db.floorPlan.findMany({
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       include: { spaces: { orderBy: { createdAt: "asc" } } },
-    });
+    }));
 
     const vendors = await db.vendor.findMany({
       where: { active: true },
@@ -149,13 +173,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
 
     if (body.what === "plan") {
-      const count = await db.floorPlan.count();
-      const plan = await db.floorPlan.create({
-        data: {
-          name: String(body.name || "New room").slice(0, 80),
-          sortOrder: count,
-          walls: cleanWalls(body.walls) as unknown as object,
-        },
+      const plan = await guardSchema(async () => {
+        const count = await db.floorPlan.count();
+        return db.floorPlan.create({
+          data: {
+            name: String(body.name || "New room").slice(0, 80),
+            sortOrder: count,
+            walls: cleanWalls(body.walls) as unknown as object,
+          },
+        });
       });
       await recordAudit({ action: "SETTING_CHANGE", targetType: "FLOORPLAN", targetId: plan.id, targetLabel: plan.name, detail: `Added the room "${plan.name}" to the site map` }, req);
       return NextResponse.json({ ok: true, id: plan.id });
@@ -166,7 +192,7 @@ export async function POST(req: NextRequest) {
       const plan = await db.floorPlan.findUnique({ where: { id: planId }, select: { id: true } });
       if (!plan) return NextResponse.json({ error: "That room is gone." }, { status: 404 });
 
-      const space = await db.floorSpace.create({
+      const space = await guardSchema(() => db.floorSpace.create({
         data: {
           planId,
           kind: kindOf(body.kind),
@@ -176,7 +202,7 @@ export async function POST(req: NextRequest) {
           depthIn: Math.max(6, int(body.depthIn, 60)),
           rotationDeg: rot(body.rotationDeg),
         },
-      });
+      }));
       return NextResponse.json({ ok: true, id: space.id });
     }
 
