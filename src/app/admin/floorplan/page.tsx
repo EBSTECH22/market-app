@@ -89,9 +89,11 @@ function strokeFor(s: PlanSpace): string {
  * standing against the wall being measured.
  */
 function Dim({
-  from, to, normal, offset, label, tone = "var(--text-muted)",
+  from, to, normal, offset, label, tone = "var(--text-muted)", u = 1,
 }: {
   from: Pt; to: Pt; normal: Pt; offset: number; label: string; tone?: string;
+  /** Inches per wanted screen pixel — see `u` in the editor. */
+  u?: number;
 }) {
   const a = offsetPt(from, normal, offset);
   const b = offsetPt(to, normal, offset);
@@ -105,25 +107,25 @@ function Dim({
     <line
       x1={p.x - normal.x * t} y1={p.y - normal.y * t}
       x2={p.x + normal.x * t} y2={p.y + normal.y * t}
-      stroke={tone} strokeWidth="1.2"
+      stroke={tone} strokeWidth={1.2 * u}
     />
   );
   /* Witness lines back to the thing being measured, so the eye can follow the
      dimension to the point it belongs to. */
   const witness = (p: Pt, q: Pt) => (
-    <line x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={tone} strokeWidth="0.7" strokeDasharray="3 3" opacity={0.7} />
+    <line x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={tone} strokeWidth={0.7 * u} strokeDasharray={`${3 * u} ${3 * u}`} opacity={0.7} />
   );
   return (
     <g style={{ pointerEvents: "none" }}>
       {witness(from, a)}
       {witness(to, b)}
-      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeWidth="1.2" />
+      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeWidth={1.2 * u} />
       {tick(a)}
       {tick(b)}
       <text
         x={mid.x} y={mid.y}
         textAnchor="middle" dominantBaseline="middle"
-        style={{ fontSize: 9, fontWeight: 700, fill: tone, paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3 }}
+        style={{ fontSize: 9 * u, fontWeight: 700, fill: tone, paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3 * u }}
       >
         {label}
       </text>
@@ -449,7 +451,10 @@ export default function FloorPlanPage() {
   const sel = plan?.spaces.find((s) => s.id === selected) || null;
   /* Dimension lines sit 26in outside the wall, plus ticks and a figure, so the
      margin has to grow when they're showing or they get clipped. */
-  const pad = selOpening || showAllDims ? 80 : 36;
+  /* Inches per wanted screen pixel, worked out from the room's own size before
+     the margin is added, so it doesn't depend on itself. */
+  const u = plan && poly.length >= 3 ? Math.max(box.w, box.h, 120) / 640 : 1;
+  const pad = (selOpening || showAllDims ? 80 : 36) * u;
   const viewBox = plan && poly.length >= 3
     ? `${box.minX - pad} ${box.minY - pad} ${box.w + pad * 2} ${box.h + pad * 2}`
     : "0 0 480 360";
@@ -799,7 +804,7 @@ export default function FloorPlanPage() {
                           points={outline({ ...sp, rotationDeg: 0 }).map((q) => `${q.x},${q.y}`).join(" ")}
                           transform={`rotate(${sp.rotationDeg || 0} ${c.x} ${c.y})`}
                           fill="var(--info-soft)" opacity={0.55}
-                          stroke="var(--info)" strokeWidth="1" strokeDasharray="8 5"
+                          stroke="var(--info)" strokeWidth={1 * u} strokeDasharray={`${8 * u} ${5 * u}`}
                           onPointerDown={(e) => onDown(e, sp)}
                           style={{ cursor: "grab" }}
                         />
@@ -819,14 +824,14 @@ export default function FloorPlanPage() {
                          opening labels go INSIDE; dimension lines go outside,
                          and the two can never land on each other. */
                       const outward = outwardNormal(a, b, roomCentre);
-                      const wallLabelAt = offsetPt(mid, outward, -16);
+                      const wallLabelAt = offsetPt(mid, outward, -14 * u);
                       return (
                         <g key={i}>
                           {wallSolids(a, b, openings).map((seg, k) => (
                             <line
                               key={k}
                               x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y}
-                              stroke="var(--text)" strokeWidth="3" strokeLinecap="square"
+                              stroke="var(--text)" strokeWidth={3 * u} strokeLinecap="square"
                             />
                           ))}
 
@@ -872,14 +877,14 @@ export default function FloorPlanPage() {
                                 ) : null}
                                 {/* End ticks, so a doorway reads as a measured
                                     opening rather than a missing bit of wall. */}
-                                <circle cx={pts.from.x} cy={pts.from.y} r="2.5" fill="var(--text)" />
-                                <circle cx={pts.to.x} cy={pts.to.y} r="2.5" fill="var(--text)" />
+                                <circle cx={pts.from.x} cy={pts.from.y} r={2.5 * u} fill="var(--text)" />
+                                <circle cx={pts.to.x} cy={pts.to.y} r={2.5 * u} fill="var(--text)" />
                                 {(isSelOpening || detail === "all") ? (
                                   <text
-                                    x={offsetPt({ x: ox, y: oy }, outward, -13).x}
-                                    y={offsetPt({ x: ox, y: oy }, outward, -13).y}
+                                    x={offsetPt({ x: ox, y: oy }, outward, -13 * u).x}
+                                    y={offsetPt({ x: ox, y: oy }, outward, -13 * u).y}
                                     textAnchor="middle" dominantBaseline="middle"
-                                    style={{ fontSize: 7.5, fill: "var(--text-muted)" }}
+                                    style={{ fontSize: 8 * u, fill: "var(--text-muted)" }}
                                   >
                                     {o.label || OPENING_LABEL[o.kind]} {fmtLength(o.widthIn)}
                                   </text>
@@ -896,13 +901,13 @@ export default function FloorPlanPage() {
                                   return (
                                     <>
                                       {m.fromStart > 0 ? (
-                                        <Dim from={a} to={pts.from} normal={out} offset={26} label={fmtLength(m.fromStart)}
+                                        <Dim from={a} to={pts.from} normal={out} offset={26 * u} label={fmtLength(m.fromStart)} u={u}
                                           tone={isSelOpening ? "var(--accent)" : "var(--text-muted)"} />
                                       ) : null}
-                                      <Dim from={pts.from} to={pts.to} normal={out} offset={26} label={fmtLength(o.widthIn)}
+                                      <Dim from={pts.from} to={pts.to} normal={out} offset={26 * u} label={fmtLength(o.widthIn)} u={u}
                                         tone={isSelOpening ? "var(--accent)" : "var(--text-muted)"} />
                                       {m.fromEnd > 0 ? (
-                                        <Dim from={pts.to} to={b} normal={out} offset={26} label={fmtLength(m.fromEnd)}
+                                        <Dim from={pts.to} to={b} normal={out} offset={26 * u} label={fmtLength(m.fromEnd)} u={u}
                                           tone={isSelOpening ? "var(--accent)" : "var(--text-muted)"} />
                                       ) : null}
                                     </>
@@ -912,16 +917,27 @@ export default function FloorPlanPage() {
                             );
                           })}
 
-                          <text
-                            x={wallLabelAt.x} y={wallLabelAt.y}
-                            textAnchor="middle" dominantBaseline="middle"
-                            style={{
-                              fontSize: 11, fill: "var(--text-muted)", fontWeight: 600,
-                              paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3,
-                            }}
-                          >
-                            {fmtLength(w.lengthIn)}{w.label && detail !== "clean" ? ` · ${w.label}` : ""}
-                          </text>
+                          {(() => {
+                            if (detail === "clean") return null;
+                            const text = `${fmtLength(w.lengthIn)}${w.label && detail === "all" ? ` \u00b7 ${w.label}` : ""}`;
+                            /* Roughly how wide that will render. A label wider
+                               than its own wall is the thing that turned the
+                               desk side into a pile of overlapping words. */
+                            const widthIn = text.length * 5.6 * u;
+                            if (widthIn > w.lengthIn * 1.35) return null;
+                            return (
+                              <text
+                                x={wallLabelAt.x} y={wallLabelAt.y}
+                                textAnchor="middle" dominantBaseline="middle"
+                                style={{
+                                  fontSize: 11 * u, fill: "var(--text-muted)", fontWeight: 600,
+                                  paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3 * u,
+                                }}
+                              >
+                                {text}
+                              </text>
+                            );
+                          })()}
                         </g>
                       );
                     })}
@@ -951,7 +967,8 @@ export default function FloorPlanPage() {
                       /* A 12-inch shelf cannot hold three lines of writing.
                          Below this the name is all that fits, and the rest is
                          in the panel where it is readable anyway. */
-                      const roomy = Math.min(s.widthIn, corner ? t : s.depthIn) >= 26;
+                      const roomy = Math.min(s.widthIn, corner ? t : s.depthIn) >= 30 * u
+                        && s.widthIn >= 46 * u;
                       const bad = problems.overlapping.has(s.id) || problems.outside.has(s.id) || problems.blocking.has(s.id);
                       const isSel = s.id === selected;
                       return (
@@ -968,30 +985,30 @@ export default function FloorPlanPage() {
                             points={pts}
                             fill={fillFor(s)}
                             stroke={bad ? "var(--danger)" : isSel ? "var(--accent)" : strokeFor(s)}
-                            strokeWidth={isSel ? 3 : bad ? 3 : 1.5}
+                            strokeWidth={(isSel || bad ? 3 : 1.5) * u}
                             strokeLinejoin="round"
                           />
                           <text
-                            x={tx} y={roomy && detail !== "clean" ? (corner ? ty - 5 : c.y - 7) : (corner ? ty : c.y)}
+                            x={tx} y={roomy && detail !== "clean" ? (corner ? ty - 5 * u : c.y - 7 * u) : (corner ? ty : c.y)}
                             textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontSize: corner ? 9 : 10, fontWeight: 700, fill: "var(--text)", pointerEvents: "none" }}
+                            style={{ fontSize: (corner ? 9 : 10) * u, fontWeight: 700, fill: "var(--text)", pointerEvents: "none" }}
                           >
                             {s.label}
                           </text>
                           {roomy && detail !== "clean" ? (
                           <text
-                            x={tx} y={corner ? ty + 5 : c.y + 5}
+                            x={tx} y={corner ? ty + 5 * u : c.y + 5 * u}
                             textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontSize: corner ? 7 : 8, fill: "var(--text-muted)", pointerEvents: "none" }}
+                            style={{ fontSize: (corner ? 7 : 8) * u, fill: "var(--text-muted)", pointerEvents: "none" }}
                           >
                             {isCorner(s) ? `${fmtSize(s.widthIn, s.depthIn)} L` : fmtSize(s.widthIn, s.depthIn)}
                           </text>
                           ) : null}
                           {s.vendorName && roomy && detail !== "clean" ? (
                             <text
-                              x={tx} y={corner ? ty + 14 : c.y + 16}
+                              x={tx} y={corner ? ty + 14 * u : c.y + 16 * u}
                               textAnchor="middle" dominantBaseline="middle"
-                              style={{ fontSize: 7.5, fill: "var(--accent-text)", pointerEvents: "none" }}
+                              style={{ fontSize: 7.5 * u, fill: "var(--accent-text)", pointerEvents: "none" }}
                             >
                               {s.vendorName.length > 18 ? `${s.vendorName.slice(0, 17)}…` : s.vendorName}
                             </text>
