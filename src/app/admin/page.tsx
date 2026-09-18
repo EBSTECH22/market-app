@@ -132,6 +132,178 @@ type RentLedger = {
   trackingSince: string;
 };
 
+type BankState = {
+  configured: boolean;
+  available?: number;
+  pending?: number;
+  payouts?: { id: string; amount: number; status: string; arrival: string }[];
+  error?: string;
+} | null;
+
+/** A Stripe payout that hasn't landed yet. */
+const isIncoming = (p: { status: string }) => p.status === "pending" || p.status === "in_transit";
+
+/**
+ * "Friday, Sep 19" rather than "Sep 19, 2026".
+ *
+ * A deposit date is read to answer "is that before or after the weekend", and
+ * nobody does that arithmetic from a numeral. The weekday is the useful half.
+ */
+const fmtArrival = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: TZ });
+};
+
+/**
+ * The top of the money page: three questions, answered before any scrolling.
+ *
+ *   1. How much is coming into my bank, and what day?
+ *   2. Who has paid their rent and who hasn't?
+ *   3. What are the totals?
+ *
+ * All of it was already on this page and all of it was findable — spread over
+ * six cards in an order that made sense to whoever built them and to nobody
+ * standing there wanting to know whether Thursday's deposit covers payroll.
+ * Nothing new is fetched here; it is the same numbers, put where the eye lands
+ * first and said in words rather than left to be inferred from a table.
+ */
+function MoneyAtAGlance({
+  bank, ledger, payouts,
+}: {
+  bank: BankState;
+  ledger: RentLedger | null;
+  payouts: PayoutRow[];
+}) {
+  const deposits = (bank?.payouts || []).filter(isIncoming).slice().sort((a, b) => a.arrival.localeCompare(b.arrival));
+  const incomingCents = deposits.reduce((n, p) => n + p.amount, 0);
+  const next = deposits[0] || null;
+
+  const t = ledger?.totals;
+  const collected = t?.collectedCents ?? 0;
+  const owed = t?.rentDueCents ?? 0;
+  const invoiced = t?.invoicedCents ?? 0;
+
+  /* Per VENDOR, not per booth. A vendor renting two booths has two rows and
+     one bill, and counting the rows would report more payers than exist. */
+  const perVendor = new Map<string, InvoiceRow>();
+  for (const i of ledger?.invoices || []) if (!perVendor.has(i.vendorId)) perVendor.set(i.vendorId, i);
+  const billed = [...perVendor.values()].filter((i) => i.status !== "NOT_INVOICED");
+  const settled = billed.filter((i) => i.status === "PAID" || i.status === "COVERED").length;
+
+  /* Denominator is what has actually been billed, so an empty month shows an
+     empty bar rather than dividing by zero and rendering NaN%. */
+  const paidPct = invoiced > 0 ? Math.round((Math.min(collected, invoiced) / invoiced) * 100) : 0;
+
+  const owedOut = payouts.filter((p) => p.status === "PENDING").reduce((n, p) => n + p.netCents, 0);
+  const owedOutCount = payouts.filter((p) => p.status === "PENDING").length;
+
+  return (
+    <Card
+      title="Where your money is"
+      subtitle="Coming in, going out, and who still owes you — everything below is the detail behind these four numbers."
+    >
+      <div className="stack g-5">
+        <div className="grid-auto" style={{ ["--min" as string]: "210px" }}>
+          <Stat
+            feature
+            label="Heading to your bank"
+            value={money(incomingCents)}
+            sub={
+              next
+                ? `${deposits.length > 1 ? `Next of ${deposits.length}: ` : ""}${fmtArrival(next.arrival)}`
+                : "Nothing on its way right now"
+            }
+            icon="bank"
+          />
+          <Stat
+            label="Sitting in Stripe"
+            value={money(bank?.available || 0)}
+            sub="Settled — goes out on the next deposit"
+            icon="dollar"
+          />
+          <Stat
+            label="Still clearing"
+            value={money(bank?.pending || 0)}
+            sub="Card money Stripe hasn't settled yet"
+            icon="clock"
+          />
+          <Stat
+            label="Rent still owed to you"
+            value={money(owed)}
+            sub={owed > 0 ? `${plural(t?.unpaidCount ?? 0, "vendor")} behind` : "Everyone is square"}
+            icon={owed > 0 ? "alert" : "checkCircle"}
+          />
+        </div>
+
+        {/* Said as a sentence, because a date in a table cell is a thing you
+            work out and a sentence is a thing you read. */}
+        {next ? (
+          <Note tone={next.status === "in_transit" ? "success" : "info"}>
+            <b>{money(next.amount)}</b> should land in your bank on <b>{fmtArrival(next.arrival)}</b>
+            {next.status === "in_transit" ? " — Stripe has already sent it." : " — Stripe has it scheduled."}
+            {deposits.length > 1
+              ? ` ${plural(deposits.length - 1, "more deposit")} behind it, ${money(incomingCents - next.amount)} in total.`
+              : ""}
+          </Note>
+        ) : null}
+
+        {/* Rent, as a bar. The two numbers that matter are the two ends of it. */}
+        <div className="stack g-2">
+          <div className="row between wrap g-3">
+            <span className="t-label">Rent this season</span>
+            <span className="t-xs t-muted">
+              {billed.length > 0
+                ? `${settled} of ${plural(billed.length, "vendor")} settled`
+                : "Nothing invoiced yet"}
+            </span>
+          </div>
+
+          <div
+            role="img"
+            aria-label={`${money(collected)} collected of ${money(invoiced)} invoiced`}
+            style={{
+              display: "flex", height: 14, width: "100%", overflow: "hidden",
+              borderRadius: 999, background: "var(--bg-sunken)", border: "1px solid var(--border)",
+            }}
+          >
+            {/* Accent, not a green of its own: this design system treats
+                accent as the "good" tone — the success badge and the success
+                note both use it — and inventing a second green here would
+                make the bar the only green on the page that means anything. */}
+            <span style={{ width: `${paidPct}%`, background: "var(--accent)" }} />
+            <span style={{ width: `${100 - paidPct}%`, background: owed > 0 ? "var(--danger)" : "transparent" }} />
+          </div>
+
+          <div className="row between wrap g-3">
+            <span className="t-sm">
+              <b className="num">{money(collected)}</b> collected
+            </span>
+            <span className="t-sm">
+              <b className="num" style={{ color: owed > 0 ? "var(--danger)" : undefined }}>{money(owed)}</b> still owed
+            </span>
+          </div>
+          <span className="t-xs t-muted">
+            {money(invoiced)} invoiced in total.
+            {(t?.neverPaidCount ?? 0) > 0
+              ? ` ${plural(t?.neverPaidCount ?? 0, "vendor has", "vendors have")} never paid anything — listed further down.`
+              : ""}
+          </span>
+        </div>
+
+        {owedOut > 0 ? (
+          <Note tone="warn">
+            You owe <b>{money(owedOut)}</b> out to {plural(owedOutCount, "vendor")} in the open payout run.
+            {(bank?.available || 0) < owedOut
+              ? ` Your Stripe balance is ${money(bank?.available || 0)} — ${money(owedOut - (bank?.available || 0))} short of covering it.`
+              : ""}
+          </Note>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
 /**
  * The invoice ledger: who was sent a bill, who has paid it, who hasn't.
  *
@@ -5566,6 +5738,32 @@ export default function AdminPage() {
         </div>
       )}
 
+      {/* Top of the money page, in the order the questions get asked: what is
+          coming into the bank and when, then who has paid their rent and who
+          has not. Both used to sit below four other cards. */}
+      {tab === "bank" && (
+        <div className="stack g-4" style={{ marginBottom: "var(--sp-4)" }}>
+          <MoneyAtAGlance bank={bank} ledger={ledger} payouts={payouts} />
+
+          <RentLedgerCards
+            ledger={ledger}
+            filter={ledgerFilter}
+            onFilter={setLedgerFilter}
+            busy={busy}
+            onSendLink={(row) => sendRentLinkFor(row)}
+            onRecordPayment={async (row) => {
+              await ledgerEntry(
+                { id: row.vendorId, businessName: row.businessName, balance: row.balanceCents },
+                "RENT_PAYMENT",
+                row.rentDueCents
+              );
+              const r = await fetch("/api/admin/rent-ledger");
+              if (r.ok) setLedger(await r.json());
+            }}
+          />
+        </div>
+      )}
+
       {tab === "bank" && (() => {
         const owing = (settle || []).filter((r) => r.dueCents > 0);
         const covered = (settle || []).filter((r) => r.dueCents === 0);
@@ -6129,25 +6327,10 @@ export default function AdminPage() {
             )}
           </Card>
 
-          <RentLedgerCards
-            ledger={ledger}
-            filter={ledgerFilter}
-            onFilter={setLedgerFilter}
-            busy={busy}
-            onSendLink={(row) => sendRentLinkFor(row)}
-            onRecordPayment={async (row) => {
-              await ledgerEntry(
-                { id: row.vendorId, businessName: row.businessName, balance: row.balanceCents },
-                "RENT_PAYMENT",
-                row.rentDueCents
-              );
-              const r = await fetch("/api/admin/rent-ledger");
-              if (r.ok) setLedger(await r.json());
-            }}
-          />
-
           {!bank ? (
-            <SkeletonStats count={2} />
+            /* A table's worth of skeleton now, not two stat tiles — the tiles
+               that used to sit here moved to the summary at the top. */
+            <div className="stack g-2" aria-busy="true"><Skeleton height={16} /><Skeleton height={48} /><Skeleton height={48} /></div>
           ) : !bank.configured ? (
             <Note tone="info" title="Stripe isn't connected yet">
               Add <b>STRIPE_SECRET_KEY</b> (from your Daily Bread Stripe account) to this project&rsquo;s
@@ -6158,25 +6341,9 @@ export default function AdminPage() {
             <Note tone="error" title="Stripe wouldn't answer">{bank.error}</Note>
           ) : (
             <>
-              <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
-                <Stat
-                  feature
-                  label="On its way"
-                  value={money(bank.pending || 0)}
-                  sub="Pending — not in the bank yet"
-                  icon="bank"
-                />
-                <Stat
-                  label="Available for payout"
-                  value={money(bank.available || 0)}
-                  sub="Settled and ready to transfer"
-                  icon="dollar"
-                />
-              </div>
-
               <Card
-                title="Recent deposits"
-                subtitle="What Stripe has sent to the bank"
+                title="Deposits already made"
+                subtitle="Money Stripe has finished sending. Anything still on its way is at the top of this page."
                 flush
                 footer={
                   <span className="t-xs t-muted">
@@ -6186,11 +6353,15 @@ export default function AdminPage() {
                 }
               >
                 <DataTable
-                  rows={bank.payouts || []}
+                  /* Only what has landed (or failed). The ones still coming
+                     are the whole point of the card at the top, and having
+                     them in both places is how you end up counting a deposit
+                     twice. */
+                  rows={(bank.payouts || []).filter((p) => !isIncoming(p))}
                   columns={[
                     {
                       key: "arrival",
-                      header: "Arrives",
+                      header: "Landed",
                       primary: true,
                       sortBy: (p) => p.arrival,
                       cell: (p) => <b>{fmtDate(p.arrival)}</b>,
@@ -6223,8 +6394,8 @@ export default function AdminPage() {
                   empty={
                     <EmptyState
                       icon="bank"
-                      title="No payouts yet"
-                      body="Once card money settles, Stripe's deposits to the bank show up here."
+                      title="Nothing deposited yet"
+                      body="Once a deposit finishes landing in the bank, it moves here from the top of the page."
                     />
                   }
                 />
