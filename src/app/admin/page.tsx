@@ -168,6 +168,288 @@ const fmtArrival = (iso: string): string => {
  * Nothing new is fetched here; it is the same numbers, put where the eye lands
  * first and said in words rather than left to be inferred from a table.
  */
+type Upcoming = {
+  stripeError: string;
+  availableCents: number;
+  deposits: { id: string; amountCents: number; status: string; arrival: string }[];
+  depositTotalCents: number;
+  rent: {
+    runAt: string; monthLabel: string; totalCents: number; chargeCount: number;
+    lines: {
+      contractId: string; vendorName: string; vendorCode: string; boothLabel: string;
+      amountCents: number; monthlyRentCents: number; action: string; reason: string;
+    }[];
+  };
+  closedDays: {
+    opensAt: string | null;
+    appliedAt: string | null;
+    rows: { contractId: string; vendorName: string; boothLabel: string; startDate: string; monthlyRentCents: number; days: number }[];
+    estimatedCreditCents: number;
+  };
+  payout: {
+    day: number; nextAt: string | null; owedCents: number; vendorCount: number; notSetUpCents: number;
+    rows: { vendorId: string; vendorName: string; vendorCode: string; balanceCents: number; payoutsEnabled: boolean }[];
+  };
+};
+
+/** Whole days from now until a date, in market time. Negative once it's past. */
+const daysUntil = (iso: string): number => {
+  const then = new Date(iso).getTime();
+  return Math.ceil((then - Date.now()) / (24 * 60 * 60 * 1000));
+};
+
+const inWords = (iso: string): string => {
+  const d = daysUntil(iso);
+  if (d <= 0) return "today";
+  if (d === 1) return "tomorrow";
+  return `in ${d} days`;
+};
+
+/**
+ * What is going to happen, before it happens.
+ *
+ * The rest of this page is a record of things that already have. That is fine
+ * for the books and useless for deciding whether Thursday's deposit covers
+ * Friday's payout run — a question that is entirely about the future and was
+ * previously answerable only by opening Stripe in one tab, counting booths in
+ * another, and knowing by heart that rent posts at one in the morning on the
+ * 1st.
+ *
+ * The rent figures are not an estimate. They come from the same planner the
+ * cron executes, so what is listed here is what will post.
+ */
+function UpcomingMoney({
+  data, busy, onSave, onCredit,
+}: {
+  data: Upcoming | null;
+  busy: boolean;
+  onSave: (opensAt: string, payoutDay: number) => void;
+  onCredit: () => void;
+}) {
+  const [showRent, setShowRent] = useState(false);
+  const [showOwed, setShowOwed] = useState(false);
+  const [opensDraft, setOpensDraft] = useState("");
+  const [dayDraft, setDayDraft] = useState("");
+
+  /* Drafts start from the saved values, and only once — typing must not be
+     undone by the next background refresh. */
+  useEffect(() => {
+    if (!data) return;
+    setOpensDraft((v) => v || (data.closedDays.opensAt ? isoDate(new Date(data.closedDays.opensAt)) : ""));
+    setDayDraft((v) => v || (data.payout.day ? String(data.payout.day) : ""));
+  }, [data]);
+
+  if (!data) {
+    return (
+      <Card title="What's coming" subtitle="Deposits, the rent run, and the next payout.">
+        <div className="stack g-2" aria-busy="true"><Skeleton height={16} /><Skeleton height={56} /><Skeleton height={56} /></div>
+      </Card>
+    );
+  }
+
+  const { deposits, rent, payout, closedDays } = data;
+  const creditPending = closedDays.rows.length > 0 && !closedDays.appliedAt;
+
+  return (
+    <Card
+      title="What's coming"
+      subtitle="Every dated thing on the money calendar — what lands in your bank, what gets charged, what goes out."
+    >
+      <div className="stack g-5">
+        {data.stripeError ? <Note tone="warn">{data.stripeError}</Note> : null}
+
+        {/* ---- deposits ------------------------------------------------- */}
+        <div className="stack g-2">
+          <div className="row between wrap g-2">
+            <span className="t-label">Deposits into your bank</span>
+            <span className="t-sm num">
+              <b>{money(data.depositTotalCents)}</b> across {plural(deposits.length, "deposit")}
+            </span>
+          </div>
+
+          {deposits.length === 0 ? (
+            <span className="t-sm t-muted">
+              Nothing scheduled. {money(data.availableCents)} is sitting settled in Stripe and will go out on the next
+              deposit.
+            </span>
+          ) : (
+            <div className="stack g-1">
+              {deposits.map((d) => (
+                <div key={d.id} className="row between wrap g-3" style={{ padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border-subtle)" }}>
+                  <span className="row g-2 wrap" style={{ alignItems: "baseline" }}>
+                    <b>{fmtArrival(d.arrival)}</b>
+                    <span className="t-xs t-muted">{inWords(d.arrival)}</span>
+                    <Badge tone={d.status === "in_transit" ? "success" : "info"} dot>
+                      {d.status === "in_transit" ? "Sent" : "Scheduled"}
+                    </Badge>
+                  </span>
+                  <span className="num">{money(d.amountCents)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ---- rent run -------------------------------------------------- */}
+        <div className="stack g-2">
+          <div className="row between wrap g-2">
+            <span className="t-label">Rent charges out to vendors</span>
+            <Button size="sm" variant="ghost" onClick={() => setShowRent((v) => !v)}>
+              {showRent ? "Hide the breakdown" : "See every booth"}
+            </Button>
+          </div>
+
+          <Note tone={creditPending ? "warn" : "info"}>
+            <b>{money(rent.totalCents)}</b> posts automatically on <b>{fmtArrival(rent.runAt)}</b> ({inWords(rent.runAt)}),
+            across {plural(rent.chargeCount, "booth")}. Nothing is taken from anyone&rsquo;s card — it lands on their
+            ledger and their invoice. You&rsquo;ll get an email listing it the morning it runs.
+          </Note>
+
+          {creditPending ? (
+            <Note tone="warn" title="Closed days not credited yet">
+              {plural(closedDays.rows.length, "agreement")} started before the market opened
+              {closedDays.opensAt ? ` on ${fmtArrival(closedDays.opensAt)}` : ""}, so those vendors paid a full month
+              covering days there was no market. Crediting the days moves each one&rsquo;s prepaid date forward, which
+              makes the next run bill them for that many days fewer — roughly{" "}
+              <b>{money(closedDays.estimatedCreditCents)}</b> in total. Check the list below before you apply it;
+              it can only be done once.
+            </Note>
+          ) : closedDays.appliedAt ? (
+            <span className="t-xs t-muted">
+              Closed days were credited {relTime(closedDays.appliedAt)} — the amounts above already reflect it.
+            </span>
+          ) : null}
+
+          {creditPending ? (
+            <div className="stack g-2">
+              <DataTable
+                rows={closedDays.rows}
+                rowKey={(r) => r.contractId}
+                mobileCards
+                caption="Agreements that started before the market opened"
+                columns={[
+                  { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
+                  { key: "b", header: "Booth", cell: (r) => <span className="mono">{r.boothLabel}</span> },
+                  { key: "s", header: "Lease started", sortBy: (r) => r.startDate, cell: (r) => fmtDateShort(r.startDate) },
+                  { key: "d", header: "Days owed back", align: "right", sortBy: (r) => r.days, cell: (r) => <b className="num">{r.days}</b> },
+                  {
+                    key: "w", header: "Worth about", align: "right",
+                    sortBy: (r) => r.days * r.monthlyRentCents,
+                    cell: (r) => <span className="num">{money(Math.round((r.monthlyRentCents * r.days) / 30))}</span>,
+                  },
+                ]}
+              />
+              <div>
+                <Button variant="primary" icon="check" disabled={busy} onClick={onCredit}>
+                  Credit these closed days
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {showRent ? (
+            <DataTable
+              rows={rent.lines}
+              rowKey={(r) => r.contractId}
+              mobileCards
+              defaultSort={{ key: "amt", dir: "desc" }}
+              caption={`What the ${rent.monthLabel} rent run will charge each booth`}
+              columns={[
+                { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
+                { key: "b", header: "Booth", cell: (r) => <span className="mono">{r.boothLabel}</span> },
+                { key: "why", header: "Why", cell: (r) => <span className="t-xs t-muted">{r.reason}</span> },
+                {
+                  key: "amt", header: "Will charge", align: "right",
+                  sortBy: (r) => r.amountCents,
+                  cell: (r) =>
+                    r.amountCents === 0 ? (
+                      <Badge tone="neutral">Nothing</Badge>
+                    ) : (
+                      <span className="stack g-1" style={{ alignItems: "flex-end" }}>
+                        <b className="num">{money(r.amountCents)}</b>
+                        {r.amountCents !== r.monthlyRentCents ? (
+                          <span className="t-xs t-muted num">of {money(r.monthlyRentCents)}</span>
+                        ) : null}
+                      </span>
+                    ),
+                },
+              ]}
+            />
+          ) : null}
+        </div>
+
+        {/* ---- payouts --------------------------------------------------- */}
+        <div className="stack g-2">
+          <div className="row between wrap g-2">
+            <span className="t-label">Money out to vendors</span>
+            <Button size="sm" variant="ghost" onClick={() => setShowOwed((v) => !v)}>
+              {showOwed ? "Hide who's owed" : "See who's owed"}
+            </Button>
+          </div>
+
+          <Note tone="info">
+            <b>{money(payout.owedCents)}</b> is owed to {plural(payout.vendorCount, "vendor")} right now.
+            {payout.nextAt
+              ? <> Your payout day is the {payout.day}<sup>th</sup>, so the next run is <b>{fmtArrival(payout.nextAt)}</b> ({inWords(payout.nextAt)}).</>
+              : " No payout day is set, so nothing is scheduled — set one below and this counts down to it."}
+            {payout.notSetUpCents > 0
+              ? ` ${money(payout.notSetUpCents)} of it belongs to vendors who haven't finished connecting a bank account, so it can't be sent automatically.`
+              : ""}
+          </Note>
+
+          {payout.owedCents > data.availableCents + data.depositTotalCents ? (
+            <Note tone="warn">
+              You owe more than Stripe is holding for you — {money(payout.owedCents)} out against{" "}
+              {money(data.availableCents + data.depositTotalCents)} available and on its way.
+            </Note>
+          ) : null}
+
+          {showOwed ? (
+            <DataTable
+              rows={payout.rows}
+              rowKey={(r) => r.vendorId}
+              mobileCards
+              defaultSort={{ key: "bal", dir: "desc" }}
+              caption="Vendors the market currently owes"
+              columns={[
+                { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
+                { key: "c", header: "Code", cell: (r) => <span className="mono t-muted">{r.vendorCode}</span> },
+                {
+                  key: "s", header: "Bank",
+                  cell: (r) => r.payoutsEnabled
+                    ? <Badge tone="success" dot>Connected</Badge>
+                    : <Badge tone="neutral" dot>Not set up</Badge>,
+                },
+                { key: "bal", header: "Owed", align: "right", sortBy: (r) => r.balanceCents, cell: (r) => <b className="num">{money(r.balanceCents)}</b> },
+              ]}
+            />
+          ) : null}
+        </div>
+
+        {/* ---- the two dates everything above is measured from ----------- */}
+        <div className="stack g-3" style={{ borderTop: "1px solid var(--border)", paddingTop: "var(--sp-4)" }}>
+          <span className="t-label">The calendar</span>
+          <div className="row wrap g-4" style={{ alignItems: "flex-end" }}>
+            <Field label="Market opening day" hint="Used only to work out the closed-day credit.">
+              {(p) => (
+                <Input {...p} type="date" value={opensDraft} onChange={(e) => setOpensDraft(e.target.value)} style={{ width: 180 }} />
+              )}
+            </Field>
+            <Field label="Pay vendors on day" hint="1–28. Blank or 0 for no fixed day.">
+              {(p) => (
+                <Input {...p} type="number" min="0" max="28" inputMode="numeric" value={dayDraft} onChange={(e) => setDayDraft(e.target.value)} style={{ width: 110 }} />
+              )}
+            </Field>
+            <Button variant="secondary" disabled={busy} onClick={() => onSave(opensDraft, Number(dayDraft) || 0)}>
+              Save dates
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function MoneyAtAGlance({
   bank, ledger, payouts,
 }: {
@@ -1142,6 +1424,7 @@ export default function AdminPage() {
   const [rentRoll, setRentRoll] = useState<RentRoll | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
   const [ledger, setLedger] = useState<RentLedger | null>(null);
+  const [upcoming, setUpcoming] = useState<Upcoming | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<"OWING" | "ALL" | "PAID">("OWING");
   const [showInactive, setShowInactive] = useState(false);
   /* Note: the per-application notes/contract form and its PATCH handler used to
@@ -1488,6 +1771,60 @@ export default function AdminPage() {
     if (d.fee) setPayoutFee(d.fee as { percent: number; fixedCents: number });
   }, []);
 
+  const loadUpcoming = useCallback(async () => {
+    const r = await fetch("/api/admin/upcoming");
+    if (r.ok) setUpcoming(await r.json());
+  }, []);
+
+  const saveMoneyDates = async (opensAt: string, payoutDay: number) => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/upcoming", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "settings", marketOpensAt: opensAt, payoutDay }),
+      });
+      if (!r.ok) { toast.error("Couldn't save those dates"); return; }
+      await loadUpcoming();
+      toast.success("Dates saved", payoutDay ? `Vendors get paid on the ${payoutDay}th.` : "No fixed payout day.");
+    } finally { setBusy(false); }
+  };
+
+  /* Moves every affected agreement's prepaid date forward. It changes what
+     vendors are billed next month, so it asks with the total in the question
+     and it can only be done once. */
+  const applyClosedDayCredit = async () => {
+    const rows = upcoming?.closedDays.rows || [];
+    const yes = await dialog.confirm({
+      title: `Credit closed days to ${plural(rows.length, "vendor")}?`,
+      body: (
+        <>
+          <p>
+            Each of these agreements started before the market opened, so the full month they paid up front
+            covered days there was nothing to sell at. This gives those days back by moving their prepaid date
+            forward, which makes the next rent run bill them for that many days fewer.
+          </p>
+          <p style={{ marginTop: 8 }}>
+            About <b>{money(upcoming?.closedDays.estimatedCreditCents || 0)}</b> in total. It changes what they are
+            charged, it is recorded in the activity log, and it can only be done once.
+          </p>
+        </>
+      ),
+      confirmLabel: "Credit the days",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/upcoming", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "credit" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't apply it", String(d.error || "")); return; }
+      await loadUpcoming();
+      toast.success(`${plural(d.changed || 0, "agreement")} credited`, "Next month's run reflects it already.");
+    } finally { setBusy(false); }
+  };
+
   const loadReviews = useCallback(async () => {
     const r = await fetch("/api/admin/reviews");
     if (r.ok) setReviews((await r.json()).reviews || []);
@@ -1687,6 +2024,7 @@ export default function AdminPage() {
     if (authed && tab === "bank") fetch("/api/admin/stripe").then(async (r) => setBank(await r.json()));
     if (authed && tab === "bank") fetch("/api/admin/settlement").then(async (r) => { if (r.ok) { const d = await r.json(); setSettle(d.rows); setRentRoll(d.rentRoll || null); } });
     if (authed && tab === "bank") fetch("/api/admin/rent-ledger").then(async (r) => { if (r.ok) setLedger(await r.json()); });
+    if (authed && allowed("financials") && tab === "bank") void loadUpcoming();
   }, [authed, tab]);
   useEffect(() => {
     try { const v = window.localStorage.getItem("nm_autoprint"); if (v !== null) setAutoPrint(v === "1"); } catch {}
@@ -5744,6 +6082,15 @@ export default function AdminPage() {
       {tab === "bank" && (
         <div className="stack g-4" style={{ marginBottom: "var(--sp-4)" }}>
           <MoneyAtAGlance bank={bank} ledger={ledger} payouts={payouts} />
+
+          {allowed("financials") ? (
+            <UpcomingMoney
+              data={upcoming}
+              busy={busy}
+              onSave={(opensAt, day) => void saveMoneyDates(opensAt, day)}
+              onCredit={() => void applyClosedDayCredit()}
+            />
+          ) : null}
 
           <RentLedgerCards
             ledger={ledger}

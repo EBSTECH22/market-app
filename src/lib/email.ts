@@ -723,3 +723,48 @@ export async function sendOrderStatusEmail(
     `)
   );
 }
+
+/**
+ * What the monthly rent run just charged, to whoever runs the market.
+ *
+ * The run posts a debit on every active booth at one in the morning. Before
+ * this, the only way to find out what it did was to notice the balances had
+ * changed — which usually means finding out from the vendor who noticed first.
+ */
+export async function sendRentRunEmail(opts: {
+  monthLabel: string;
+  totalCents: number;
+  lines: { vendorName: string; boothLabel: string; amountCents: number; reason: string }[];
+}): Promise<boolean> {
+  const to = process.env.MARKET_NOTIFY_EMAIL || "";
+  if (!to) return false;
+
+  const rows = opts.lines
+    .map(
+      (l) =>
+        `<tr>
+           <td style="padding:6px 0;text-align:left;">${l.vendorName}<div style="color:#9ca3af;font-size:12px;">Booth ${l.boothLabel} — ${l.reason}</div></td>
+           <td style="padding:6px 0;text-align:right;vertical-align:top;">${money2(l.amountCents)}</td>
+         </tr>`
+    )
+    .join("");
+
+  return send(
+    to,
+    `Rent posted for ${opts.monthLabel} — ${money2(opts.totalCents)}`,
+    shell(`
+      <h1 style="font-size:20px;margin:0 0 6px;">${opts.monthLabel} rent has posted</h1>
+      <p style="color:#4b5563;margin:0 0 18px;">
+        ${opts.lines.length === 1 ? "One booth was" : `${opts.lines.length} booths were`} charged, ${money2(opts.totalCents)} in total.
+        Nothing has been taken from anyone's card — these are charges on their ledger, and their invoices reflect it now.
+      </p>
+      <table style="width:100%;font-size:14px;border-collapse:collapse;">
+        ${rows}
+        <tr><td style="padding-top:10px;border-top:1px solid #e5e7eb;font-weight:700;text-align:left;">Total charged</td><td style="padding-top:10px;border-top:1px solid #e5e7eb;font-weight:700;text-align:right;">${money2(opts.totalCents)}</td></tr>
+      </table>
+      <p style="color:#9ca3af;font-size:12px;margin-top:16px;">
+        You can see next month's run, to the cent, on the Bank &amp; payouts page before it happens.
+      </p>
+    `)
+  );
+}

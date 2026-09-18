@@ -19,8 +19,13 @@ export async function postFirstMonthRent(contractId: string) {
   const daysInMonth = new Date(y, mo, 0).getDate();
   // policy: first month is FULL rent to get started; the SECOND month prorates back to the calendar
   const amount = c.monthlyRentCents;
-  const paidThrough = new Date(start);
-  paidThrough.setMonth(paidThrough.getMonth() + 1);
+  /* One month on from the start date, stored at noon UTC so it reads as the
+     intended calendar day in market time whatever daylight saving is doing.
+     `new Date(start); setMonth(+1)` kept the start's time-of-day, and a lease
+     beginning at midnight Central in October came out at eleven at night on the
+     last day of October — a day early, which the monthly run then read as a
+     different month. */
+  const paidThrough = new Date(Date.UTC(y, mo - 1 + 1, d, 12, 0, 0));
   await db.contract.update({ where: { id: c.id }, data: { paidThrough } });
   if (amount <= 0) return;
 
