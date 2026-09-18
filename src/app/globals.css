@@ -800,6 +800,18 @@ legend { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary)
 .table tbody tr { transition: background var(--dur-fast) var(--ease); }
 .table tbody tr:hover { background: var(--surface-hover); }
 .table .right { text-align: right; }
+
+/* Dense table: smaller type and tighter cells so a wide one fits on screen
+   without scrolling sideways. Every column is still rendered — a table-wrap
+   scrolls rather than truncating, and under 760px DataTable switches to cards
+   where each column becomes its own labelled row. Nothing is ever dropped. */
+.table-dense .table { font-size: var(--fs-xs); }
+.table-dense .table th { padding: var(--sp-2) var(--sp-2); }
+.table-dense .table td { padding: var(--sp-2) var(--sp-2); }
+.table-dense .table th:first-child,
+.table-dense .table td:first-child { padding-left: var(--sp-3); }
+.table-dense .table th:last-child,
+.table-dense .table td:last-child { padding-right: var(--sp-3); }
 .table .num { font-variant-numeric: tabular-nums; }
 
 /* Sortable column header. */

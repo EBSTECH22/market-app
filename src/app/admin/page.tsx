@@ -227,7 +227,10 @@ function UpcomingMoney({
   onSave: (opensAt: string, payoutDay: number) => void;
   onCredit: () => void;
 }) {
-  const [showRent, setShowRent] = useState(false);
+  /* Open by default. A preview you have to click to see is a preview nobody
+     reads, which is how a charge date nobody knew about gets discovered by the
+     vendor it happened to. */
+  const [showRent, setShowRent] = useState(true);
   const [showOwed, setShowOwed] = useState(false);
   const [opensDraft, setOpensDraft] = useState("");
   const [dayDraft, setDayDraft] = useState("");
@@ -327,6 +330,7 @@ function UpcomingMoney({
                 rows={closedDays.rows}
                 rowKey={(r) => r.contractId}
                 mobileCards
+                dense
                 caption="Agreements that started before the market opened"
                 columns={[
                   { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
@@ -353,28 +357,30 @@ function UpcomingMoney({
               rows={rent.lines}
               rowKey={(r) => r.contractId}
               mobileCards
+              dense
               defaultSort={{ key: "amt", dir: "desc" }}
               caption={`What the ${rent.monthLabel} rent run will charge each booth`}
               columns={[
                 { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
                 { key: "b", header: "Booth", cell: (r) => <span className="mono">{r.boothLabel}</span> },
-                { key: "why", header: "Why", cell: (r) => <span className="t-xs t-muted">{r.reason}</span> },
                 {
-                  /* For anyone skipped by this run — still inside the month they
-                     prepaid — the useful date is the one further out, not the
-                     run being previewed. */
-                  key: "next", header: "Next charged",
+                  /* Second column, not the last one. For anyone skipped by this
+                     run — still inside the month they prepaid — this is the
+                     date that actually answers "when do they next get billed",
+                     and it is the reason the table is here. */
+                  key: "next", header: "Next charge date",
                   sortBy: (r) => r.nextChargeAt || "9999",
                   cell: (r) =>
                     !r.nextChargeAt ? (
-                      <span className="t-xs t-muted">Not again</span>
+                      <span className="t-xs t-muted">Not charged again</span>
                     ) : (
                       <span className="stack g-1">
-                        <b>{fmtDateShort(r.nextChargeAt)}</b>
+                        <b>{fmtDate(r.nextChargeAt)}</b>
                         <span className="t-xs t-muted num">{money(r.nextChargeCents)}</span>
                       </span>
                     ),
                 },
+                { key: "why", header: "Why", cell: (r) => <span className="t-xs t-muted">{r.reason}</span> },
                 {
                   key: "amt", header: "Will charge", align: "right",
                   sortBy: (r) => r.amountCents,

@@ -43,6 +43,12 @@ type Props<T> = {
   defaultSort?: { key: string; dir: "asc" | "desc" };
   /** Render the mobile layout as stacked cards instead of a scrolling table. */
   mobileCards?: boolean;
+  /**
+   * Smaller type and tighter cells, for a wide table that would otherwise need
+   * sideways scrolling to read. Nothing is hidden either way — this only
+   * changes how much fits on screen at once.
+   */
+  dense?: boolean;
   caption?: string;
 };
 
@@ -56,6 +62,7 @@ export function DataTable<T>({
   onRowClick,
   defaultSort,
   mobileCards,
+  dense,
   caption,
 }: Props<T>) {
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(defaultSort ?? null);
@@ -140,7 +147,7 @@ export function DataTable<T>({
   return (
     <>
       {cards}
-      <div className={`table-wrap${mobileCards ? " dt-table" : ""}`}>
+      <div className={`table-wrap${mobileCards ? " dt-table" : ""}${dense ? " table-dense" : ""}`}>
         <table className="table">
           {caption ? <caption className="sr-only">{caption}</caption> : null}
           <thead>
