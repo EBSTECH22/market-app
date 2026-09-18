@@ -3926,7 +3926,31 @@ export default function AdminPage() {
         ? (["register", "calendar", "vendors", "time"] as AdminTab[])
         : (["register", "time", "floor"] as AdminTab[])
   ).filter((t) => visibleTabs.includes(t));
-  const moreMobile = visibleTabs.filter((t) => !primaryMobile.includes(t));
+  /* The "More" sheet is built from NAV, the same list the desktop sidebar
+     uses — not from the tab list.
+     THE BUG THIS FIXES: two entries in NAV are LINKS to their own pages rather
+     than tabs — the Applications workspace and the kiosk. The sheet used to be
+     built from tabs alone, so on a phone those two simply did not exist in the
+     navigation. Everything about applications lives on that page: call notes,
+     booking a viewing, raising an agreement, sending it, chasing the
+     signature. On the PWA there was no way to reach any of it.
+     Sharing NAV means the two can never drift apart again. */
+  const moreGroups = NAV.map((g) => ({
+    group: g.group,
+    items: g.items.filter((i) =>
+      i.href
+        ? !i.cap || allowed(i.cap)
+        : (visibleTabs as readonly string[]).includes(i.id) && !(primaryMobile as readonly string[]).includes(i.id)
+    ),
+  })).filter((g) => g.items.length > 0);
+
+  /* For marking the More button as current when a section inside it is open. */
+  const moreTabIds = moreGroups.flatMap((g) => g.items.filter((i) => !i.href).map((i) => i.id));
+  /* Anything waiting inside the sheet, so the phone shows a count without
+     needing the sidebar's per-row badges. */
+  const moreCount = moreGroups
+    .flatMap((g) => g.items)
+    .reduce((n, i) => n + (navBadge[i.id] || 0), 0);
 
   return (
     <div className="shell">
@@ -10039,15 +10063,31 @@ export default function AdminPage() {
             <span>{TAB_META[t].label}</span>
           </button>
         ))}
-        {moreMobile.length > 0 ? (
+        {moreGroups.length > 0 ? (
           <button
             type="button"
             className="tabbar-item"
             aria-expanded={moreOpen}
-            aria-current={moreMobile.includes(tab) ? "page" : undefined}
+            aria-current={moreTabIds.includes(tab) ? "page" : undefined}
             onClick={() => setMoreOpen(true)}
           >
-            <Icon name="more" size={20} />
+            <span style={{ position: "relative", display: "block" }}>
+              <Icon name="more" size={20} />
+              {moreCount > 0 ? (
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute", top: -3, right: -6,
+                    minWidth: 15, height: 15, padding: "0 3px",
+                    borderRadius: "var(--r-full)", background: "var(--danger)",
+                    color: "#fff", fontSize: 9, fontWeight: 700,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  {moreCount}
+                </span>
+              ) : null}
+            </span>
             <span>More</span>
           </button>
         ) : null}
@@ -10059,20 +10099,43 @@ export default function AdminPage() {
         title="All sections"
         width="sm"
       >
-        <div className="stack g-1">
-          {moreMobile.map((t) => (
-            <button
-              key={t}
-              type="button"
-              className="nav-item"
-              style={{ minHeight: 46 }}
-              aria-current={tab === t ? "page" : undefined}
-              onClick={() => go(t)}
-            >
-              <Icon name={TAB_META[t].icon} size={17} />
-              <span className="truncate">{TAB_META[t].label}</span>
-              {navBadge[t] ? <span className="nav-item-count">{navBadge[t]}</span> : null}
-            </button>
+        <div className="stack g-3">
+          {moreGroups.map((g) => (
+            <div key={g.group}>
+              <div className="nav-group-label">{g.group}</div>
+              <div className="stack" style={{ gap: 2 }}>
+                {g.items.map((i) =>
+                  i.href ? (
+                    /* A link, not a tab — the Applications workspace and the
+                       kiosk are their own pages. Both were missing here. */
+                    <a
+                      key={i.id}
+                      className="nav-item"
+                      style={{ minHeight: 46 }}
+                      href={i.href}
+                      onClick={() => setMoreOpen(false)}
+                    >
+                      <Icon name={i.icon} size={17} />
+                      <span className="truncate">{i.label}</span>
+                      {navBadge[i.id] ? <span className="nav-item-count">{navBadge[i.id]}</span> : null}
+                    </a>
+                  ) : (
+                    <button
+                      key={i.id}
+                      type="button"
+                      className="nav-item"
+                      style={{ minHeight: 46 }}
+                      aria-current={tab === i.id ? "page" : undefined}
+                      onClick={() => go(i.id as AdminTab)}
+                    >
+                      <Icon name={i.icon} size={17} />
+                      <span className="truncate">{i.label}</span>
+                      {navBadge[i.id] ? <span className="nav-item-count">{navBadge[i.id]}</span> : null}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
           ))}
           <div className="divider mt-2 mb-2" />
           <button type="button" className="nav-item" style={{ minHeight: 46 }} onClick={staffLogout}>
