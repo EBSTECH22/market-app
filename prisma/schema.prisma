@@ -762,3 +762,52 @@ model OrderLine {
 
   @@index([itemId])
 }
+
+// A room, measured wall by wall.
+//
+// `walls` is JSON — an ordered list of { lengthIn, turnDeg, label } — because a
+// room outline is a document, not a set of rows anybody will ever query. The
+// corners are derived from it (see @/lib/floorplan), so the drawing can never
+// disagree with the measurements somebody typed off a tape.
+model FloorPlan {
+  id        String   @id @default(cuid())
+  name      String
+  // Grid the booths snap to, in inches. 3 is a comfortable default; 0 is free.
+  gridIn    Int      @default(3)
+  notes     String   @default("")
+  sortOrder Int      @default(0)
+  walls     Json     @default("[]")
+  spaces    FloorSpace[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// One booth or display on a plan.
+//
+// Positions and sizes are INCHES, always — see the note at the top of
+// @/lib/floorplan. A plan stored in pixels stops being a measurement the first
+// time somebody opens it on a different screen.
+model FloorSpace {
+  id          String    @id @default(cuid())
+  planId      String
+  plan        FloorPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  label       String    @default("")
+  xIn         Int       @default(0)
+  yIn         Int       @default(0)
+  widthIn     Int       @default(60)
+  depthIn     Int       @default(60)
+  // 0, 90, 180 or 270 only — real booths sit square to the room.
+  rotationDeg Int       @default(0)
+  // AVAILABLE | HELD | TAKEN
+  status      String    @default("AVAILABLE")
+  // Who is in it. Plain ids rather than relations: a vendor leaving should not
+  // cascade-delete the space they were standing in.
+  vendorId    String    @default("")
+  contractId  String    @default("")
+  notes       String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([planId])
+  @@index([vendorId])
+}

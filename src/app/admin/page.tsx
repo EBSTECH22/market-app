@@ -1158,6 +1158,7 @@ const NAV: { group: string; items: { id: string; label: string; icon: IconName; 
     items: [
       { id: "applications", label: "Applications", icon: "inbox", href: "/admin/applications", cap: "market" as Capability },
       { id: "vendors", label: "Vendors", icon: "store" },
+      { id: "sitemap", label: "Site map", icon: "grid", href: "/admin/floorplan", cap: "market" as Capability },
       { id: "onboarding", label: "Onboarding", icon: "user" },
       { id: "contracts", label: "Agreements", icon: "contract" },
       { id: "customers", label: "Customers", icon: "star" },

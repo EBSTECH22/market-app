@@ -10,6 +10,78 @@ import {
 import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
 import { subscribeToPush } from "@/lib/pushclient";
+import { fmtLength, fmtSize, sqFt, bounds, footprint, type Pt } from "@/lib/floorplan";
+
+type BoothSpot = {
+  id: string; label: string; roomName: string;
+  xIn: number; yIn: number; widthIn: number; depthIn: number; rotationDeg: number;
+  polygon: Pt[];
+  others: { id: string; xIn: number; yIn: number; widthIn: number; depthIn: number; rotationDeg: number }[];
+};
+
+/**
+ * "Here's your booth" — the market's floor plan, with theirs picked out.
+ *
+ * Drawn from the same inch measurements the market laid out, in an SVG whose
+ * viewBox IS the room, so the picture is to scale rather than approximately
+ * right. The neighbouring booths are outlines only: a vendor should be able to
+ * find their spot, not audit the building.
+ */
+function BoothMap({ spots }: { spots: BoothSpot[] }) {
+  return (
+    <>
+      {spots.map((s) => {
+        const poly = s.polygon || [];
+        const pad = 24;
+        const b = bounds(poly.length >= 3 ? poly : [{ x: s.xIn, y: s.yIn }, { x: s.xIn + s.widthIn, y: s.yIn + s.depthIn }]);
+        const f = footprint(s);
+        return (
+          <Card
+            key={s.id}
+            title={s.label ? `Your booth — ${s.label}` : "Your booth"}
+            subtitle={`${s.roomName ? `${s.roomName} · ` : ""}${fmtSize(s.widthIn, s.depthIn)} ft · ${sqFt(s.widthIn, s.depthIn)} sq ft`}
+          >
+            <div style={{ background: "var(--bg-sunken)", borderRadius: "var(--r-lg)", padding: "var(--sp-2)" }}>
+              <svg
+                viewBox={`${b.minX - pad} ${b.minY - pad} ${b.w + pad * 2} ${b.h + pad * 2}`}
+                style={{ width: "100%", height: "auto", maxHeight: 320, display: "block" }}
+                role="img"
+                aria-label={`Where your booth sits in ${s.roomName || "the market"}`}
+              >
+                {poly.length >= 3 ? (
+                  <polygon
+                    points={poly.map((p) => `${p.x},${p.y}`).join(" ")}
+                    fill="var(--bg-elevated)" stroke="var(--text)" strokeWidth="3"
+                  />
+                ) : null}
+                {s.others.map((o) => {
+                  const of_ = footprint(o);
+                  return (
+                    <rect key={o.id} x={o.xIn} y={o.yIn} width={of_.w} height={of_.h}
+                      fill="var(--bg-sunken)" stroke="var(--border-strong)" strokeWidth="1" rx="2" />
+                  );
+                })}
+                <rect x={s.xIn} y={s.yIn} width={f.w} height={f.h}
+                  fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth="3" rx="2" />
+                <text
+                  x={s.xIn + f.w / 2} y={s.yIn + f.h / 2}
+                  textAnchor="middle" dominantBaseline="middle"
+                  style={{ fontSize: 10, fontWeight: 700, fill: "var(--accent-text)" }}
+                >
+                  You
+                </text>
+              </svg>
+            </div>
+            <span className="t-xs t-muted">
+              {fmtLength(s.widthIn)} across by {fmtLength(s.depthIn)} deep. The other outlines are the booths
+              around you.
+            </span>
+          </Card>
+        );
+      })}
+    </>
+  );
+}
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
@@ -639,6 +711,15 @@ export default function VendorDashboard() {
 
   const [pushBusy, setPushBusy] = useState(false);
 
+  /* Where their booth sits on the market's site map, if it has been placed. */
+  const [booths, setBooths] = useState<BoothSpot[] | null>(null);
+  useEffect(() => {
+    fetch("/api/vendor/booth")
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setBooths(d.spaces || []); })
+      .catch(() => {});
+  }, []);
+
   const enablePush = async () => {
     setPushMsg(null);
     setPushBusy(true);
@@ -1218,6 +1299,7 @@ export default function VendorDashboard() {
           {/* ------------------------------------------------------------ home */}
           {tab === "home" && (
             <div className="stack g-4">
+              {booths && booths.length > 0 ? <BoothMap spots={booths} /> : null}
               <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
                 <Stat feature label="Your balance" value={money(me.balance)} sub={me.balance >= 0 ? "Paid out monthly" : "Rent due"} icon="dollar" />
                 <Stat label="Sold this month" value={money(me.monthSales)} sub={`Your net ${money(me.monthNet)}`} icon="receipt" />
