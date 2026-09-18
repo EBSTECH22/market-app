@@ -178,6 +178,7 @@ type Upcoming = {
     lines: {
       contractId: string; vendorName: string; vendorCode: string; boothLabel: string;
       amountCents: number; monthlyRentCents: number; action: string; reason: string;
+      nextChargeAt: string | null; nextChargeCents: number; nextChargeReason: string;
     }[];
   };
   closedDays: {
@@ -358,6 +359,22 @@ function UpcomingMoney({
                 { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
                 { key: "b", header: "Booth", cell: (r) => <span className="mono">{r.boothLabel}</span> },
                 { key: "why", header: "Why", cell: (r) => <span className="t-xs t-muted">{r.reason}</span> },
+                {
+                  /* For anyone skipped by this run — still inside the month they
+                     prepaid — the useful date is the one further out, not the
+                     run being previewed. */
+                  key: "next", header: "Next charged",
+                  sortBy: (r) => r.nextChargeAt || "9999",
+                  cell: (r) =>
+                    !r.nextChargeAt ? (
+                      <span className="t-xs t-muted">Not again</span>
+                    ) : (
+                      <span className="stack g-1">
+                        <b>{fmtDateShort(r.nextChargeAt)}</b>
+                        <span className="t-xs t-muted num">{money(r.nextChargeCents)}</span>
+                      </span>
+                    ),
+                },
                 {
                   key: "amt", header: "Will charge", align: "right",
                   sortBy: (r) => r.amountCents,

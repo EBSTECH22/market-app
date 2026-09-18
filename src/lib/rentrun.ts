@@ -239,3 +239,44 @@ export function nextRentRunDate(now = new Date(), alreadyRanThisMonth = false): 
   const nextM = m === 12 ? 1 : m + 1;
   return monthStartFor(`${nextY}-${String(nextM).padStart(2, "0")}`);
 }
+
+/** "2026-11" plus n months. */
+export function addMonthsToYm(ym: string, n: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const total = y * 12 + (m - 1) + n;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+}
+
+/**
+ * When this contract is next actually charged, and how much.
+ *
+ * Not the same question as "what does the next run do to it". A vendor who
+ * prepaid their first month is skipped by the next run and by the one after,
+ * and the honest answer to "when do they next get billed" is a date some months
+ * out — which is exactly what somebody looking at the table wants to know, and
+ * what they would otherwise have to work out from a prepaid-through date.
+ *
+ * Answered by running the planner forward a month at a time rather than by
+ * reasoning about it, so it cannot disagree with what the run will do. Thirteen
+ * months is far enough: anything that hasn't billed within a year isn't a
+ * schedule, it's a contract that has ended.
+ */
+export function nextChargeFor(
+  c: RentContract,
+  fromYm: string,
+  now: Date,
+  chargedThisMonth: boolean,
+  maxMonths = 13
+): { ym: string; date: string; amountCents: number; reason: string } | null {
+  for (let i = 0; i < maxMonths; i++) {
+    const ym = addMonthsToYm(fromYm, i);
+    const at = monthStartFor(ym);
+    /* Only the first month can already be done; later months haven't happened. */
+    const row = planContract(c, ym, i === 0 ? now : at, i === 0 ? chargedThisMonth : false);
+    if (row.action === "END") return null;
+    if (row.amountCents > 0) {
+      return { ym, date: at.toISOString(), amountCents: row.amountCents, reason: row.reason };
+    }
+  }
+  return null;
+}

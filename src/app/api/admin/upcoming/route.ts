@@ -4,7 +4,7 @@ import { stripe } from "@/lib/stripe";
 import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import {
-  planRentRun, monthKey, rentMarker, legacyRentMarker, nextRentRunDate, type RentContract,
+  planRentRun, monthKey, rentMarker, legacyRentMarker, nextRentRunDate, nextChargeFor, type RentContract,
 } from "@/lib/rentrun";
 import { recordAudit } from "@/lib/audit";
 import {
@@ -87,6 +87,13 @@ export async function GET() {
     }));
     const plan = planRentRun(rows, ym, runAt, isCharged);
 
+    /* When each booth is next billed, which for anyone still inside a prepaid
+       month is not the run being previewed. Walked forward through the same
+       planner rather than inferred. */
+    const nextCharge = new Map<string, { date: string; amountCents: number; reason: string } | null>(
+      rows.map((r) => [r.id, nextChargeFor(r, ym, runAt, isCharged(r))] as [string, { date: string; amountCents: number; reason: string } | null])
+    );
+
     const nameOf = new Map<string, { businessName: string; code: string }>(
       contracts.map((c) => [c.id, { businessName: c.vendor.businessName, code: c.vendor.code }] as [string, { businessName: string; code: string }])
     );
@@ -157,6 +164,9 @@ export async function GET() {
             monthlyRentCents: r.monthlyRentCents,
             action: r.action,
             reason: r.reason,
+            nextChargeAt: nextCharge.get(r.contractId)?.date || null,
+            nextChargeCents: nextCharge.get(r.contractId)?.amountCents ?? 0,
+            nextChargeReason: nextCharge.get(r.contractId)?.reason || "",
           })),
       },
       closedDays: {
