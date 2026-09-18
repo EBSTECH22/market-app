@@ -154,10 +154,13 @@ export default function FloorPlanPage() {
   const [openKind, setOpenKind] = useState<Opening["kind"]>("DOOR");
   const [openWidthRaw, setOpenWidthRaw] = useState("3'");
   const [selOpening, setSelOpening] = useState<{ wall: number; index: number } | null>(null);
-  /* Show every opening's measurements at once, for checking the whole room
-     against a tape. Off by default because twelve dimension lines at once is a
-     drawing you can't read. */
-  const [showAllDims, setShowAllDims] = useState(false);
+  /* How much writing goes on the drawing.
+     A map covered in wall names, opening names and three dimension lines per
+     door is a map you can't read at a glance, which defeats the point of
+     drawing it. "Clean" is lengths and booth names only; "Everything" is the
+     checking-against-a-tape view. */
+  const [detail, setDetail] = useState<"clean" | "normal" | "all">("normal");
+  const showAllDims = detail === "all";
   const [newKind, setNewKind] = useState<SpaceKind>("BOOTH");
   /* Typed, not picked. Presets are shortcuts that fill these boxes — every
      market ends up with a booth nobody sells, and a shelf is whatever length
@@ -687,13 +690,16 @@ export default function FloorPlanPage() {
                     >
                       {placing ? "Cancel" : "Place it"}
                     </Button>
-                    <Button
-                      size="sm"
-                      variant={showAllDims ? "primary" : "ghost"}
-                      onClick={() => setShowAllDims((v) => !v)}
+                    <Select
+                      value={detail}
+                      aria-label="How much detail to show on the drawing"
+                      style={{ width: 150 }}
+                      onChange={(e) => setDetail(e.target.value as "clean" | "normal" | "all")}
                     >
-                      {showAllDims ? "Hide measurements" : "Show all measurements"}
-                    </Button>
+                      <option value="clean">Clean</option>
+                      <option value="normal">Normal</option>
+                      <option value="all">Everything</option>
+                    </Select>
                     <span className="t-xs t-muted">
                       or:{" "}
                       {OPENING_PRESETS.map((preset, i) => (
@@ -868,14 +874,16 @@ export default function FloorPlanPage() {
                                     opening rather than a missing bit of wall. */}
                                 <circle cx={pts.from.x} cy={pts.from.y} r="2.5" fill="var(--text)" />
                                 <circle cx={pts.to.x} cy={pts.to.y} r="2.5" fill="var(--text)" />
-                                <text
-                                  x={offsetPt({ x: ox, y: oy }, outward, -13).x}
-                                  y={offsetPt({ x: ox, y: oy }, outward, -13).y}
-                                  textAnchor="middle" dominantBaseline="middle"
-                                  style={{ fontSize: 7.5, fill: "var(--text-muted)" }}
-                                >
-                                  {o.label || OPENING_LABEL[o.kind]} {fmtLength(o.widthIn)}
-                                </text>
+                                {(isSelOpening || detail === "all") ? (
+                                  <text
+                                    x={offsetPt({ x: ox, y: oy }, outward, -13).x}
+                                    y={offsetPt({ x: ox, y: oy }, outward, -13).y}
+                                    textAnchor="middle" dominantBaseline="middle"
+                                    style={{ fontSize: 7.5, fill: "var(--text-muted)" }}
+                                  >
+                                    {o.label || OPENING_LABEL[o.kind]} {fmtLength(o.widthIn)}
+                                  </text>
+                                ) : null}
 
                                 {/* The measurements, drawn where they're taken:
                                     corner → opening, the opening itself, and
@@ -912,7 +920,7 @@ export default function FloorPlanPage() {
                               paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3,
                             }}
                           >
-                            {fmtLength(w.lengthIn)}{w.label ? ` · ${w.label}` : ""}
+                            {fmtLength(w.lengthIn)}{w.label && detail !== "clean" ? ` · ${w.label}` : ""}
                           </text>
                         </g>
                       );
@@ -940,6 +948,10 @@ export default function FloorPlanPage() {
                       const t = corner ? legThickness(s) : 0;
                       const tx = corner ? s.xIn + s.widthIn / 2 : c.x;
                       const ty = corner ? s.yIn + t / 2 : c.y;
+                      /* A 12-inch shelf cannot hold three lines of writing.
+                         Below this the name is all that fits, and the rest is
+                         in the panel where it is readable anyway. */
+                      const roomy = Math.min(s.widthIn, corner ? t : s.depthIn) >= 26;
                       const bad = problems.overlapping.has(s.id) || problems.outside.has(s.id) || problems.blocking.has(s.id);
                       const isSel = s.id === selected;
                       return (
@@ -960,12 +972,13 @@ export default function FloorPlanPage() {
                             strokeLinejoin="round"
                           />
                           <text
-                            x={tx} y={corner ? ty - 5 : c.y - 7}
+                            x={tx} y={roomy && detail !== "clean" ? (corner ? ty - 5 : c.y - 7) : (corner ? ty : c.y)}
                             textAnchor="middle" dominantBaseline="middle"
                             style={{ fontSize: corner ? 9 : 10, fontWeight: 700, fill: "var(--text)", pointerEvents: "none" }}
                           >
                             {s.label}
                           </text>
+                          {roomy && detail !== "clean" ? (
                           <text
                             x={tx} y={corner ? ty + 5 : c.y + 5}
                             textAnchor="middle" dominantBaseline="middle"
@@ -973,7 +986,8 @@ export default function FloorPlanPage() {
                           >
                             {isCorner(s) ? `${fmtSize(s.widthIn, s.depthIn)} L` : fmtSize(s.widthIn, s.depthIn)}
                           </text>
-                          {s.vendorName ? (
+                          ) : null}
+                          {s.vendorName && roomy && detail !== "clean" ? (
                             <text
                               x={tx} y={corner ? ty + 14 : c.y + 16}
                               textAnchor="middle" dominantBaseline="middle"
