@@ -101,7 +101,7 @@ export type Space = {
   yIn: number;
   widthIn: number;
   depthIn: number;
-  /** 0, 90, 180 or 270. Anything else is rounded to the nearest of those. */
+  /** Any angle, 0-359, applied about the rectangle's own centre. */
   rotationDeg: number;
   status: string;
   vendorId?: string | null;
@@ -242,22 +242,101 @@ export function roomAreaSqFt(walls: Wall[]): number {
   return Math.round((Math.abs(acc) / 2 / 144) * 10) / 10;
 }
 
-/** A booth's footprint after rotation — 90° and 270° swap width and depth. */
+/**
+ * Rotation is ANY angle, about the rectangle's own centre.
+ *
+ * It used to be four quarter turns that swapped width and depth. Two things
+ * were wrong with that: turning a square booth did nothing at all, so the
+ * button looked broken; and a booth set against an angled wall could not be
+ * drawn at the angle of the wall it was against.
+ *
+ * Turning about the centre, rather than the corner, is what makes it feel like
+ * turning a table: the thing stays where it is and swings. `xIn`/`yIn` remain
+ * the top-left of the UNROTATED rectangle, so nothing about dragging, snapping
+ * or storage changes — the rotation is applied on top.
+ */
+export type RectLike = Pick<Space, "xIn" | "yIn" | "widthIn" | "depthIn" | "rotationDeg">;
+
+export function centreOf(s: RectLike): Pt {
+  return { x: s.xIn + s.widthIn / 2, y: s.yIn + s.depthIn / 2 };
+}
+
+/** The four corners as they actually sit on the floor, rotation included. */
+export function corners(s: RectLike): Pt[] {
+  const c = centreOf(s);
+  const rad = ((s.rotationDeg || 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const hw = s.widthIn / 2;
+  const hh = s.depthIn / 2;
+  return [
+    { x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: hh }, { x: -hw, y: hh },
+  ].map((p) => ({
+    x: round(c.x + p.x * cos - p.y * sin),
+    y: round(c.y + p.x * sin + p.y * cos),
+  }));
+}
+
+/**
+ * The upright box the rotated shape sits in.
+ *
+ * Only for "roughly how much room does this need" — never for collisions, which
+ * use the real corners. A 5×7 turned 45° has a bounding box half as big again
+ * as the booth, and treating that as the booth would refuse layouts that fit.
+ */
 export function footprint(s: Pick<Space, "widthIn" | "depthIn" | "rotationDeg">): { w: number; h: number } {
-  const r = ((Math.round(s.rotationDeg / 90) * 90) % 360 + 360) % 360;
-  return r === 90 || r === 270 ? { w: s.depthIn, h: s.widthIn } : { w: s.widthIn, h: s.depthIn };
+  const rad = ((s.rotationDeg || 0) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  return {
+    w: round(s.widthIn * cos + s.depthIn * sin),
+    h: round(s.widthIn * sin + s.depthIn * cos),
+  };
 }
 
 export function spaceRect(s: Space): { x: number; y: number; w: number; h: number } {
   const f = footprint(s);
-  return { x: s.xIn, y: s.yIn, w: f.w, h: f.h };
+  const c = centreOf(s);
+  return { x: round(c.x - f.w / 2), y: round(c.y - f.h / 2), w: f.w, h: f.h };
 }
 
-/** Do two booths share any floor? Touching edges are fine; overlapping is not. */
+/**
+ * Do two things share any floor?
+ *
+ * Separating-axis test on the real corners, because once anything can sit at an
+ * angle, comparing upright boxes reports overlaps that aren't there — two
+ * booths at 45° to each other, neatly side by side, have boxes that plainly
+ * intersect. Touching edges are fine; overlapping is not.
+ */
 export function overlaps(a: Space, b: Space): boolean {
-  const r1 = spaceRect(a);
-  const r2 = spaceRect(b);
-  return r1.x < r2.x + r2.w && r2.x < r1.x + r1.w && r1.y < r2.y + r2.h && r2.y < r1.y + r1.h;
+  const pa = corners(a);
+  const pb = corners(b);
+  for (const poly of [pa, pb]) {
+    for (let i = 0; i < poly.length; i++) {
+      const p1 = poly[i];
+      const p2 = poly[(i + 1) % poly.length];
+      /* The axis perpendicular to this edge. */
+      const axis = { x: -(p2.y - p1.y), y: p2.x - p1.x };
+      const len = Math.hypot(axis.x, axis.y) || 1;
+      axis.x /= len; axis.y /= len;
+
+      const proj = (pts: Pt[]) => {
+        let min = Infinity, max = -Infinity;
+        for (const p of pts) {
+          const d = p.x * axis.x + p.y * axis.y;
+          if (d < min) min = d;
+          if (d > max) max = d;
+        }
+        return { min, max };
+      };
+      const A = proj(pa);
+      const B = proj(pb);
+      /* A hair of tolerance so two booths pushed exactly together don't read as
+         overlapping through floating-point dust. */
+      if (A.max <= B.min + 0.01 || B.max <= A.min + 0.01) return false;
+    }
+  }
+  return true;
 }
 
 /** Ray casting. Points exactly on an edge count as inside. */
@@ -284,13 +363,9 @@ export function pointInPolygon(pt: Pt, poly: Pt[]): boolean {
 /** Is every corner of this booth inside the room? */
 export function spaceInsideRoom(s: Space, poly: Pt[]): boolean {
   if (poly.length < 3) return true; // nothing drawn yet — don't cry about it
-  const r = spaceRect(s);
-  return [
-    { x: r.x, y: r.y },
-    { x: r.x + r.w, y: r.y },
-    { x: r.x + r.w, y: r.y + r.h },
-    { x: r.x, y: r.y + r.h },
-  ].every((c) => pointInPolygon(c, poly));
+  /* Its real corners, so a booth turned to follow an angled wall isn't
+     reported as sticking through it. */
+  return corners(s).every((c) => pointInPolygon(c, poly));
 }
 
 /** Snap a measurement to the nearest grid step. */
@@ -469,4 +544,40 @@ export function openingMeasures(o: Opening, wallLengthIn: number): {
     fromEnd: round(wallLengthIn - (start + width)),
     centre: round(start + width / 2),
   };
+}
+
+/* ------------------------------------------------------- dimension lines -- */
+
+/** Average of the corners. Good enough to tell inside from outside. */
+export function centroid(poly: Pt[]): Pt {
+  if (poly.length === 0) return { x: 0, y: 0 };
+  const sx = poly.reduce((n, p) => n + p.x, 0);
+  const sy = poly.reduce((n, p) => n + p.y, 0);
+  return { x: round(sx / poly.length), y: round(sy / poly.length) };
+}
+
+/**
+ * The unit normal of a wall pointing AWAY from a reference point.
+ *
+ * Used to push dimension lines outside the room, so they never sit on top of a
+ * booth pushed against the wall they're measuring. Worked out from the room's
+ * own centre rather than assumed from the winding direction — a room drawn
+ * anticlockwise, or one with an inside corner, would flip the assumption and
+ * put every dimension line indoors.
+ */
+export function outwardNormal(a: Pt, b: Pt, away: Pt): Pt {
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const n = { x: -uy, y: ux };
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  /* Point it the way that increases the distance from the reference. */
+  const towards = (mid.x + n.x - away.x) ** 2 + (mid.y + n.y - away.y) ** 2;
+  const against = (mid.x - n.x - away.x) ** 2 + (mid.y - n.y - away.y) ** 2;
+  return towards >= against ? n : { x: -n.x, y: -n.y };
+}
+
+/** Slide a point along a normal. */
+export function offsetPt(p: Pt, n: Pt, by: number): Pt {
+  return { x: round(p.x + n.x * by), y: round(p.y + n.y * by) };
 }

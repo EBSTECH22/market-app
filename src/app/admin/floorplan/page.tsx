@@ -10,8 +10,9 @@ import {
   parseLength, fmtLength, fmtSize, sqFt, wallPoints, roomPolygon, closureGapIn,
   roomAreaSqFt, bounds, footprint, overlaps, spaceInsideRoom, snap,
   wallSolids, openingPoints, overlapProblem, rentable, nearestWall, openingMeasures, projectOnSegment,
+  centreOf, centroid, outwardNormal, offsetPt,
   STATUS_LABEL, KIND_LABEL, KIND_PRESETS, OPENING_LABEL, OPENING_PRESETS, SPACE_KINDS,
-  type Wall, type Space, type Opening, type SpaceKind,
+  type Wall, type Space, type Opening, type SpaceKind, type Pt,
 } from "@/lib/floorplan";
 
 /**
@@ -74,6 +75,61 @@ function strokeFor(s: PlanSpace): string {
   return STATUS_STROKE[s.status] || STATUS_STROKE.AVAILABLE;
 }
 
+/**
+ * A dimension line: the measurement drawn where it is measured.
+ *
+ * The number on its own, in a panel, was the problem — you could type "5 feet
+ * from the corner" and have no way to see WHICH corner, or to check the drawing
+ * against the room. Drawn on the plan, with ticks at both ends and the figure
+ * in the middle, it is the same thing an architect's drawing shows and it needs
+ * no explaining.
+ *
+ * Pushed outside the wall along `normal`, so it never lands on top of a booth
+ * standing against the wall being measured.
+ */
+function Dim({
+  from, to, normal, offset, label, tone = "var(--text-muted)",
+}: {
+  from: Pt; to: Pt; normal: Pt; offset: number; label: string; tone?: string;
+}) {
+  const a = offsetPt(from, normal, offset);
+  const b = offsetPt(to, normal, offset);
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 1) return null;
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  /* Ticks run along the wall's normal, so they read as end-stops however the
+     wall is oriented. */
+  const t = 5;
+  const tick = (p: Pt) => (
+    <line
+      x1={p.x - normal.x * t} y1={p.y - normal.y * t}
+      x2={p.x + normal.x * t} y2={p.y + normal.y * t}
+      stroke={tone} strokeWidth="1.2"
+    />
+  );
+  /* Witness lines back to the thing being measured, so the eye can follow the
+     dimension to the point it belongs to. */
+  const witness = (p: Pt, q: Pt) => (
+    <line x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={tone} strokeWidth="0.7" strokeDasharray="3 3" opacity={0.7} />
+  );
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      {witness(from, a)}
+      {witness(to, b)}
+      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={tone} strokeWidth="1.2" />
+      {tick(a)}
+      {tick(b)}
+      <text
+        x={mid.x} y={mid.y}
+        textAnchor="middle" dominantBaseline="middle"
+        style={{ fontSize: 9, fontWeight: 700, fill: tone, paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3 }}
+      >
+        {label}
+      </text>
+    </g>
+  );
+}
+
 export default function FloorPlanPage() {
   const toast = useToast();
   const dialog = useDialog();
@@ -97,6 +153,10 @@ export default function FloorPlanPage() {
   const [openKind, setOpenKind] = useState<Opening["kind"]>("DOOR");
   const [openWidthRaw, setOpenWidthRaw] = useState("3'");
   const [selOpening, setSelOpening] = useState<{ wall: number; index: number } | null>(null);
+  /* Show every opening's measurements at once, for checking the whole room
+     against a tape. Off by default because twelve dimension lines at once is a
+     drawing you can't read. */
+  const [showAllDims, setShowAllDims] = useState(false);
   const [newKind, setNewKind] = useState<SpaceKind>("BOOTH");
   const [newSize, setNewSize] = useState("60x60");
 
@@ -124,6 +184,7 @@ export default function FloorPlanPage() {
   const plan = plans.find((p) => p.id === planId) || null;
   const poly = useMemo(() => (plan ? roomPolygon(plan.walls) : []), [plan]);
   const box = useMemo(() => bounds(poly), [poly]);
+  const roomCentre = useMemo(() => centroid(poly), [poly]);
 
   /* Problems, worked out once and shown in one place rather than as surprises
      while dragging: booths on top of each other, and booths outside the room. */
@@ -367,7 +428,9 @@ export default function FloorPlanPage() {
   /* --------------------------------------------------------------- draw -- */
 
   const sel = plan?.spaces.find((s) => s.id === selected) || null;
-  const pad = 36; // inches of margin around the room so labels have room
+  /* Dimension lines sit 26in outside the wall, plus ticks and a figure, so the
+     margin has to grow when they're showing or they get clipped. */
+  const pad = selOpening || showAllDims ? 80 : 36;
   const viewBox = plan && poly.length >= 3
     ? `${box.minX - pad} ${box.minY - pad} ${box.w + pad * 2} ${box.h + pad * 2}`
     : "0 0 480 360";
@@ -559,6 +622,13 @@ export default function FloorPlanPage() {
                     >
                       {placing ? "Cancel" : "Place it"}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant={showAllDims ? "primary" : "ghost"}
+                      onClick={() => setShowAllDims((v) => !v)}
+                    >
+                      {showAllDims ? "Hide measurements" : "Show all measurements"}
+                    </Button>
                     <span className="t-xs t-muted">
                       or:{" "}
                       {OPENING_PRESETS.map((preset, i) => (
@@ -651,11 +721,12 @@ export default function FloorPlanPage() {
                     {/* Walkways first, so they sit UNDER the things standing
                         in them — an aisle is floor, not furniture. */}
                     {plan.spaces.filter((sp) => sp.kind === "WALKWAY").map((sp) => {
-                      const f = footprint(sp);
+                      const c = centreOf(sp);
                       return (
                         <rect
                           key={sp.id}
-                          x={sp.xIn} y={sp.yIn} width={f.w} height={f.h}
+                          x={sp.xIn} y={sp.yIn} width={sp.widthIn} height={sp.depthIn}
+                          transform={`rotate(${sp.rotationDeg || 0} ${c.x} ${c.y})`}
                           fill="var(--info-soft)" opacity={0.55}
                           stroke="var(--info)" strokeWidth="1" strokeDasharray="8 5"
                           onPointerDown={(e) => onDown(e, sp)}
@@ -671,13 +742,13 @@ export default function FloorPlanPage() {
                       const b = wallSegments[i + 1];
                       const w = plan.walls[i];
                       const openings = w.openings || [];
-                      const mx = (a.x + b.x) / 2;
-                      const my = (a.y + b.y) / 2;
-                      /* Nudge the label to the outside of the wall so it never
-                         sits on top of a booth pushed against it. */
-                      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-                      const nx = -((b.y - a.y) / len) * 14;
-                      const ny = ((b.x - a.x) / len) * 14;
+                      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+                      /* Worked out from the room's own centre, so it is the
+                         real outside however the room was walked. Wall and
+                         opening labels go INSIDE; dimension lines go outside,
+                         and the two can never land on each other. */
+                      const outward = outwardNormal(a, b, roomCentre);
+                      const wallLabelAt = offsetPt(mid, outward, -16);
                       return (
                         <g key={i}>
                           {wallSolids(a, b, openings).map((seg, k) => (
@@ -733,20 +804,48 @@ export default function FloorPlanPage() {
                                 <circle cx={pts.from.x} cy={pts.from.y} r="2.5" fill="var(--text)" />
                                 <circle cx={pts.to.x} cy={pts.to.y} r="2.5" fill="var(--text)" />
                                 <text
-                                  x={ox + nx} y={oy + ny}
+                                  x={offsetPt({ x: ox, y: oy }, outward, -13).x}
+                                  y={offsetPt({ x: ox, y: oy }, outward, -13).y}
                                   textAnchor="middle" dominantBaseline="middle"
                                   style={{ fontSize: 7.5, fill: "var(--text-muted)" }}
                                 >
                                   {o.label || OPENING_LABEL[o.kind]} {fmtLength(o.widthIn)}
                                 </text>
+
+                                {/* The measurements, drawn where they're taken:
+                                    corner → opening, the opening itself, and
+                                    opening → the other corner. Three lines that
+                                    add up to the wall, so you can check them
+                                    against the tape without doing arithmetic. */}
+                                {(isSelOpening || showAllDims) ? (() => {
+                                  const out = outward;
+                                  const m = openingMeasures(o, w.lengthIn);
+                                  return (
+                                    <>
+                                      {m.fromStart > 0 ? (
+                                        <Dim from={a} to={pts.from} normal={out} offset={26} label={fmtLength(m.fromStart)}
+                                          tone={isSelOpening ? "var(--accent)" : "var(--text-muted)"} />
+                                      ) : null}
+                                      <Dim from={pts.from} to={pts.to} normal={out} offset={26} label={fmtLength(o.widthIn)}
+                                        tone={isSelOpening ? "var(--accent)" : "var(--text-muted)"} />
+                                      {m.fromEnd > 0 ? (
+                                        <Dim from={pts.to} to={b} normal={out} offset={26} label={fmtLength(m.fromEnd)}
+                                          tone={isSelOpening ? "var(--accent)" : "var(--text-muted)"} />
+                                      ) : null}
+                                    </>
+                                  );
+                                })() : null}
                               </g>
                             );
                           })}
 
                           <text
-                            x={mx - nx} y={my - ny}
+                            x={wallLabelAt.x} y={wallLabelAt.y}
                             textAnchor="middle" dominantBaseline="middle"
-                            style={{ fontSize: 11, fill: "var(--text-muted)", fontWeight: 600 }}
+                            style={{
+                              fontSize: 11, fill: "var(--text-muted)", fontWeight: 600,
+                              paintOrder: "stroke", stroke: "var(--bg-sunken)", strokeWidth: 3,
+                            }}
                           >
                             {fmtLength(w.lengthIn)}{w.label ? ` · ${w.label}` : ""}
                           </text>
@@ -765,12 +864,17 @@ export default function FloorPlanPage() {
 
                     {/* Everything standing on the floor. Walkways already drawn. */}
                     {plan.spaces.filter((sp) => sp.kind !== "WALKWAY").map((s) => {
-                      const f = footprint(s);
+                      const f = { w: s.widthIn, h: s.depthIn };
+                      const c = centreOf(s);
                       const bad = problems.overlapping.has(s.id) || problems.outside.has(s.id) || problems.blocking.has(s.id);
                       const isSel = s.id === selected;
                       return (
                         <g
                           key={s.id}
+                          /* The whole group turns, so the name and the size
+                             written on it turn with the booth instead of
+                             sitting flat while the outline swings. */
+                          transform={`rotate(${s.rotationDeg || 0} ${c.x} ${c.y})`}
                           onPointerDown={(e) => onDown(e, s)}
                           style={{ cursor: "grab" }}
                         >
@@ -782,14 +886,14 @@ export default function FloorPlanPage() {
                             strokeWidth={isSel ? 3 : bad ? 3 : 1.5}
                           />
                           <text
-                            x={s.xIn + f.w / 2} y={s.yIn + f.h / 2 - 7}
+                            x={c.x} y={c.y - 7}
                             textAnchor="middle" dominantBaseline="middle"
                             style={{ fontSize: 10, fontWeight: 700, fill: "var(--text)", pointerEvents: "none" }}
                           >
                             {s.label}
                           </text>
                           <text
-                            x={s.xIn + f.w / 2} y={s.yIn + f.h / 2 + 5}
+                            x={c.x} y={c.y + 5}
                             textAnchor="middle" dominantBaseline="middle"
                             style={{ fontSize: 8, fill: "var(--text-muted)", pointerEvents: "none" }}
                           >
@@ -797,7 +901,7 @@ export default function FloorPlanPage() {
                           </text>
                           {s.vendorName ? (
                             <text
-                              x={s.xIn + f.w / 2} y={s.yIn + f.h / 2 + 16}
+                              x={c.x} y={c.y + 16}
                               textAnchor="middle" dominantBaseline="middle"
                               style={{ fontSize: 7.5, fill: "var(--accent-text)", pointerEvents: "none" }}
                             >
@@ -918,7 +1022,11 @@ export default function FloorPlanPage() {
               {sel ? (
                 <Card
                   title={`${sel.label || KIND_LABEL[(sel.kind || "BOOTH") as SpaceKind]}`}
-                  subtitle={`${fmtSize(sel.widthIn, sel.depthIn)} ft · ${sqFt(sel.widthIn, sel.depthIn)} sq ft · ${fmtLength(sel.xIn)} from the left, ${fmtLength(sel.yIn)} down`}
+                  subtitle={
+                    `${fmtSize(sel.widthIn, sel.depthIn)} ft · ${sqFt(sel.widthIn, sel.depthIn)} sq ft` +
+                    `${(sel.rotationDeg || 0) !== 0 ? ` · turned ${sel.rotationDeg}°` : ""}` +
+                    ` · ${fmtLength(sel.xIn)} from the left, ${fmtLength(sel.yIn)} down`
+                  }
                   actions={<Button size="sm" variant="ghost" onClick={() => setSelected(null)}>Close</Button>}
                 >
                   <div className="stack g-4">
@@ -963,9 +1071,50 @@ export default function FloorPlanPage() {
                           </Select>
                         )}
                       </Field>
-                      <Button variant="secondary" icon="refresh" onClick={() => void patchSpace(sel.id, { rotationDeg: (sel.rotationDeg + 90) % 360 })}>
-                        Turn 90°
-                      </Button>
+                      <div className="stack g-1">
+                        <span className="t-label">Angle</span>
+                        <div className="row g-2" style={{ alignItems: "center" }}>
+                          <Button
+                            size="sm" variant="secondary" aria-label="Turn 15 degrees anticlockwise"
+                            onClick={() => void patchSpace(sel.id, { rotationDeg: (((sel.rotationDeg || 0) - 15) % 360 + 360) % 360 })}
+                          >
+                            ↺
+                          </Button>
+                          {/* Typed in degrees, because a booth following an
+                              angled wall has to match the wall, not the nearest
+                              quarter turn. */}
+                          <Input
+                            type="number"
+                            min="0"
+                            max="359"
+                            inputMode="numeric"
+                            aria-label="Angle in degrees"
+                            value={String(sel.rotationDeg || 0)}
+                            style={{ width: 84 }}
+                            onChange={(e) => {
+                              const v = ((Math.round(Number(e.target.value) || 0) % 360) + 360) % 360;
+                              void patchSpace(sel.id, { rotationDeg: v });
+                            }}
+                          />
+                          <Button
+                            size="sm" variant="secondary" aria-label="Turn 15 degrees clockwise"
+                            onClick={() => void patchSpace(sel.id, { rotationDeg: (((sel.rotationDeg || 0) + 15) % 360 + 360) % 360 })}
+                          >
+                            ↻
+                          </Button>
+                          <Button
+                            size="sm" variant="secondary"
+                            onClick={() => void patchSpace(sel.id, { rotationDeg: (((sel.rotationDeg || 0) + 90) % 360 + 360) % 360 })}
+                          >
+                            90°
+                          </Button>
+                          {(sel.rotationDeg || 0) !== 0 ? (
+                            <Button size="sm" variant="ghost" onClick={() => void patchSpace(sel.id, { rotationDeg: 0 })}>
+                              Square up
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
 
                     {rentable(sel.kind || "BOOTH") ? (
@@ -1015,7 +1164,8 @@ export default function FloorPlanPage() {
 
                     <span className="t-xs t-muted">
                       Drag it to move. Arrow keys nudge an inch at a time, with shift a foot — worth using when it
-                      has to sit exactly against a wall.
+                      has to sit exactly against a wall. It turns about its own centre, so it stays where it is
+                      while it swings.
                     </span>
                   </div>
                 </Card>
