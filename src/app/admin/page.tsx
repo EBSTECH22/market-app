@@ -179,6 +179,7 @@ type Upcoming = {
       contractId: string; vendorName: string; vendorCode: string; boothLabel: string;
       amountCents: number; monthlyRentCents: number; action: string; reason: string;
       nextChargeAt: string | null; nextChargeCents: number; nextChargeReason: string;
+      creditDays: number; afterCreditCents: number | null;
     }[];
   };
   closedDays: {
@@ -353,40 +354,36 @@ function UpcomingMoney({
           ) : null}
 
           {showRent ? (
-            <DataTable
-              rows={rent.lines}
+            <>
+              <span className="t-xs t-muted">
+                Two different months. <b>On {fmtDateShort(rent.runAt)}</b> is what this run posts —
+                &ldquo;nothing due&rdquo; means they already paid that month up front, not that they never get
+                charged. <b>Then charged</b> is the next date they actually are, and what it will be. A charge
+                posts whether or not their last invoice was paid; paying one never moves a charge date.
+              </span>
+              <DataTable
+                rows={rent.lines}
               rowKey={(r) => r.contractId}
               mobileCards
               dense
-              defaultSort={{ key: "amt", dir: "desc" }}
-              caption={`What the ${rent.monthLabel} rent run will charge each booth`}
+                defaultSort={{ key: "next", dir: "asc" }}
+                caption={`What the ${rent.monthLabel} rent run will charge each booth, and when each one is next charged`}
               columns={[
                 { key: "v", header: "Vendor", primary: true, sortBy: (r) => r.vendorName, cell: (r) => <b>{r.vendorName}</b> },
                 { key: "b", header: "Booth", cell: (r) => <span className="mono">{r.boothLabel}</span> },
                 {
-                  /* Second column, not the last one. For anyone skipped by this
-                     run — still inside the month they prepaid — this is the
-                     date that actually answers "when do they next get billed",
-                     and it is the reason the table is here. */
-                  key: "next", header: "Next charge date",
-                  sortBy: (r) => r.nextChargeAt || "9999",
-                  cell: (r) =>
-                    !r.nextChargeAt ? (
-                      <span className="t-xs t-muted">Not charged again</span>
-                    ) : (
-                      <span className="stack g-1">
-                        <b>{fmtDate(r.nextChargeAt)}</b>
-                        <span className="t-xs t-muted num">{money(r.nextChargeCents)}</span>
-                      </span>
-                    ),
-                },
-                { key: "why", header: "Why", cell: (r) => <span className="t-xs t-muted">{r.reason}</span> },
-                {
-                  key: "amt", header: "Will charge", align: "right",
+                  /* The header carries the DATE. Without it the column read as
+                     "will charge: nothing" with no when attached, and a row
+                     saying "next charge Nov 1, $216" next to "Nothing" looks
+                     like a contradiction rather than two different months. */
+                  key: "amt",
+                  header: `On ${fmtDateShort(rent.runAt)}`,
+                  mobileLabel: `On ${fmtDateShort(rent.runAt)}`,
+                  align: "right",
                   sortBy: (r) => r.amountCents,
                   cell: (r) =>
                     r.amountCents === 0 ? (
-                      <Badge tone="neutral">Nothing</Badge>
+                      <Badge tone="neutral">Nothing due</Badge>
                     ) : (
                       <span className="stack g-1" style={{ alignItems: "flex-end" }}>
                         <b className="num">{money(r.amountCents)}</b>
@@ -396,8 +393,37 @@ function UpcomingMoney({
                       </span>
                     ),
                 },
-              ]}
-            />
+                {
+                  /* For anyone skipped by this run — still inside the month they
+                     prepaid — this is the date that actually answers "when do
+                     they next get billed", and it is why the table is here. */
+                  key: "next", header: "Then charged", align: "right",
+                  sortBy: (r) => r.nextChargeAt || "9999",
+                  cell: (r) =>
+                    !r.nextChargeAt ? (
+                      <span className="t-xs t-muted">Not charged again</span>
+                    ) : (
+                      <span className="stack g-1" style={{ alignItems: "flex-end" }}>
+                        <b>{fmtDate(r.nextChargeAt)}</b>
+                        {r.creditDays > 0 && r.afterCreditCents !== null ? (
+                          <>
+                            <span className="t-xs t-muted num" style={{ textDecoration: "line-through" }}>
+                              {money(r.nextChargeCents)}
+                            </span>
+                            <span className="t-xs num" style={{ color: "var(--accent-text)" }}>
+                              {money(r.afterCreditCents)} after credit
+                            </span>
+                          </>
+                        ) : (
+                          <span className="t-xs t-muted num">{money(r.nextChargeCents)}</span>
+                        )}
+                      </span>
+                    ),
+                },
+                { key: "why", header: "Why", cell: (r) => <span className="t-xs t-muted">{r.reason}</span> },
+                ]}
+              />
+            </>
           ) : null}
         </div>
 

@@ -116,6 +116,23 @@ export async function GET() {
       0
     );
 
+    /* What the next charge becomes once the closed days are credited.
+       Shown alongside the uncredited figure so the table answers "will they be
+       billed in November, and how much after the credit" without anybody
+       having to hold two numbers in their head. Computed the same way the real
+       thing will be: move the prepaid date, re-run the planner. */
+    const creditDaysFor = new Map<string, number>(
+      contracts.map((c) => [c.id, closedDaysOwed(c.startDate, c.paidThrough, opensAt)] as [string, number])
+    );
+    const nextAfterCredit = new Map<string, { date: string; amountCents: number } | null>();
+    for (const r of rows) {
+      const days = creditAppliedAt ? 0 : (creditDaysFor.get(r.id) || 0);
+      if (days <= 0 || !r.paidThrough) { nextAfterCredit.set(r.id, null); continue; }
+      const moved = { ...r, paidThrough: creditedPaidThrough(r.paidThrough, days) };
+      const n = nextChargeFor(moved, ym, runAt, isCharged(r));
+      nextAfterCredit.set(r.id, n ? { date: n.date, amountCents: n.amountCents } : null);
+    }
+
     /* ------------------------------------------------------------ payouts -- */
     const payoutDay = await getPayoutDay();
     const payAt = nextPayoutDate(payoutDay, now);
@@ -167,6 +184,8 @@ export async function GET() {
             nextChargeAt: nextCharge.get(r.contractId)?.date || null,
             nextChargeCents: nextCharge.get(r.contractId)?.amountCents ?? 0,
             nextChargeReason: nextCharge.get(r.contractId)?.reason || "",
+            creditDays: creditAppliedAt ? 0 : (creditDaysFor.get(r.contractId) || 0),
+            afterCreditCents: nextAfterCredit.get(r.contractId)?.amountCents ?? null,
           })),
       },
       closedDays: {
