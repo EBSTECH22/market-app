@@ -137,6 +137,9 @@ type RentLedger = {
   noticeSigner?: string;
 };
 
+const BANK_VIEWS = ["collections", "coming", "paid", "payouts"] as const;
+type BankView = (typeof BANK_VIEWS)[number];
+
 type BankState = {
   configured: boolean;
   available?: number;
@@ -537,7 +540,7 @@ function MoneyAtAGlance({
   return (
     <Card
       title="Where your money is"
-      subtitle="Coming in, going out, and who still owes you — everything below is the detail behind these four numbers."
+      subtitle="Coming in, going out, and who still owes you. The tabs below are the detail behind these numbers."
     >
       <div className="stack g-5">
         <div className="grid-auto" style={{ ["--min" as string]: "210px" }}>
@@ -651,9 +654,13 @@ function MoneyAtAGlance({
  * precisely the one you don't want to discover in December.
  */
 function RentLedgerCards({
-  ledger, filter, onFilter, busy, onSendLink, onRecordPayment, onReload,
+  ledger, filter: pickedFilter, onFilter, busy, onSendLink, onRecordPayment, onReload, mode,
 }: {
   ledger: RentLedger | null;
+  /* Which tab this is drawn on. Collections is the chase list; Paid up is the
+     record of who is square. Same data, different question — which is why
+     they used to be one confusing table with a filter on it. */
+  mode: "collections" | "paid";
   filter: "OWING" | "ALL" | "PAID";
   onFilter: (f: "OWING" | "ALL" | "PAID") => void;
   busy: boolean;
@@ -662,6 +669,8 @@ function RentLedgerCards({
   onReload: () => void;
 }) {
   const t = ledger?.totals;
+  const filter: "OWING" | "ALL" | "PAID" =
+    mode === "collections" ? "OWING" : pickedFilter === "ALL" ? "ALL" : "PAID";
   /* Who a Non-Payment Notice can go to: signed, rent actually outstanding, and
      money actually owed on the account — the same "still owing" test the
      table uses. Agreements already ended or withdrawn are left alone. */
@@ -838,6 +847,7 @@ function RentLedgerCards({
 
   return (
     <>
+      {mode === "collections" ? (
       <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
         {/* Rent owed, not the net of every account. A vendor who is owed a
             payout used to quietly cancel out one who owes rent, and the number
@@ -849,25 +859,31 @@ function RentLedgerCards({
         <Stat label="Never paid" value={String(t?.neverPaidCount ?? 0)}
           sub="Invoiced, nothing received" icon="warning" />
       </div>
+      ) : null}
 
-      {ledger && noticeRows.length > 0 ? (
+      {mode === "collections" && ledger && noticeRows.length > 0 ? (
         <NonPaymentNotice rows={noticeRows} signer={ledger.noticeSigner || "Kalie Lightfoot"} onChanged={onReload} />
       ) : null}
 
       <Card
-        title="Invoices"
-        subtitle="Everyone whose agreement is signed by both sides — the point at which rent posts and their pay link goes out."
+        title={mode === "collections" ? "Invoices still owing" : filter === "ALL" ? "Every invoice" : "Paid up"}
+        subtitle={
+          mode === "collections"
+            ? "Signed vendors with rent still due. Record cash or checks here, or resend their pay link."
+            : "Signed vendors whose rent is settled — paid, or covered by their sales."
+        }
         actions={
-          <Segmented
-            label="Filter invoices"
-            value={filter}
-            onChange={onFilter}
-            options={[
-              { value: "OWING", label: `Still owing (${(ledger?.invoices || []).filter((i) => i.rentDueCents > 0).length})` },
-              { value: "PAID", label: "Settled" },
-              { value: "ALL", label: "All" },
-            ]}
-          />
+          mode === "paid" ? (
+            <Segmented
+              label="Which invoices"
+              value={filter}
+              onChange={onFilter}
+              options={[
+                { value: "PAID", label: "Settled" },
+                { value: "ALL", label: `All (${(ledger?.invoices || []).length})` },
+              ]}
+            />
+          ) : undefined
         }
         flush
       >
@@ -894,7 +910,7 @@ function RentLedgerCards({
         />
       </Card>
 
-      {ledger && ledger.neverPaid.length > 0 ? (
+      {mode === "collections" && ledger && ledger.neverPaid.length > 0 ? (
         <Card
           title="Never paid anything"
           subtitle="Invoiced, and not a single payment received. Oldest first — these are the ones that go missing for a season."
@@ -1496,7 +1512,21 @@ export default function AdminPage() {
     if (r.ok) setLedger(await r.json());
   }, []);
   const [upcoming, setUpcoming] = useState<Upcoming | null>(null);
-  const [ledgerFilter, setLedgerFilter] = useState<"OWING" | "ALL" | "PAID">("OWING");
+  const [ledgerFilter, setLedgerFilter] = useState<"OWING" | "ALL" | "PAID">("PAID");
+  /* Which part of the money page is showing. Four questions, four tabs:
+     who owes me, what's on its way, who's square, and what I owe vendors.
+     Remembered per device so the page opens where you left it. */
+  const [bankView, setBankViewState] = useState<BankView>("collections");
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("bankView");
+      if (v && (BANK_VIEWS as readonly string[]).includes(v)) setBankViewState(v as BankView);
+    } catch { /* private window */ }
+  }, []);
+  const setBankView = (v: BankView) => {
+    setBankViewState(v);
+    try { localStorage.setItem("bankView", v); } catch { /* private window */ }
+  };
   const [showInactive, setShowInactive] = useState(false);
   /* Note: the per-application notes/contract form and its PATCH handler used to
      live here too. That workflow now has its own screen at /admin/applications,
@@ -6174,11 +6204,47 @@ export default function AdminPage() {
       {/* Top of the money page, in the order the questions get asked: what is
           coming into the bank and when, then who has paid their rent and who
           has not. Both used to sit below four other cards. */}
-      {tab === "bank" && (
-        <div className="stack g-4" style={{ marginBottom: "var(--sp-4)" }}>
-          <MoneyAtAGlance bank={bank} ledger={ledger} payouts={payouts} />
+      {tab === "bank" && (() => {
+        const behind = ledger?.totals.unpaidCount ?? 0;
+        const pendingPayouts = payouts.filter((p) => p.status === "PENDING").length;
+        const views: { id: BankView; label: string }[] = [
+          { id: "collections", label: behind > 0 ? `Collections (${behind})` : "Collections" },
+          { id: "coming", label: "Coming in" },
+          { id: "paid", label: "Paid up" },
+          { id: "payouts", label: pendingPayouts > 0 ? `Payouts (${pendingPayouts})` : "Payouts" },
+        ];
+        return (
+          <div className="stack g-4" style={{ marginBottom: "var(--sp-4)" }}>
+            {/* The totals stay on every tab. Each tab is the detail behind
+                one of these numbers. */}
+            <MoneyAtAGlance bank={bank} ledger={ledger} payouts={payouts} />
 
-          {allowed("financials") ? (
+            <div
+              className="segmented"
+              role="tablist"
+              aria-label="Money sections"
+              style={{ display: "flex", width: "100%" }}
+            >
+              {views.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={bankView === v.id}
+                  onClick={() => setBankView(v.id)}
+                  style={{ minHeight: 40, fontSize: "var(--fs-md)" }}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {tab === "bank" && (bankView === "coming" || bankView === "collections" || bankView === "paid") && (
+        <div className="stack g-4" style={{ marginBottom: "var(--sp-4)" }}>
+          {bankView === "coming" && allowed("financials") ? (
             <UpcomingMoney
               data={upcoming}
               busy={busy}
@@ -6187,7 +6253,9 @@ export default function AdminPage() {
             />
           ) : null}
 
+          {bankView === "collections" || bankView === "paid" ? (
           <RentLedgerCards
+            mode={bankView === "paid" ? "paid" : "collections"}
             ledger={ledger}
             filter={ledgerFilter}
             onFilter={setLedgerFilter}
@@ -6204,10 +6272,11 @@ export default function AdminPage() {
               if (r.ok) setLedger(await r.json());
             }}
           />
+          ) : null}
         </div>
       )}
 
-      {tab === "bank" && (() => {
+      {tab === "bank" && bankView === "collections" && (() => {
         const owing = (settle || []).filter((r) => r.dueCents > 0);
         const covered = (settle || []).filter((r) => r.dueCents === 0);
         /* Real money leaves the market's Stripe account here, so the confirm
@@ -6363,6 +6432,7 @@ export default function AdminPage() {
         <div className="stack g-4">
           {/* ---- Stripe vs the books --------------------------------------- */}
           {(() => {
+            if (bankView !== "paid") return null;
             const missing = (recon?.rows || []).filter((r) => r.verdict === "MISSING");
             /* The card is only worth the space when there is something to say:
                money Stripe took that never landed, or a safety net that isn't
@@ -6462,6 +6532,7 @@ export default function AdminPage() {
           })()}
 
           {/* ---- paying the vendors --------------------------------------- */}
+          {bankView === "payouts" ? (
           <Card
             title="Vendor payouts"
             subtitle="Build a run for the period, then mark each one as you actually pay them."
@@ -6666,12 +6737,14 @@ export default function AdminPage() {
               )}
             </div>
           </Card>
+          ) : null}
 
           {/* Deliberately OUTSIDE the Stripe checks below. Who owes you rent is
               a question about your own ledger, not about Stripe — it must still
               answer when Stripe is misconfigured or refusing to talk. */}
           {/* What the booths are contracted to bring in, before anything about
               who has actually paid. */}
+          {bankView === "coming" ? (
           <Card
             title="Monthly rent roll"
             subtitle="What your booths are contracted for each month — not what's been collected."
@@ -6769,8 +6842,9 @@ export default function AdminPage() {
               </div>
             )}
           </Card>
+          ) : null}
 
-          {!bank ? (
+          {bankView !== "paid" ? null : !bank ? (
             /* A table's worth of skeleton now, not two stat tiles — the tiles
                that used to sit here moved to the summary at the top. */
             <div className="stack g-2" aria-busy="true"><Skeleton height={16} /><Skeleton height={48} /><Skeleton height={48} /></div>
