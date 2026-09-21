@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { runRoute } from "@/lib/handler";
 import { viewTrackingSince } from "@/lib/viewlog";
 import { denyUnless } from "@/lib/perm";
+import { noticeSigner } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,7 @@ export async function GET() {
       // the Stripe ids into the same object we're about to serialise.
       include: {
         vendor: {
-          select: { id: true, code: true, businessName: true, email: true, phone: true, cardLast4: true },
+          select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, cardLast4: true },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -102,6 +103,29 @@ export async function GET() {
 
     const trackingSince = await viewTrackingSince();
 
+    /* The last non-payment email and text for each agreement, so the list can
+       say who has already been warned and when. Newest first; first seen wins. */
+    const noticeRows = await db.auditEvent.findMany({
+      where: {
+        action: { in: ["NONPAYMENT_NOTICE", "NONPAYMENT_TEXT"] },
+        targetType: "CONTRACT",
+        targetId: { in: contracts.map((c) => c.id) },
+      },
+      orderBy: { at: "desc" },
+      select: { action: true, targetId: true, at: true, afterJson: true },
+    });
+    type NoticeState = { emailedAt: Date | null; textedAt: Date | null; deadline: string };
+    const notices = new Map<string, NoticeState>();
+    for (const n of noticeRows) {
+      const cur = notices.get(n.targetId) ?? { emailedAt: null, textedAt: null, deadline: "" };
+      if (n.action === "NONPAYMENT_NOTICE" && !cur.emailedAt) {
+        cur.emailedAt = n.at;
+        try { cur.deadline = String(JSON.parse(n.afterJson || "{}").deadline || ""); } catch { /* old row */ }
+      }
+      if (n.action === "NONPAYMENT_TEXT" && !cur.textedAt) cur.textedAt = n.at;
+      notices.set(n.targetId, cur);
+    }
+
     /* A vendor renting two booths has two executed agreements and ONE ledger.
        Every figure below is account-wide, so showing it on both rows and then
        adding the rows up counted that vendor's rent twice in the totals. The
@@ -152,6 +176,7 @@ export async function GET() {
         vendorId: c.vendorId,
         code: c.vendor.code,
         businessName: c.vendor.businessName,
+        contactName: c.vendor.contactName,
         email: c.vendor.email,
         phone: c.vendor.phone,
         boothLabel: c.boothLabel,
@@ -188,6 +213,7 @@ export async function GET() {
         lastChargeAt: rent?.last ?? null,
         cardLast4: c.vendor.cardLast4 || "",
         opens: { count: open?.count ?? 0, lastAt: open?.lastAt ?? null, tracked: openTracked },
+        notice: notices.get(c.id) ?? { emailedAt: null, textedAt: null, deadline: "" },
       };
     });
 
@@ -229,6 +255,7 @@ export async function GET() {
       neverPaid,
       totals,
       trackingSince: trackingSince.toISOString(),
+      noticeSigner: noticeSigner(),
     });
   });
 }

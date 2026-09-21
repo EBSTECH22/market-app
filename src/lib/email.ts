@@ -1,4 +1,5 @@
 import { pickupCode as pickupCodeFor } from "@/lib/pickupcode";
+import { deadlineLabel } from "@/lib/nonpayment";
 
 const RESEND_URL = "https://api.resend.com/emails";
 const FROM = process.env.EMAIL_FROM || "Community Harvest <orders@dailybreadbaked.com>";
@@ -767,4 +768,49 @@ export async function sendRentRunEmail(opts: {
       </p>
     `)
   );
+}
+
+
+/** Who a non-payment notice is signed by. The email is the market's; the person is the owner. */
+export function noticeSigner(): string {
+  return process.env.MARKET_OWNER_NAME || "Kalie Lightfoot";
+}
+
+const esc = (v: string) =>
+  String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * The written notice the vendor agreement requires before a space is released
+ * for nonpayment (Section 13: notice by email to the address on file).
+ *
+ * Deliberately plainer than the other templates — no emoji, no "all paid up"
+ * cheer — because this is the one email that may be read back later by
+ * somebody deciding whether proper notice was given.
+ */
+export async function sendNonPaymentNoticeEmail(opts: {
+  to: string;
+  greetName: string;
+  businessName: string;
+  booth: string;
+  amountCents: number;
+  deadline: string;
+  token: string;
+  signer: string;
+}): Promise<boolean> {
+  const amount = `$${(opts.amountCents / 100).toFixed(2)}`;
+  const link = `${baseUrl()}/rent/${opts.token}`;
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 14px;letter-spacing:-0.02em;">Payment needed to keep your booth</h2>
+    <div style="text-align:left;font-size:14.5px;line-height:1.6;color:#111827;">
+      <p style="margin:0 0 12px;">Hi ${esc(opts.greetName)},</p>
+      <p style="margin:0 0 12px;">Your Community Harvest vendor agreement for booth <b>${esc(opts.booth)}</b> is signed, but we haven&rsquo;t received your payment of <b>${amount}</b>.</p>
+      <p style="margin:0 0 12px;">Please pay by <b>${deadlineLabel(opts.deadline)}</b>.</p>
+    </div>
+    <a href="${link}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:15px;padding:14px 30px;border-radius:10px;text-decoration:none;margin:4px 0 16px;">Pay ${amount}</a>
+    <div style="text-align:left;font-size:14.5px;line-height:1.6;color:#111827;">
+      <p style="margin:0 0 12px;">If payment isn&rsquo;t received by then, your agreement will be ended for nonpayment under Section 4 and your space offered to the next vendor on our waiting list.</p>
+      <p style="margin:0 0 12px;">Cash or check at the market works too. If something has come up, reply to this email before the deadline and we&rsquo;ll talk.</p>
+      <p style="margin:0;">Thank you,<br/>${esc(opts.signer)}<br/>Community Harvest</p>
+    </div>`;
+  return send(opts.to, `Payment due by ${deadlineLabel(opts.deadline)} to keep booth ${opts.booth}`, shell(inner));
 }

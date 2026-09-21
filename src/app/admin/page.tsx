@@ -18,6 +18,7 @@ import { subscribeToPush } from "@/lib/pushclient";
 import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
 import { auditLabel, actorLabel } from "@/lib/auditkinds";
 import { newSaleKey } from "@/lib/offline";
+import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number };
@@ -120,6 +121,9 @@ type InvoiceRow = {
   status: "PAID" | "PARTIAL" | "UNPAID" | "COVERED" | "NOT_INVOICED";
   lastPaymentAt: string | null; lastChargeAt: string | null; cardLast4: string;
   opens: { count: number; lastAt: string | null; tracked: boolean };
+  contactName: string;
+  /** Last non-payment email and text, and the deadline that email gave. */
+  notice: { emailedAt: string | null; textedAt: string | null; deadline: string };
 };
 
 type RentLedger = {
@@ -130,6 +134,7 @@ type RentLedger = {
     rentDueCents: number; unpaidCount: number; neverPaidCount: number;
   };
   trackingSince: string;
+  noticeSigner?: string;
 };
 
 type BankState = {
@@ -646,7 +651,7 @@ function MoneyAtAGlance({
  * precisely the one you don't want to discover in December.
  */
 function RentLedgerCards({
-  ledger, filter, onFilter, busy, onSendLink, onRecordPayment,
+  ledger, filter, onFilter, busy, onSendLink, onRecordPayment, onReload,
 }: {
   ledger: RentLedger | null;
   filter: "OWING" | "ALL" | "PAID";
@@ -654,8 +659,16 @@ function RentLedgerCards({
   busy: boolean;
   onSendLink: (row: InvoiceRow) => void;
   onRecordPayment: (row: InvoiceRow) => void;
+  onReload: () => void;
 }) {
   const t = ledger?.totals;
+  /* Who a Non-Payment Notice can go to: signed, rent actually outstanding, and
+     money actually owed on the account — the same "still owing" test the
+     table uses. Agreements already ended or withdrawn are left alone. */
+  const noticeRows = (ledger?.invoices || []).filter((i) =>
+    i.rentDueCents > 0 && i.outstandingCents > 0 &&
+    !["ENDED", "WITHDRAWN", "VOIDED"].includes(i.contractStatus)
+  );
   /* Filtering on the badge, not on the balance. "Still owing" used to include
      anyone whose account was negative for any reason — including a vendor who
      had paid their rent and was simply owed a payout. */
@@ -836,6 +849,10 @@ function RentLedgerCards({
         <Stat label="Never paid" value={String(t?.neverPaidCount ?? 0)}
           sub="Invoiced, nothing received" icon="warning" />
       </div>
+
+      {ledger && noticeRows.length > 0 ? (
+        <NonPaymentNotice rows={noticeRows} signer={ledger.noticeSigner || "Kalie Lightfoot"} onChanged={onReload} />
+      ) : null}
 
       <Card
         title="Invoices"
@@ -1474,6 +1491,10 @@ export default function AdminPage() {
   const [rentRoll, setRentRoll] = useState<RentRoll | null>(null);
   const [settle, setSettle] = useState<{ vendorId: string; businessName: string; code: string; boothLabel: string; monthlyRentCents: number; balanceCents: number; dueCents: number; feeCents: number; chargeTotalCents: number; cardLast4: string; hasCard: boolean }[] | null>(null);
   const [ledger, setLedger] = useState<RentLedger | null>(null);
+  const reloadLedger = useCallback(async () => {
+    const r = await fetch("/api/admin/rent-ledger");
+    if (r.ok) setLedger(await r.json());
+  }, []);
   const [upcoming, setUpcoming] = useState<Upcoming | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<"OWING" | "ALL" | "PAID">("OWING");
   const [showInactive, setShowInactive] = useState(false);
@@ -6172,6 +6193,7 @@ export default function AdminPage() {
             onFilter={setLedgerFilter}
             busy={busy}
             onSendLink={(row) => sendRentLinkFor(row)}
+            onReload={reloadLedger}
             onRecordPayment={async (row) => {
               await ledgerEntry(
                 { id: row.vendorId, businessName: row.businessName, balance: row.balanceCents },
