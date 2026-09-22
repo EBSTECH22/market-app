@@ -1642,11 +1642,20 @@ export default function AdminPage() {
     if (res.ok) setReport(await res.json());
   }, [repPeriod, repVendor, repFrom, repTo]);
 
+  /* Once per page load, not every refresh — closing it has to stick. */
+  const askedToChangePassword = useRef(false);
   const loadMyAccount = useCallback(async () => {
     const r = await fetch("/api/staff/me");
     if (!r.ok) return;
     const d = await r.json();
     setMyAccount(d.account || null);
+    /* Still on the password that was emailed to them: open My account straight
+       away rather than hoping they find it. Anyone who saw that email can sign
+       in as them until it's changed. */
+    if (d.account?.mustChangePassword && !askedToChangePassword.current) {
+      askedToChangePassword.current = true;
+      setMeOpen(true);
+    }
     setSharedPasswordSession(d.reason === "shared-password");
     if (d.account) setMeEmail(d.account.email || "");
   }, []);
@@ -4150,9 +4159,20 @@ export default function AdminPage() {
                 phone the sidebar is hidden — so the only name anyone saw there
                 was whoever's drawer was open, and it looked like being signed in
                 as them. */}
-            <div className="t-xs t-muted truncate">
-              {staffName ? `Signed in as ${staffName}` : access ? `Signed in with the ${ROLE_LABEL[access].toLowerCase()} password` : ""}
-            </div>
+            {staffName && myAccount ? (
+              <button
+                type="button"
+                className="linklike t-xs truncate"
+                style={{ display: "block", maxWidth: "100%", textAlign: "left" }}
+                onClick={() => { setMeOpen(true); setMeErr(""); }}
+              >
+                Signed in as {staffName} · My account
+              </button>
+            ) : (
+              <div className="t-xs t-muted truncate">
+                {staffName ? `Signed in as ${staffName}` : access ? `Signed in with the ${ROLE_LABEL[access].toLowerCase()} password` : ""}
+              </div>
+            )}
           </div>
           {overview ? (
             <div className="row g-3 shrink0">
@@ -10308,6 +10328,20 @@ export default function AdminPage() {
             </div>
           ))}
           <div className="divider mt-2 mb-2" />
+          {/* The sidebar has had "My account" all along, but phones don't show
+              the sidebar — so on a phone there was no way to change your own
+              password at all. */}
+          {myAccount ? (
+            <button
+              type="button"
+              className="nav-item"
+              style={{ minHeight: 46 }}
+              onClick={() => { setMoreOpen(false); setMeOpen(true); setMeErr(""); }}
+            >
+              <Icon name="user" size={17} />
+              <span>My account &amp; password</span>
+            </button>
+          ) : null}
           <button type="button" className="nav-item" style={{ minHeight: 46 }} onClick={staffLogout}>
             <Icon name="logout" size={17} />
             <span>Sign out</span>
