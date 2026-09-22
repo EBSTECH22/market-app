@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { verifyPassword, staffCookie, SESSION_COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS } from "@/lib/auth";
+import { verifyPassword, staffCookie, SESSION_COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS, clearOwnerSession, clearAllStaffSessions } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
 import { normalizeRole, ROLE_LABEL } from "@/lib/perm";
@@ -59,14 +59,18 @@ export async function POST(req: NextRequest) {
       employee: { id: emp.id, name: emp.name, role, roleLabel: ROLE_LABEL[role] },
       mustChangePassword: !!emp.mustChangePassword,
     });
+    clearOwnerSession(res);
     const c = staffCookie(emp.id);
     res.cookies.set(c.name, c.value, { ...SESSION_COOKIE_OPTIONS, maxAge: SESSION_MAX_AGE_SECONDS.staff });
     return res;
   });
 }
 
+/* Signing out clears BOTH the personal session and the owner password, so the
+   next person to open the app on this device gets the sign-in screen, not the
+   previous person's account. */
 export async function DELETE() {
   const res = NextResponse.json({ ok: true });
-  res.cookies.set("nm_staff", "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
+  clearAllStaffSessions(res);
   return res;
 }

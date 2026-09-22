@@ -131,6 +131,13 @@ function adminToken(): string {
 
 export function isAdmin(): boolean {
   if (!process.env.ADMIN_PASSWORD) return false;
+  /* A named person signed in on this device wins over the shared owner
+     password. The owner session lasts 90 days and used to be checked first
+     everywhere, so on a computer where it had ever been used, a manager
+     signing in with their own account was quietly treated as the owner —
+     the owner's name, the owner's access, on every screen. Whoever signed in
+     as themselves is who is using it. */
+  if (currentEmployeeId() !== null) return false;
   const raw = cookies().get(ADMIN_COOKIE)?.value;
   if (!raw) return false;
   const token = adminToken();
@@ -320,3 +327,24 @@ export function pinUpgrade(pin: string, stored: string): string | null {
 export const SESSION_COOKIE_OPTIONS = { httpOnly: true, sameSite: "lax", secure: true } as const;
 
 export const cookieNames = { ADMIN_COOKIE, VENDOR_COOKIE, STAFF_COOKIE };
+
+type CookieWriter = { cookies: { set: (name: string, value: string, opts: Record<string, unknown>) => unknown } };
+
+/**
+ * Sign-in replaces whoever was signed in before, rather than stacking on top.
+ *
+ * The owner password and personal accounts are separate cookies, and nothing
+ * used to remove the other one — so two identities lived on the same device
+ * and the app had to guess which was real. Every sign-in now clears the other
+ * kind, and every sign-out clears both.
+ */
+export function clearOwnerSession(res: CookieWriter): void {
+  res.cookies.set(ADMIN_COOKIE, "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
+}
+export function clearStaffSession(res: CookieWriter): void {
+  res.cookies.set(STAFF_COOKIE, "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
+}
+export function clearAllStaffSessions(res: CookieWriter): void {
+  clearOwnerSession(res);
+  clearStaffSession(res);
+}

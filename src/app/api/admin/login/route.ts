@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
-import { adminCookie, SESSION_COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS } from "@/lib/auth";
+import { adminCookie, SESSION_COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS, clearStaffSession, clearAllStaffSessions } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
 
@@ -22,8 +22,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Wrong password." }, { status: 401 });
     }
     const res = NextResponse.json({ ok: true });
+    clearStaffSession(res);
     const c = adminCookie();
     res.cookies.set(c.name, c.value, { ...SESSION_COOKIE_OPTIONS, maxAge: SESSION_MAX_AGE_SECONDS.admin });
     return res;
   });
+}
+
+/** Sign out of the owner password — which, until now, nothing could do. */
+export async function DELETE() {
+  const res = NextResponse.json({ ok: true });
+  clearAllStaffSessions(res);
+  return res;
 }
