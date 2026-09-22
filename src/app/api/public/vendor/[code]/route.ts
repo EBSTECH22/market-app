@@ -75,6 +75,18 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
     select: { boothLabel: true },
   });
 
+  /* Which of the empty ones have EVER sold. Quantity 0 means two different
+     things: "sold through" and "never brought in yet". A vendor who enters
+     their range before dropping stock off had every product filed under
+     Sold out — and only the first twelve of those shown — so their page looked
+     empty. Never-sold empties are "Coming soon" instead. */
+  const emptyIds = items.filter((i) => i.quantity <= 0).map((i) => i.id);
+  const everSold = emptyIds.length
+    ? new Set<string>(
+        (await db.saleLine.groupBy({ by: ["itemId"], where: { itemId: { in: emptyIds } } })).map((r) => r.itemId)
+      )
+    : new Set<string>();
+
   const shaped = items.map((i) => ({
     id: i.id,
     /* Two different things, kept apart on purpose:
@@ -122,7 +134,8 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
        it from here. */
     online: shaped.filter((i) => i.online),
     items: shaped.filter((i) => i.inStock),
-    soldOut: shaped.filter((i) => !i.inStock && !i.online),
+    soldOut: shaped.filter((i) => !i.inStock && !i.online && everSold.has(i.id)),
+    comingSoon: shaped.filter((i) => !i.inStock && !i.online && !everSold.has(i.id)),
     categories: [...new Set(shaped.filter((i) => i.inStock && i.category).map((i) => i.category))].sort(),
     acceptsOnlineOrders: shaped.some((i) => i.online),
     rating: { avg: ratingAvg, count: ratingCount },

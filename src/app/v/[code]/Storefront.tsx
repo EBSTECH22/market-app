@@ -53,6 +53,7 @@ export default function Storefront({ params }: { params: { code: string } }) {
   const [items, setItems] = useState<Item[]>([]);
   const [online, setOnline] = useState<Item[]>([]);
   const [soldOut, setSoldOut] = useState<Item[]>([]);
+  const [comingSoon, setComingSoon] = useState<Item[]>([]);
   /* The basket, kept in memory only. It belongs to this vendor and this visit —
      persisting it would mean holding prices and stock that have since moved. */
   const [cart, setCart] = useState<Record<string, number>>({});
@@ -109,6 +110,7 @@ export default function Storefront({ params }: { params: { code: string } }) {
     setItems(data.items || []);
     setOnline(data.online || []);
     setSoldOut(data.soldOut || []);
+    setComingSoon(data.comingSoon || []);
     setCategories(data.categories || []);
     setReviews(data.reviews);
     setPhotos(data.photos || []);
@@ -614,8 +616,12 @@ export default function Storefront({ params }: { params: { code: string } }) {
           {items.length === 0 ? (
             <EmptyState
               icon="box"
-              title="Nothing on the floor at the moment"
-              body="Check back soon, or send a request below and they'll get back to you."
+              title={comingSoon.length ? "Stock is on its way" : "Nothing on the floor at the moment"}
+              body={
+                comingSoon.length
+                  ? "See what's coming below — follow the booth to hear when it lands."
+                  : "Check back soon, or send a request below and they'll get back to you."
+              }
             />
           ) : (
             <div className="stack g-4">
@@ -736,6 +742,66 @@ export default function Storefront({ params }: { params: { code: string } }) {
             </div>
           )}
         </Card>
+
+        {/* Coming soon: products the vendor has listed but not brought in yet.
+            Shown in full, with photos and prices, straight after the shelf —
+            this is the vendor's range, not a list of leftovers. */}
+        {comingSoon.length > 0 && (
+          <Card
+            title="Coming soon"
+            subtitle={`${plural(comingSoon.length, "product")} ${comingSoon.length === 1 ? "isn't" : "aren't"} in the booth yet. Follow the booth and we'll email you when stock arrives.`}
+            className="mb-4"
+          >
+            <div className="grid-auto" style={{ ["--min" as string]: "168px" }}>
+              {comingSoon.map((i) => {
+                const cover = i.photoIds[0];
+                return (
+                  <button
+                    key={i.id}
+                    type="button"
+                    onClick={() => { setOpenItem(i); setGallery(0); setOpenShop(false); }}
+                    aria-label={`${i.name}, ${money(i.priceCents)}, coming soon`}
+                    className="stack g-2"
+                    style={{
+                      padding: 0, textAlign: "left", background: "var(--surface)", cursor: "pointer",
+                      border: "1px solid var(--border)", borderRadius: "var(--r-lg)", overflow: "hidden",
+                    }}
+                  >
+                    <span style={{ position: "relative", display: "block", lineHeight: 0 }}>
+                      {cover ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={`/api/public/photo/${cover}`}
+                          alt=""
+                          loading="lazy"
+                          style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "cover", display: "block" }}
+                        />
+                      ) : (
+                        <span
+                          aria-hidden
+                          className="center"
+                          style={{ display: "flex", width: "100%", aspectRatio: "1 / 1", background: "var(--bg-sunken)", color: "var(--text-muted)" }}
+                        >
+                          <Icon name="image" size={28} />
+                        </span>
+                      )}
+                      <span style={{ position: "absolute", top: 8, left: 8 }}>
+                        <Badge tone="info">Coming soon</Badge>
+                      </span>
+                    </span>
+                    <span className="stack g-1" style={{ padding: "0 var(--sp-3) var(--sp-3)" }}>
+                      <span className="t-body truncate" style={{ fontWeight: 560 }}>{i.name}</span>
+                      <span className="row g-2" style={{ alignItems: "baseline" }}>
+                        <b className="num">{money(i.priceCents)}</b>
+                        {i.unitLabel ? <span className="t-xs t-muted truncate">{i.unitLabel}</span> : null}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
+        )}
 
         {/* Sold out, kept visible and clearly labelled. A shopper who wants the
             thing that's gone is exactly who should be following this booth. */}
@@ -1007,8 +1073,10 @@ export default function Storefront({ params }: { params: { code: string } }) {
                   <Badge tone="success" dot>Available to pre-order</Badge>
                   {openItem.inStock ? <Badge tone="neutral">Also in the booth today</Badge> : null}
                 </>
-              ) : (
+              ) : openItem.inStock ? (
                 <Badge tone="success" dot>In the booth today</Badge>
+              ) : (
+                <Badge tone="info" dot>Coming soon — not in the booth yet</Badge>
               )}
             </div>
 
@@ -1021,9 +1089,11 @@ export default function Storefront({ params }: { params: { code: string } }) {
               </Note>
             ) : (
               <Note tone="info">
-                {vendor.boothLabel
-                  ? `Come and see it at booth ${vendor.boothLabel}, or ask about it below.`
-                  : "Come and see it at the market, or ask about it below."}
+                {!openItem.inStock
+                  ? "This one isn't on the shelf yet. Follow the booth to hear when it arrives, or ask about it below."
+                  : vendor.boothLabel
+                    ? `Come and see it at booth ${vendor.boothLabel}, or ask about it below.`
+                    : "Come and see it at the market, or ask about it below."}
               </Note>
             )}
 
