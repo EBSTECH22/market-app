@@ -10,6 +10,7 @@ import { runRoute, HttpError } from "@/lib/handler";
 
 import { pushToVendor } from "@/lib/push";
 import { denyUnless } from "@/lib/perm";
+import { currentEmployeeId } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
@@ -60,7 +61,23 @@ export async function POST(req: NextRequest) {
      counted out and closed before the connection came back, and refusing it now
      would leave money in the till with no ticket behind it. */
   if (!drawer && !offline) return NextResponse.json({ error: "Open the drawer (employee sign-in) before ringing sales." }, { status: 400 });
-  const clerk = drawer?.employee || String(employeeName || "").trim().slice(0, 60) || "Offline sale";
+  /* WHO rang it. This used to be whoever OPENED the drawer, so every sale on a
+     shift was filed under one name — the owner's, if the owner opened up — no
+     matter who was actually signed in and ringing. The person signed in is who
+     rang it. An offline sale keeps the name it was rung under, because by the
+     time it reaches the server someone else may be signed in. The drawer's name
+     is only the fallback for the shared owner password, which isn't a person. */
+  const signedInId = currentEmployeeId();
+  const signedIn = signedInId
+    ? await db.employee.findUnique({ where: { id: signedInId }, select: { name: true, active: true } })
+    : null;
+  const offlineName = offline ? String(employeeName || "").trim().slice(0, 60) : "";
+  const clerk =
+    offlineName ||
+    (signedIn?.active ? signedIn.name : "") ||
+    drawer?.employee ||
+    String(employeeName || "").trim().slice(0, 60) ||
+    "Offline sale";
   if (!Array.isArray(lines) || !lines.length) return NextResponse.json({ error: "Nothing on the ticket." }, { status: 400 });
   if (!["CASH", "CARD"].includes(paymentMethod)) return NextResponse.json({ error: "Pick a payment method." }, { status: 400 });
 

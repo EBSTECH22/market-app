@@ -2781,11 +2781,21 @@ export default function AdminPage() {
 
   const openDrawer = async () => {
     setDrawerErr("");
+    if (!staffName && !empName) { setDrawerErr("Pick who's opening the drawer."); return; }
     setBusy(true);
     try {
       const { ok, data } = await safeFetch("/api/admin/drawer", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employee: empName || employees[0]?.name, pin: empPin, counts, totalCents: countTotal() }),
+        /* Signed in as yourself: the session says who you are, so the drawer
+           opens in YOUR name — no picking from a list. The list used to default
+           to the first person on the team, which put the owner's name on a
+           drawer (and every sale rung on it) whenever someone didn't change it.
+           Only the shared owner password, which isn't a person, has to say who. */
+        body: JSON.stringify(
+          staffName
+            ? { counts, totalCents: countTotal() }
+            : { employee: empName, pin: empPin, counts, totalCents: countTotal() }
+        ),
       });
       if (!ok) { setDrawerErr(String(data.error || "Couldn't open.")); return; }
       setCounts({}); setEmpPin("");
@@ -4077,7 +4087,7 @@ export default function AdminPage() {
                 color: "var(--accent-text)",
               }}
             >
-              <span className="t-label" style={{ color: "inherit", opacity: 0.8 }}>Drawer open</span>
+              <span className="t-label" style={{ color: "inherit", opacity: 0.8 }}>Drawer opened by</span>
               <span className="t-sm truncate" style={{ fontWeight: 600 }}>{drawer.employee}</span>
               <span className="num t-sm">{money(drawer.openTotalCents + drawer.cashSalesCents)}</span>
             </div>
@@ -4246,14 +4256,20 @@ export default function AdminPage() {
             />
           ) : (
             <div className="stack g-5">
+              {staffName ? (
+                <Note tone="info" title={`Opening as ${staffName}`}>
+                  The drawer and every sale rung on it go under your name.
+                </Note>
+              ) : (
               <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
                 <Field label="Employee">
                   {(p) => (
                     <Select
                       {...p}
-                      value={empName || employees[0]?.name}
+                      value={empName}
                       onChange={(e) => setEmpName(e.target.value)}
                     >
+                      <option value="">Choose who&rsquo;s opening…</option>
                       {employees.map((e) => <option key={e.id}>{e.name}</option>)}
                     </Select>
                   )}
@@ -4271,6 +4287,7 @@ export default function AdminPage() {
                   )}
                 </Field>
               </div>
+              )}
 
               <div className="stack g-3">
                 <h3 className="t-section">Count the starting drawer</h3>
@@ -4292,7 +4309,7 @@ export default function AdminPage() {
       {tab === "register" && !closeReport && drawer && closing && (
         <Card
           title="Close the drawer — count what's in it"
-          subtitle={`${drawer.employee}'s shift · opening ${money(drawer.openTotalCents)} + cash sales ${money(drawer.cashSalesCents)} → expected ${money(drawer.openTotalCents + drawer.cashSalesCents)}`}
+          subtitle={`Opened by ${drawer.employee} · opening ${money(drawer.openTotalCents)} + cash sales ${money(drawer.cashSalesCents)} → expected ${money(drawer.openTotalCents + drawer.cashSalesCents)}`}
           footer={
             <div className="row end wrap g-2">
               <Button
