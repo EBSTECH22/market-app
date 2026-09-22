@@ -3,28 +3,27 @@ import { db } from "@/lib/db";
 import { verifyPin, pinUpgrade, currentEmployeeId } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
-import { denyUnless } from "@/lib/perm";
+import { denyUnless, currentRole, can } from "@/lib/perm";
+import { drawerForRequest, drawerCashCents, openDrawers, openDrawerFor, signedInEmployee, type DrawerRow } from "@/lib/drawer";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * GET — YOUR drawer, plus a list of every drawer open right now.
+ *
+ * `session` is the signed-in person's own drawer (or, for the shared owner
+ * password, the only one open). It used to be "the" open drawer for the whole
+ * market, which is why everyone saw the name of whoever opened up first.
+ */
 export async function GET() {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
-  if (!session) return NextResponse.json({ session: null });
-  const cash = await db.sale.aggregate({
-    where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt }, status: { not: "VOIDED" } },
-    _sum: { totalCents: true },
-  });
-  // Voided sales are already excluded above via status: { not: "VOIDED" },
-  // and cashRefunds filters out VOID-prefixed notes, so there is nothing
-  // further to subtract for voids here.
-  const cashRefunds = await db.refund.aggregate({
-    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { not: { startsWith: "VOID" } } },
-    _sum: { amountCents: true, taxCents: true },
-  });
-  const outflow = (cashRefunds._sum.amountCents || 0) + (cashRefunds._sum.taxCents || 0);
-  return NextResponse.json({ session: { ...session, cashSalesCents: (cash._sum.totalCents || 0) - outflow } });
+  const { drawer, who, ambiguous } = await drawerForRequest();
+  const all = await openDrawers();
+  const open = all.map((d) => ({ id: d.id, employee: d.employee, openedAt: d.openedAt, mine: !!drawer && d.id === drawer.id }));
+  if (!drawer) return NextResponse.json({ session: null, open, me: who?.name || "", ambiguous });
+  const cashSalesCents = await drawerCashCents(drawer);
+  return NextResponse.json({ session: { ...drawer, cashSalesCents }, open, me: who?.name || "" });
 }
 
 export async function POST(req: NextRequest) {
@@ -77,12 +76,15 @@ export async function POST(req: NextRequest) {
     // survive the await, so make it explicit rather than asserting.
     if (!emp) return NextResponse.json({ error: "Couldn't work out who's opening the drawer." }, { status: 401 });
 
-    const existing = await db.drawerSession.findFirst({ where: { status: "OPEN" } });
-    if (existing) return NextResponse.json({ error: `Drawer is already open (${existing.employee}). Close it first.` }, { status: 400 });
+    /* One open drawer per PERSON. Somebody else having a drawer open is
+       normal — two cashiers, two tills — and is no reason to refuse. */
+    const existing = await openDrawerFor({ id: emp.id, name: emp.name });
+    if (existing) return NextResponse.json({ error: `${emp.name} already has a drawer open. Close it first.` }, { status: 400 });
 
     const session = await db.drawerSession.create({
       data: {
         employee: emp.name,
+        employeeId: emp.id,
         openTotalCents: Math.max(0, Math.round(Number(totalCents) || 0)),
         openCounts: JSON.stringify(counts || {}),
       },
@@ -93,22 +95,35 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  const { counts, countedCents } = await req.json();
-  const session = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
-  if (!session) return NextResponse.json({ error: "No open drawer." }, { status: 400 });
+  const { counts, countedCents, drawerId } = await req.json();
 
-  const cash = await db.sale.aggregate({
-    where: { paymentMethod: "CASH", createdAt: { gte: session.openedAt }, status: { not: "VOIDED" } },
-    _sum: { totalCents: true },
-  });
-  // Voided sales are already excluded above via status: { not: "VOIDED" },
-  // and cashRefunds filters out VOID-prefixed notes, so there is nothing
-  // further to subtract for voids here.
-  const cashRefunds = await db.refund.aggregate({
-    where: { method: "CASH", createdAt: { gte: session.openedAt }, note: { not: { startsWith: "VOID" } } },
-    _sum: { amountCents: true, taxCents: true },
-  });
-  const cashSalesCents = (cash._sum.totalCents || 0) - ((cashRefunds._sum.amountCents || 0) + (cashRefunds._sum.taxCents || 0));
+  /* Your own drawer by default. Closing SOMEONE ELSE'S — a cashier who went
+     home without counting out — is a money decision, so it needs the money
+     capability, and it has to name the drawer rather than guess. */
+  let session: DrawerRow | null = null;
+  if (drawerId) {
+    session = await db.drawerSession.findUnique({ where: { id: String(drawerId) } });
+    if (!session || session.status !== "OPEN") return NextResponse.json({ error: "That drawer isn't open." }, { status: 400 });
+    const me = await signedInEmployee();
+    const isMine = !!me && (session.employeeId === me.id || (!session.employeeId && session.employee === me.name));
+    if (!isMine) {
+      const role = await currentRole();
+      if (!role || !can(role, "money")) {
+        return NextResponse.json({ error: "Only an owner or manager can close somebody else's drawer." }, { status: 403 });
+      }
+    }
+  } else {
+    const { drawer, ambiguous } = await drawerForRequest();
+    if (!drawer) {
+      return NextResponse.json(
+        { error: ambiguous ? "More than one drawer is open. Sign in as yourself, or pick which one to close." : "You don't have a drawer open." },
+        { status: 400 }
+      );
+    }
+    session = drawer;
+  }
+
+  const cashSalesCents = await drawerCashCents(session);
   const counted = Math.max(0, Math.round(Number(countedCents) || 0));
   const expected = session.openTotalCents + cashSalesCents;
 

@@ -10,7 +10,7 @@ import { runRoute, HttpError } from "@/lib/handler";
 
 import { pushToVendor } from "@/lib/push";
 import { denyUnless } from "@/lib/perm";
-import { currentEmployeeId } from "@/lib/auth";
+import { drawerForRequest } from "@/lib/drawer";
 
 export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
@@ -56,25 +56,40 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const drawer = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
-  /* An offline sale is exempt: the drawer it was rung under may well have been
-     counted out and closed before the connection came back, and refusing it now
-     would leave money in the till with no ticket behind it. */
-  if (!drawer && !offline) return NextResponse.json({ error: "Open the drawer (employee sign-in) before ringing sales." }, { status: 400 });
-  /* WHO rang it. This used to be whoever OPENED the drawer, so every sale on a
-     shift was filed under one name — the owner's, if the owner opened up — no
-     matter who was actually signed in and ringing. The person signed in is who
-     rang it. An offline sale keeps the name it was rung under, because by the
-     time it reaches the server someone else may be signed in. The drawer's name
-     is only the fallback for the shared owner password, which isn't a person. */
-  const signedInId = currentEmployeeId();
-  const signedIn = signedInId
-    ? await db.employee.findUnique({ where: { id: signedInId }, select: { name: true, active: true } })
-    : null;
+  /* WHICH drawer, and WHO rang it. Both used to be "the" open drawer for the
+     whole market — so every sale was filed under whoever opened up first, and
+     two cashiers could never work at once. Now: the person signed in rings on
+     their OWN drawer, and the sale carries that drawer's id, which is what makes
+     each till's count its own.
+
+     An offline sale keeps the name it was rung under, because by the time it
+     syncs someone else may be signed in. It lands on that person's drawer if
+     it's still open, and on no drawer if it has since been counted out — adding
+     it to a closed till would change a count that's already been signed off. */
+  const { drawer: myDrawer, who: signedIn, ambiguous } = await drawerForRequest();
   const offlineName = offline ? String(employeeName || "").trim().slice(0, 60) : "";
+
+  let drawer = myDrawer;
+  if (offline && offlineName) {
+    drawer = await db.drawerSession.findFirst({
+      where: { status: "OPEN", employee: offlineName },
+      orderBy: { openedAt: "desc" },
+    });
+  }
+
+  if (!drawer && !offline) {
+    return NextResponse.json(
+      {
+        error: ambiguous
+          ? "More than one drawer is open. Sign in as yourself to ring sales."
+          : "Open your drawer before ringing sales.",
+      },
+      { status: 400 }
+    );
+  }
   const clerk =
     offlineName ||
-    (signedIn?.active ? signedIn.name : "") ||
+    signedIn?.name ||
     drawer?.employee ||
     String(employeeName || "").trim().slice(0, 60) ||
     "Offline sale";
@@ -277,6 +292,7 @@ export async function POST(req: NextRequest) {
         number,
         cardName: paymentMethod === "CARD" ? (cardName || "").trim().slice(0, 60) : "",
         employee: clerk,
+        drawerId: drawer?.id || "",
         idemKey,
         ...(soldAt ? { createdAt: soldAt } : {}),
         subtotalCents: subtotal, taxCents, totalCents, paymentMethod,

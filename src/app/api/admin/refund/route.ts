@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { drawerIdForRefund } from "@/lib/drawer";
 import { currentEmployeeId, isAdmin } from "@/lib/auth";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, checkApproval } from "@/lib/audit";
@@ -19,6 +20,9 @@ export async function POST(req: NextRequest) {
   const empId = currentEmployeeId();
   if (empId) empName = (await db.employee.findUnique({ where: { id: empId } }))?.name || "";
   else if (isAdmin()) empName = "ADMIN";
+  /* Cash handed back comes out of the refunder's own drawer, so that till's
+     count expects it. Card refunds touch no drawer. */
+  const refundDrawerId = sale.paymentMethod === "CASH" ? await drawerIdForRefund() : "";
 
   if (action === "void") {
     /* Approval BEFORE anything moves. A void hands back the whole ticket, so
@@ -38,7 +42,7 @@ export async function POST(req: NextRequest) {
       await tx.sale.update({ where: { id: sale.id }, data: { status: "VOIDED" } });
       await tx.refund.create({
         data: {
-          saleId: sale.id, employee: empName, method: sale.paymentMethod,
+          saleId: sale.id, employee: empName, method: sale.paymentMethod, drawerId: refundDrawerId,
           amountCents: sale.subtotalCents, taxCents: sale.taxCents, restocked: true,
           linesJson: JSON.stringify(sale.lines.map((l) => ({ lineId: l.id, quantity: l.quantity }))),
           note: `VOID ticket #${sale.number}`,
@@ -140,7 +144,7 @@ export async function POST(req: NextRequest) {
       });
       await tx.refund.create({
         data: {
-          saleId: sale.id, employee: empName, method: sale.paymentMethod,
+          saleId: sale.id, employee: empName, method: sale.paymentMethod, drawerId: refundDrawerId,
           amountCents: refundSubtotal, taxCents: refundTax, restocked: restock !== false,
           linesJson: JSON.stringify(applied), note: `Refund ticket #${sale.number}`,
         },

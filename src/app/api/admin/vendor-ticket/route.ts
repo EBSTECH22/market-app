@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { drawerForRequest } from "@/lib/drawer";
 
 import { runRoute } from "@/lib/handler";
 import { pushToVendor } from "@/lib/push";
@@ -69,8 +70,15 @@ export async function POST(req: NextRequest) {
     const code = lookupCode(body.code);
     if (!code) return NextResponse.json({ error: "Enter the code." }, { status: 400 });
 
-    const drawer = await db.drawerSession.findFirst({ where: { status: "OPEN" }, orderBy: { openedAt: "desc" } });
-    if (!drawer) return NextResponse.json({ error: "Open the drawer before taking cash." }, { status: 400 });
+    /* The cash goes in the drawer of whoever is taking it — per person now,
+       not "the" drawer. */
+    const { drawer, ambiguous } = await drawerForRequest();
+    if (!drawer) {
+      return NextResponse.json(
+        { error: ambiguous ? "More than one drawer is open. Sign in as yourself to take cash." : "Open your drawer before taking cash." },
+        { status: 400 }
+      );
+    }
 
     const cart = await db.selfCart.findFirst({ where: { registerCode: code }, orderBy: { createdAt: "desc" } });
     if (!cart) return NextResponse.json({ error: `No ticket with code ${code}.` }, { status: 404 });
@@ -139,6 +147,7 @@ export async function POST(req: NextRequest) {
           number,
           employee: `VENDOR: ${vendor.businessName}`,
           soldByVendorId: vendor.id,
+          drawerId: drawer.id,
           cardName: "",
           subtotalCents: cart.subtotalCents,
           taxCents: cart.taxCents,

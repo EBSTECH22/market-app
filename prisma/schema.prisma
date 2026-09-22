@@ -165,6 +165,9 @@ model Sale {
   // register. Empty for every normal sale. `employee` still carries the human
   // label; this is the id you can actually group and report on.
   soldByVendorId String    @default("")
+  // The drawer this was rung on, so each person's till counts only its own
+  // cash. Empty for sales rung before drawers were per-person.
+  drawerId       String    @default("")
   // The tax split as charged. Stored rather than recomputed because the rates
   // in Settings change, and a return filed in March must show what was actually
   // collected in February.
@@ -238,6 +241,9 @@ model EmployeeDoc {
 model DrawerSession {
   id             String    @id @default(cuid())
   employee       String
+  // Whose drawer this is. One open drawer PER PERSON, not per market. Empty on
+  // drawers opened before that change, which keep the old time-window count.
+  employeeId     String    @default("")
   openedAt       DateTime  @default(now())
   closedAt       DateTime?
   openTotalCents Int
@@ -247,6 +253,8 @@ model DrawerSession {
   countedCents   Int       @default(0)
   diffCents      Int       @default(0)
   status         String    @default("OPEN")
+
+  @@index([status, employeeId])
 }
 
 model SaleLine {
@@ -306,6 +314,9 @@ model Setting {
 model Refund {
   id          String   @id @default(cuid())
   saleId      String
+  // The drawer the cash came out of. Empty when it wasn't cash, or predates
+  // per-person drawers.
+  drawerId    String   @default("")
   employee    String   @default("")
   method      String
   amountCents Int

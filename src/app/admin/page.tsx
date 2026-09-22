@@ -1000,6 +1000,8 @@ function ContractStatusBadge({ status, endDate }: { status: string; endDate?: st
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
+/** Every drawer open right now — one per person working a till. */
+type OpenDrawerRow = { id: string; employee: string; openedAt: string; mine: boolean };
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
@@ -1435,6 +1437,7 @@ export default function AdminPage() {
   const [drawerLoaded, setDrawerLoaded] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [empName, setEmpName] = useState("");
+  const [openDrawerList, setOpenDrawerList] = useState<OpenDrawerRow[]>([]);
   const [empPin, setEmpPin] = useState("");
   const [drawerErr, setDrawerErr] = useState("");
   const [counts, setCounts] = useState<Record<string, string>>({});
@@ -1595,13 +1598,14 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/drawer");
       if (res.status === 401) { setAuthed(false); return; }
       setAuthed(true);
-      let data: { session?: Drawer; error?: string } = {};
+      let data: { session?: Drawer; error?: string; open?: OpenDrawerRow[] } = {};
       try { data = await res.json(); } catch { data = { error: "Server error." }; }
       if (!res.ok) {
         setDrawerErr(`Register can't reach the drawer system (${data.error || res.status}). If you just deployed, make sure the SQL for Employee + DrawerSession ran in Supabase.`);
       } else {
         setDrawerErr("");
         setDrawer(data.session ?? null);
+        setOpenDrawerList(data.open || []);
       }
     } catch {
       setDrawerErr("Network problem loading the register — refresh to retry.");
@@ -2821,6 +2825,30 @@ export default function AdminPage() {
       diff: data.session.diffCents,
     });
     setCounts({}); setClosing(false); setDrawer(null);
+  };
+
+  /* An owner or manager counting out a drawer somebody left open — the cashier
+     went home. It asks for the count, because closing without one would write
+     off whatever the till is short. */
+  const closeOthersDrawer = async (d: OpenDrawerRow) => {
+    const counted = await dialog.money({
+      title: `Close ${d.employee}'s drawer?`,
+      body: <p>Count what&rsquo;s in their till and enter it. The difference from what it should hold is recorded against their drawer.</p>,
+      label: "Counted cash",
+      confirmLabel: "Close their drawer",
+    });
+    if (counted === null) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/drawer", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drawerId: d.id, counts: {}, countedCents: counted }),
+      });
+      if (!ok) { toast.error("Couldn't close it", String(data.error || "")); return; }
+      const diff = Number((data.session as { diffCents?: number } | undefined)?.diffCents || 0);
+      toast.success(`${d.employee}'s drawer closed`, diff === 0 ? "Counted exactly." : diff > 0 ? `${money(diff)} over.` : `${money(-diff)} short.`);
+      await loadDrawer();
+    } finally { setBusy(false); }
   };
 
   // ---------- register ----------
@@ -4118,6 +4146,13 @@ export default function AdminPage() {
           />
           <div className="grow" style={{ minWidth: 0 }}>
             <div className="t-card truncate">{meta.label}</div>
+            {/* Who's signed in, on every screen. The sidebar says it, but on a
+                phone the sidebar is hidden — so the only name anyone saw there
+                was whoever's drawer was open, and it looked like being signed in
+                as them. */}
+            <div className="t-xs t-muted truncate">
+              {staffName ? `Signed in as ${staffName}` : access ? `Signed in with the ${ROLE_LABEL[access].toLowerCase()} password` : ""}
+            </div>
           </div>
           {overview ? (
             <div className="row g-3 shrink0">
@@ -4182,6 +4217,27 @@ export default function AdminPage() {
               Already paid online — take nothing at the till. If it isn&rsquo;t on the shelf, the vendor hasn&rsquo;t
               brought it in yet.
             </p>
+          </div>
+        </Card>
+      )}
+
+      {tab === "register" && openDrawerList.some((d) => !d.mine) && (
+        <Card
+          className="mb-4"
+          title="Other drawers open"
+          subtitle="Each person rings on their own drawer. These are everyone else's, not yours."
+        >
+          <div className="stack g-2">
+            {openDrawerList.filter((d) => !d.mine).map((d) => (
+              <div key={d.id} className="row between wrap g-2" style={{ alignItems: "center" }}>
+                <span><b>{d.employee}</b> <span className="t-muted t-sm">· since {fmtTime(d.openedAt)}</span></span>
+                {allowed("money") ? (
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => void closeOthersDrawer(d)}>
+                    Count out &amp; close
+                  </Button>
+                ) : null}
+              </div>
+            ))}
           </div>
         </Card>
       )}
