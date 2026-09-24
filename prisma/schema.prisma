@@ -431,6 +431,35 @@ model SpaceOffer {
   updatedAt         DateTime @updatedAt
 }
 
+/// A space promised to someone by hand.
+///
+/// "I'll hold a 5x5 for you until Friday" is a real promise a market makes on
+/// the phone, and until now it lived in somebody's head. A hold takes one off
+/// what the apply page offers, names who it's for and when it runs out, and
+/// puts the space back on its own if that date passes.
+model SpaceHold {
+  id            String    @id @default(cuid())
+  /// Which kind of space (a SpaceOffer `key`).
+  spaceKey      String
+  /// Who it's for, as the market would say it out loud.
+  heldFor       String
+  email         String    @default("")
+  phone         String    @default("")
+  /// The application they came from, when they came from one.
+  applicationId String    @default("")
+  note          String    @default("")
+  /// When the promise runs out. Null means until somebody says otherwise.
+  holdUntil     DateTime?
+  /// Who made the promise, for the conversation later.
+  createdBy     String    @default("")
+  createdAt     DateTime  @default(now())
+  /// Set when the hold ends — taken up, let go, or run out.
+  releasedAt    DateTime?
+  releasedWhy   String    @default("")
+
+  @@index([spaceKey, releasedAt])
+}
+
 model VendorApplication {
   id           String    @id @default(cuid())
   businessName String

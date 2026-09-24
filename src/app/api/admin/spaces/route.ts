@@ -4,6 +4,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit } from "@/lib/audit";
 import { DEFAULT_OFFERS, waitlisted, availabilityLabel, termsLabel } from "@/lib/spaces";
+import { expireHolds, activeHolds } from "@/lib/spaceholds";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,9 @@ export async function GET() {
       }
     }
 
+    await expireHolds();
     const offers = await db.spaceOffer.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] });
+    const holds = await activeHolds();
 
     /* How many are waiting on each one, so "full" and "nine people waiting"
        sit side by side — that pair is the whole argument for adding a booth. */
@@ -42,7 +45,11 @@ export async function GET() {
         availability: availabilityLabel(o),
         terms: termsLabel(o),
         waitingCount: waitMap.get(o.key) || 0,
+        /* Spaces promised to someone by hand — already off `available`, but
+           worth naming so a low count is explainable rather than mysterious. */
+        heldCount: holds.filter((h) => h.spaceKey === o.key).length,
       })),
+      holds,
     });
   });
 }

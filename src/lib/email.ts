@@ -870,3 +870,29 @@ export async function sendSpaceReleasedEmail(opts: {
     </div>`;
   return send(opts.to, `${opts.booth} is no longer being held \u2014 Community Harvest`, shell(inner));
 }
+
+
+/** "We're keeping one for you" — the promise, in writing, with its end date. */
+export async function sendSpaceHeldEmail(opts: {
+  to: string;
+  greetName: string;
+  spaceName: string;
+  holdUntil: Date | null;
+  signer: string;
+}): Promise<boolean> {
+  const until = opts.holdUntil
+    ? opts.holdUntil.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "America/Chicago" })
+    : "";
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 14px;letter-spacing:-0.02em;">We&rsquo;re holding a space for you</h2>
+    <div style="text-align:left;font-size:14.5px;line-height:1.6;color:#111827;">
+      <p style="margin:0 0 12px;">Hi ${esc(opts.greetName)},</p>
+      <p style="margin:0 0 12px;">As promised, we&rsquo;re holding a <b>${esc(opts.spaceName)}</b> for you at Community Harvest${until ? ` until <b>${until}</b>` : ""}.</p>
+      ${until
+        ? `<p style="margin:0 0 12px;">It&rsquo;s off our available list until then. If we haven&rsquo;t heard from you by ${until}, it goes back to the next vendor waiting.</p>`
+        : `<p style="margin:0 0 12px;">It&rsquo;s off our available list while we sort out the details.</p>`}
+      <p style="margin:0 0 12px;">Just reply to this email when you&rsquo;re ready and we&rsquo;ll get your agreement over to you.</p>
+      <p style="margin:0;">Thank you,<br/>${esc(opts.signer)}<br/>Community Harvest</p>
+    </div>`;
+  return send(opts.to, `We\u2019re holding a ${opts.spaceName.toLowerCase()} for you \u2014 Community Harvest`, shell(inner));
+}

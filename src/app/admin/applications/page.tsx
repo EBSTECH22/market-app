@@ -68,6 +68,7 @@ type App = {
   /** Already computed server-side. Display it; never re-derive it here. */
   nextStep: string;
   /** Which space they applied for, and their place in that queue (0 = not waiting). */
+  spaceKey?: string;
   spaceName?: string;
   waitPosition?: number;
 };
@@ -140,6 +141,14 @@ type OfferRow = {
   priceCents: number; priceMaxCents: number; commissionPercent: number;
   available: number; waitlistOnly: boolean; active: boolean;
   waitlist: boolean; availability: string; terms: string; waitingCount: number;
+  heldCount?: number;
+};
+
+/** A space promised to somebody by hand, still standing. */
+type HoldRow = {
+  id: string; spaceKey: string; spaceName: string; heldFor: string;
+  email: string; phone: string; note: string;
+  holdUntil: string | null; createdBy: string; createdAt: string;
 };
 
 /**
@@ -152,13 +161,19 @@ type OfferRow = {
  */
 function SpacesCard() {
   const toast = useToast();
+  const dialog = useDialog();
   const [offers, setOffers] = useState<OfferRow[]>([]);
+  const [holds, setHolds] = useState<HoldRow[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/admin/spaces");
-    if (r.ok) setOffers((await r.json()).offers || []);
+    if (r.ok) {
+      const d = await r.json();
+      setOffers(d.offers || []);
+      setHolds(d.holds || []);
+    }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
@@ -177,6 +192,65 @@ function SpacesCard() {
   };
 
   const dollars = (cents: number) => (cents / 100).toFixed(2).replace(/\.00$/, "");
+
+  /* Promising a space by hand. Asks the two things the promise is made of —
+     who, and until when — and nothing else; the rest can be typed in the note
+     if it matters. */
+  const holdOne = async (o: OfferRow) => {
+    const who = await dialog.prompt({
+      title: `Hold a ${o.name.toLowerCase()} for someone?`,
+      body: <p>It comes off the apply page straight away, so nobody else is told it&rsquo;s available.</p>,
+      label: "Who is it for?",
+      placeholder: "Jane Doe — Jane's Jams",
+      confirmLabel: "Next",
+    });
+    if (who === null || !who.trim()) return;
+    const until = await dialog.prompt({
+      title: "Until when?",
+      body: <p>It goes back on the apply page on its own at the end of this day. Leave it empty to hold it until you say otherwise.</p>,
+      label: "Hold until",
+      hint: "Leave it empty for no end date.",
+      type: "date",
+      validate: (v) => (!v || new Date(`${v}T23:59:59-05:00`).getTime() > Date.now() ? null : "That date has already passed."),
+      confirmLabel: "Next",
+    });
+    if (until === null) return;
+    const email = await dialog.prompt({
+      title: "Email them the confirmation?",
+      body: <p>They get a short email saying the space is held for them and until when. Leave it empty to skip.</p>,
+      label: "Their email",
+      type: "email",
+      placeholder: "jane@example.com",
+      confirmLabel: "Hold the space",
+    });
+    if (email === null) return;
+
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/space-holds", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spaceKey: o.key, heldFor: who.trim(), holdUntil: until.trim(), email: email.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't hold it", String(d.error || "")); return; }
+      toast.success(
+        `${o.name} held for ${who.trim()}`,
+        `${typeof d.left === "number" ? `${d.left} left on the apply page.` : "Counted as held."}${d.emailed ? " They've been emailed." : ""}`
+      );
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const endHold = async (h: HoldRow, why: string, label: string) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/admin/space-holds?id=${encodeURIComponent(h.id)}&why=${encodeURIComponent(why)}`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't change that", String(d.error || "")); return; }
+      toast.success(label);
+      await load();
+    } finally { setBusy(false); }
+  };
 
   return (
     <Card
@@ -205,6 +279,7 @@ function SpacesCard() {
                   {o.waitingCount > 0 ? (
                     <Badge tone="info">{plural(o.waitingCount, "person")} waiting</Badge>
                   ) : null}
+                  {o.heldCount ? <Badge tone="warn" icon="lock">{o.heldCount} held</Badge> : null}
                 </span>
                 <span className="t-xs t-muted">{o.terms}</span>
               </span>
@@ -218,6 +293,9 @@ function SpacesCard() {
                     onClick={() => void patch(o.id, { waitlistOnly: !o.waitlistOnly }, o.waitlistOnly ? `${o.name} is open again` : `${o.name} is waiting list only`)}
                   >
                     {o.waitlistOnly ? "Waiting list only" : "Put on waiting list"}
+                  </Button>
+                  <Button size="sm" variant="secondary" icon="lock" disabled={busy || o.available === 0} onClick={() => void holdOne(o)}>
+                    Hold one
                   </Button>
                   <Button
                     size="sm"
@@ -282,6 +360,34 @@ function SpacesCard() {
             ) : null}
           </div>
         ))}
+
+        {holds.length > 0 ? (
+          <div className="stack g-2" style={{ borderTop: "1px solid var(--border)", paddingTop: "var(--sp-3)" }}>
+            <span className="t-label">Spaces you&rsquo;re holding</span>
+            {holds.map((h) => (
+              <div key={h.id} className="row between wrap g-2" style={{ alignItems: "center" }}>
+                <span className="stack g-1" style={{ minWidth: 0 }}>
+                  <span><b>{h.heldFor}</b> <span className="t-muted t-sm">· {h.spaceName}</span></span>
+                  <span className="t-xs t-muted">
+                    {h.holdUntil ? `Until ${fmtDate(h.holdUntil)}` : "No end date"}
+                    {h.createdBy ? ` · held by ${h.createdBy}` : ""}
+                    {h.email ? ` · ${h.email}` : ""}
+                  </span>
+                </span>
+                <span className="row wrap g-2">
+                  {/* Two different endings. Taken up means they've got it, so
+                      the space stays off the count; let go puts it back. */}
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => void endHold(h, "Taken up", `${h.heldFor} took it`)}>
+                    They took it
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => void endHold(h, "Let go", `Hold for ${h.heldFor} released`)}>
+                    Let it go
+                  </Button>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {open ? (
           <span className="t-xs t-muted">
@@ -384,6 +490,9 @@ export default function ApplicationsPage() {
 
   const [apps, setApps] = useState<App[]>([]);
   const [counts, setCounts] = useState<Counts>(ZERO_COUNTS);
+  /* Bumped when something outside the card changes a space, to make it reload
+     — holding a booth from the waiting list has to show up in the card above. */
+  const [spacesKey, setSpacesKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -452,6 +561,48 @@ export default function ApplicationsPage() {
     });
     if (!when) return;
     await act(a.id, { action: "schedule_viewing", when: when.trim() });
+  };
+
+  /* Hold a space for somebody on the waiting list. Everything the promise
+     needs is already on their application, so this asks one question. */
+  const holdForApplicant = async (a: App) => {
+    const until = await dialog.prompt({
+      title: `Hold ${a.spaceName || "a space"} for ${a.businessName}?`,
+      body: (
+        <p>
+          It comes off the apply page straight away and they&rsquo;re emailed at{" "}
+          <b>{a.email}</b> to say it&rsquo;s theirs until the date you give.
+        </p>
+      ),
+      label: "Hold until",
+      hint: "Leave it empty to hold it until you say otherwise.",
+      type: "date",
+      validate: (v) => (!v || new Date(`${v}T23:59:59-05:00`).getTime() > Date.now() ? null : "That date has already passed."),
+      confirmLabel: "Hold it for them",
+    });
+    if (until === null) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/space-holds", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spaceKey: a.spaceKey || "",
+          heldFor: `${a.contactName || a.businessName} — ${a.businessName}`,
+          email: a.email,
+          phone: a.phone,
+          applicationId: a.id,
+          holdUntil: until.trim(),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't hold it", String(d.error || "")); return; }
+      toast.success(
+        `Held for ${a.businessName}`,
+        `${typeof d.left === "number" ? `${d.left} left on the apply page.` : "Counted as held."}${d.emailed ? " They've been emailed." : ""}`
+      );
+      setSpacesKey((k) => k + 1);
+      await load();
+    } finally { setBusy(false); }
   };
 
   /* Said out loud every time, because a count quietly going down is exactly
@@ -795,6 +946,11 @@ export default function ApplicationsPage() {
           <a className="btn btn-ghost btn-sm" href={`mailto:${a.email}`}>
             <Icon name="mail" size={14} /> Email
           </a>
+          {a.spaceKey ? (
+            <Button size="sm" variant="secondary" icon="lock" disabled={busy} onClick={() => void holdForApplicant(a)}>
+              Hold it for them
+            </Button>
+          ) : null}
         </span>
       ),
     },
@@ -1159,7 +1315,7 @@ export default function ApplicationsPage() {
         </div>
       ) : (
         <div className="stack g-4">
-          <SpacesCard />
+          <SpacesCard key={spacesKey} />
 
           <Segmented
             value={phase}

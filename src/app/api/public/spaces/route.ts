@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { runRoute } from "@/lib/handler";
 import { waitlisted, spotsLeft, availabilityLabel, termsLabel } from "@/lib/spaces";
+import { expireHolds } from "@/lib/spaceholds";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,11 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   return runRoute("public/spaces GET", async () => {
+    /* Put back anything whose hold ran out, before anyone is told what's
+       available — a promise that expired at midnight shouldn't keep a booth
+       off the page all day. */
+    await expireHolds();
+
     const offers = await db.spaceOffer.findMany({
       where: { active: true },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
