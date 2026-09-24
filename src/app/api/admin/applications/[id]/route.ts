@@ -5,6 +5,7 @@ import { sendApplicationDecisionEmail, sendViewingEmail, sendContractSignEmail }
 import { TZ } from "@/lib/time";
 import { randomBytes } from "crypto";
 import { denyUnless } from "@/lib/perm";
+import { claimSpaceForApplication } from "@/lib/spacehold";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       where: { id: app.id },
       data: { status: "ACCEPTED", decidedAt: new Date() },
     });
+    /* Saying yes is the moment the space stops being available to anyone
+       else, so the apply page's count comes down here — not whenever somebody
+       remembers to edit it. */
+    const claim = await claimSpaceForApplication(app.id);
+
     let emailed = true;
     try {
       await sendApplicationDecisionEmail(
@@ -54,7 +60,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       // reporting success for an email that never left.
       emailed = false;
     }
-    return NextResponse.json({ application: updated, emailed });
+    return NextResponse.json({ application: updated, emailed, claim });
   }
 
   if (action === "mark_called") {
@@ -91,7 +97,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       });
     }
     await db.vendorApplication.update({ where: { id: app.id }, data: { status: "ACCEPTED", stage: "VENDOR", decidedAt: new Date(), vendorId: vendor.id } });
-    return NextResponse.json({ ok: true, vendor: { id: vendor.id, code: vendor.code, businessName: vendor.businessName } });
+    /* Same claim as accepting — taking them on as a vendor is saying yes. */
+    const claim = await claimSpaceForApplication(app.id);
+    return NextResponse.json({ ok: true, vendor: { id: vendor.id, code: vendor.code, businessName: vendor.businessName }, claim });
   }
 
   if (action === "create_contract") {
@@ -124,18 +132,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const start = new Date(`${startDate}T12:00:00`);
     const contract = await db.contract.create({
-      data: { vendorId: vendor.id, boothLabel, monthlyRentCents: Math.round(rentDollars * 100), startDate: start },
+      data: {
+        vendorId: vendor.id,
+        boothLabel,
+        monthlyRentCents: Math.round(rentDollars * 100),
+        startDate: start,
+        /* Carried from the application so the agreement knows which kind of
+           space it is — that's what the invoice reads later to work out
+           whether there is still one to sell them. */
+        spaceKey: app.spaceKey,
+      },
     });
     const token = randomBytes(16).toString("hex");
     await db.contract.update({ where: { id: contract.id }, data: { signToken: token } });
 
     await db.vendorApplication.update({ where: { id: app.id }, data: { status: "ACCEPTED", stage: "CONTRACT", decidedAt: new Date(), vendorId: vendor.id } });
+    /* No-op if accepting already took it — the application carries the stamp. */
+    const claim = await claimSpaceForApplication(app.id);
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
     try { await sendApplicationDecisionEmail(app.email, app.contactName, app.businessName, true, ""); } catch {}
     try { await sendContractSignEmail(vendor.email, vendor.businessName, `${base}/sign/${token}`); } catch {}
 
-    return NextResponse.json({ ok: true, vendor: { id: vendor.id, code: vendor.code }, contractId: contract.id });
+    return NextResponse.json({ ok: true, vendor: { id: vendor.id, code: vendor.code }, contractId: contract.id, claim });
   }
 
   /* They decided the market wasn't for them.

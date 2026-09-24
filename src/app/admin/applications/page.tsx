@@ -454,6 +454,16 @@ export default function ApplicationsPage() {
     await act(a.id, { action: "schedule_viewing", when: when.trim() });
   };
 
+  /* Said out loud every time, because a count quietly going down is exactly
+     the kind of thing you want to have been told about. */
+  const claimLine = (d: unknown): string => {
+    const c = (d as { claim?: { claimed?: boolean; offerName?: string; left?: number | null } } | null)?.claim;
+    if (!c?.claimed || !c.offerName) return "";
+    return typeof c.left === "number"
+      ? ` One ${c.offerName.toLowerCase()} taken — ${c.left} left on the apply page.`
+      : ` Counted against ${c.offerName}.`;
+  };
+
   const addAsVendor = async (a: App) => {
     const ok = await dialog.confirm({
       title: `Add ${a.businessName} as a vendor?`,
@@ -466,7 +476,7 @@ export default function ApplicationsPage() {
     if (d) {
       toast.success(
         `${a.businessName} added as a vendor`,
-        `Vendor ${d.vendor.code}. They've moved to Agreement in progress — the portal stays locked until the agreement is signed and first rent is paid.`,
+        `Vendor ${d.vendor.code}. They've moved to Agreement in progress — the portal stays locked until the agreement is signed and first rent is paid.${claimLine(d)}`,
       );
     }
   };
@@ -546,7 +556,7 @@ export default function ApplicationsPage() {
     } else {
       toast.success(
         "Agreement created",
-        `Signing link emailed to ${a.email} — vendor ${d.vendor.code}. They're now under Agreement in progress.`,
+        `Signing link emailed to ${a.email} — vendor ${d.vendor.code}. They're now under Agreement in progress.${claimLine(d)}`,
       );
     }
   };

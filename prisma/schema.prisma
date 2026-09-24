@@ -455,6 +455,9 @@ model VendorApplication {
   stage      String @default("NEW")
   /// Which SpaceOffer they applied for (its `key`), empty for older rows.
   spaceKey   String @default("")
+  /// Set once a space was actually committed to them, so the count is taken
+  /// off exactly once no matter how many times they're accepted or re-saved.
+  spaceClaimedAt DateTime?
   viewingAt  String @default("")
   vendorId   String @default("")
 }

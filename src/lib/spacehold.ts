@@ -79,3 +79,48 @@ export async function reholdOnPayment(vendorId: string): Promise<number> {
   }
   return released.length;
 }
+
+
+/**
+ * Somebody has been given one of these spaces, so take it off the count.
+ *
+ * Once per application, ever — accepting, then raising their agreement, then
+ * accepting again after a re-open would otherwise take three booths off a
+ * market that only let one. The stamp on the application is what makes it
+ * once, not the caller remembering.
+ *
+ * Unlimited offers (shelf space) have no count to take from, and a count never
+ * goes below zero: the apply page saying "-1 available" would be worse than
+ * saying nothing.
+ */
+export async function claimSpaceForApplication(applicationId: string): Promise<{ claimed: boolean; offerName: string; left: number | null }> {
+  const app = await db.vendorApplication.findUnique({
+    where: { id: applicationId },
+    select: { id: true, spaceKey: true, spaceClaimedAt: true },
+  });
+  if (!app || !app.spaceKey || app.spaceClaimedAt) return { claimed: false, offerName: "", left: null };
+
+  const offer = await db.spaceOffer.findUnique({ where: { key: app.spaceKey } });
+  if (!offer) return { claimed: false, offerName: "", left: null };
+
+  /* Stamped even for an unlimited offer: they HAVE been given a space, and a
+     later change from "no limit" to a real count mustn't reopen the question. */
+  await db.vendorApplication.update({ where: { id: app.id }, data: { spaceClaimedAt: new Date() } });
+
+  if (offer.available < 0) return { claimed: true, offerName: offer.name, left: null };
+
+  const left = Math.max(0, offer.available - 1);
+  await db.spaceOffer.update({ where: { id: offer.id }, data: { available: left } });
+
+  await recordSystemAudit({
+    action: "SETTING_CHANGE",
+    targetType: "SPACE_OFFER",
+    targetId: offer.id,
+    targetLabel: offer.name,
+    detail: `${offer.name}: one taken — ${left} left on the apply page.`,
+    before: { available: offer.available },
+    after: { available: left },
+  });
+
+  return { claimed: true, offerName: offer.name, left };
+}
