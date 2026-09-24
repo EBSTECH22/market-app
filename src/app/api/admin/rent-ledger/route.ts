@@ -213,6 +213,11 @@ export async function GET() {
         lastChargeAt: rent?.last ?? null,
         cardLast4: c.vendor.cardLast4 || "",
         opens: { count: open?.count ?? 0, lastAt: open?.lastAt ?? null, tracked: openTracked },
+        /* Set when the hold was released over an unpaid invoice, and which
+           kind of space it is — empty on agreements written before the offers
+           existed, which is what the release dialog asks about. */
+        spaceReleasedAt: c.spaceReleasedAt,
+        spaceKey: c.spaceKey,
         notice: notices.get(c.id) ?? { emailedAt: null, textedAt: null, deadline: "" },
       };
     });
@@ -256,6 +261,13 @@ export async function GET() {
       totals,
       trackingSince: trackingSince.toISOString(),
       noticeSigner: noticeSigner(),
+      /* What the apply page is offering, so releasing a booth can put one back
+         on it without a second trip to another screen. */
+      offers: (await db.spaceOffer.findMany({
+        where: { active: true },
+        orderBy: [{ sortOrder: "asc" }],
+        select: { key: true, name: true, available: true },
+      })).map((o) => ({ key: o.key, name: o.name, unlimited: o.available < 0 })),
     });
   });
 }

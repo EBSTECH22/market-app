@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { reholdOnPayment } from "@/lib/spacehold";
 
 import { denyUnless } from "@/lib/perm";
 import { recordAudit } from "@/lib/audit";
@@ -59,6 +60,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     },
     req
   );
+
+  /* Cash or a check settles the same debt a card would, so it takes the space
+     back the same way. */
+  try { await reholdOnPayment(params.id); } catch {}
 
   return NextResponse.json({ entry });
 }

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { stripe } from "@/lib/stripe";
 import { finalizeRentAndNotify } from "@/lib/rentfinalize";
+import { payBlockFor } from "@/lib/spacehold";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,17 @@ export async function POST(req: NextRequest) {
   if (!stripe) return NextResponse.json({ error: "Card payments aren't configured yet." }, { status: 500 });
   const vendor = await db.vendor.findUnique({ where: { id: vendorId } });
   if (!vendor) return NextResponse.json({ error: "Not found." }, { status: 404 });
+
+  /* Same gate as the emailed link — a released booth whose kind has sold out
+     can't be paid for from the portal either. */
+  const held = await db.contract.findFirst({
+    where: { vendorId, spaceReleasedAt: { not: null } },
+    select: { spaceKey: true, spaceReleasedAt: true, boothLabel: true },
+  });
+  if (held) {
+    const block = await payBlockFor(held);
+    if (block.blocked) return NextResponse.json({ error: block.reason }, { status: 409 });
+  }
 
   const agg = await db.ledgerEntry.aggregate({ where: { vendorId }, _sum: { amountCents: true } });
   const balance = agg._sum.amountCents || 0;

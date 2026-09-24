@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { sendRentChargedEmail } from "@/lib/email";
 import { unlockIfRentPaid } from "@/lib/unlock";
+import { reholdOnPayment } from "@/lib/spacehold";
 import { runRoute } from "@/lib/handler";
 import { TZ } from "@/lib/time";
 import { denyUnless } from "@/lib/perm";
@@ -167,6 +168,7 @@ export async function POST(req: NextRequest) {
     );
     try { await sendRentChargedEmail(vendor.email, vendor.businessName, dueCents, feeCents, chargeTotal, vendor.cardLast4); } catch {}
     try { await unlockIfRentPaid(vendor.id); } catch {}
+    try { await reholdOnPayment(vendor.id); } catch {}
     return NextResponse.json({ ok: true, dueCents, feeCents, chargeTotalCents: chargeTotal });
   });
 }

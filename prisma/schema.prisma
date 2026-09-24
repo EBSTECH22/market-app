@@ -303,6 +303,13 @@ model Contract {
   signToken           String    @default("")
   viewedAt  DateTime?
   paidThrough DateTime?
+  /// Which kind of space this agreement is for (a SpaceOffer `key`). Empty on
+  /// agreements written before the offers existed — the office can mark those.
+  spaceKey    String    @default("")
+  /// Set when the booth was opened back up because the invoice went unpaid.
+  /// The agreement is NOT ended — they can still pay and be re-held — but the
+  /// space is available to let in the meantime, and both sides know it.
+  spaceReleasedAt DateTime?
   createdAt        DateTime  @default(now())
 }
 

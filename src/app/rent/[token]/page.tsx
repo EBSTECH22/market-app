@@ -4,7 +4,15 @@ import { useEffect, useState } from "react";
 import { Button, Card, Icon, LinkButton, Note, Skeleton } from "@/components/ui";
 import { money } from "@/lib/format";
 
-type Info = { businessName: string; boothLabel: string; dueCents: number; feeCents: number; totalCents: number; processingPercent: number };
+type Info = {
+  businessName: string; boothLabel: string; dueCents: number; feeCents: number;
+  totalCents: number; processingPercent: number;
+  /** Their booth is no longer being held for them over this unpaid invoice. */
+  released?: boolean;
+  /** The last one of that kind has gone — there is nothing left to pay for. */
+  payBlocked?: boolean;
+  blockReason?: string;
+};
 
 /** One line of the rent breakdown. Replaces the old hand-rolled flex rows. */
 function Line({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
@@ -85,8 +93,25 @@ export default function RentPayPage({ params }: { params: { token: string } }) {
             <Note tone="success" title="Nothing due">
               Your balance already covers this month&rsquo;s rent — there&rsquo;s nothing to pay.
             </Note>
+          ) : info.payBlocked ? (
+            /* The space has gone. Taking the money now would be selling
+               something the market hasn't got. */
+            <Note tone="error" title="This space has been taken">
+              {info.blockReason || "That space has been let to another vendor, so this invoice can't be paid."}
+              {" "}Please get in touch with the market — nothing has been charged.
+            </Note>
           ) : (
             <div className="stack g-4">
+              {/* Released but still payable: the booth is being offered around,
+                  and paying is what takes it back. Said plainly, with the
+                  urgency that is actually true. */}
+              {info.released ? (
+                <Note tone="warn" title="Your booth is no longer being held">
+                  It&rsquo;s been offered to our waiting list. You can still pay while one of these spaces is
+                  free, and paying takes it back — but once the last one is let, this invoice closes.
+                </Note>
+              ) : null}
+
               <div
                 className="stack g-2"
                 style={{

@@ -121,6 +121,10 @@ type InvoiceRow = {
   status: "PAID" | "PARTIAL" | "UNPAID" | "COVERED" | "NOT_INVOICED";
   lastPaymentAt: string | null; lastChargeAt: string | null; cardLast4: string;
   opens: { count: number; lastAt: string | null; tracked: boolean };
+  /** Set when the hold was released over the unpaid invoice. */
+  spaceReleasedAt?: string | null;
+  /** Which kind of space the agreement is for; empty on older agreements. */
+  spaceKey?: string;
   contactName: string;
   /** Last non-payment email and text, and the deadline that email gave. */
   notice: { emailedAt: string | null; textedAt: string | null; deadline: string };
@@ -135,6 +139,7 @@ type RentLedger = {
   };
   trackingSince: string;
   noticeSigner?: string;
+  offers?: { key: string; name: string; unlimited: boolean }[];
 };
 
 const BANK_VIEWS = ["collections", "coming", "paid", "payouts"] as const;
@@ -654,7 +659,7 @@ function MoneyAtAGlance({
  * precisely the one you don't want to discover in December.
  */
 function RentLedgerCards({
-  ledger, filter: pickedFilter, onFilter, busy, onSendLink, onRecordPayment, onReload, mode,
+  ledger, filter: pickedFilter, onFilter, busy, onSendLink, onRecordPayment, onReload, mode, onRelease, onRehold,
 }: {
   ledger: RentLedger | null;
   /* Which tab this is drawn on. Collections is the chase list; Paid up is the
@@ -666,6 +671,8 @@ function RentLedgerCards({
   busy: boolean;
   onSendLink: (row: InvoiceRow) => void;
   onRecordPayment: (row: InvoiceRow) => void;
+  onRelease: (row: InvoiceRow) => void;
+  onRehold: (row: InvoiceRow) => void;
   onReload: () => void;
 }) {
   const t = ledger?.totals;
@@ -761,6 +768,9 @@ function RentLedgerCards({
       cell: (i) => (
         <span className="row wrap g-2">
           {statusBadge(i)}
+          {i.spaceReleasedAt ? (
+            <Badge tone="danger" icon="alert">Hold released {fmtDate(i.spaceReleasedAt)}</Badge>
+          ) : null}
           {/* Three states, not two. "Not opened" about an invoice sent before
               open-tracking existed would be an accusation we can't support. */}
           {i.opens.count > 0 ? (
@@ -796,6 +806,18 @@ function RentLedgerCards({
           {i.rentDueCents > 0 && i.outstandingCents > 0 ? (
             <Button size="sm" icon="mail" disabled={busy} onClick={() => onSendLink(i)}>
               Send again
+            </Button>
+          ) : null}
+          {/* Last step before ending an agreement: stop holding the space,
+              tell them so, and let somebody else have it until they pay. */}
+          {mode === "collections" && i.outstandingCents > 0 && !i.spaceReleasedAt ? (
+            <Button size="sm" variant="dangerSoft" icon="unlock" disabled={busy} onClick={() => onRelease(i)}>
+              Release the hold
+            </Button>
+          ) : null}
+          {i.spaceReleasedAt ? (
+            <Button size="sm" variant="secondary" icon="lock" disabled={busy} onClick={() => onRehold(i)}>
+              Hold it again
             </Button>
           ) : null}
         </span>
@@ -2201,6 +2223,88 @@ export default function AdminPage() {
     } finally {
       setLoggingIn(false);
     }
+  };
+
+  /* Open a signed-but-unpaid vendor's booth back up, or put the hold back on.
+     Deliberately NOT ending their agreement: the money is still owed and they
+     can still pay — what stops is the space being kept empty for them. */
+  const releaseSpace = async (row: InvoiceRow) => {
+    const offers = ledger?.offers || [];
+    if (offers.length === 0) {
+      toast.error("No spaces set up yet", "Add them under Applications → Spaces & waiting list first.");
+      return;
+    }
+    const pick = await dialog.choose<string>({
+      title: `Release the hold on ${row.boothLabel}?`,
+      body: (
+        <div className="stack g-3">
+          <p>
+            <b>{row.businessName}</b> owes {money(row.outstandingCents)}. The hold comes off, the space
+            goes back on the available list for the waiting list, and they&rsquo;re emailed to say so.
+            Their agreement stays, and <b>paying takes it back</b> while one is still free.
+          </p>
+          {/* Somebody who has paid something is a different conversation from
+              somebody who has paid nothing, and the difference shouldn't be
+              buried in another screen. */}
+          {row.paidCents > 0 ? (
+            <Note tone="warn" title={`They have already paid ${money(row.paidCents)}`}>
+              That&rsquo;s {money(row.paidCents)} of {money(row.chargedCents)} charged. Opening the booth up
+              doesn&rsquo;t refund it or end their agreement — but if the space goes to somebody else, you owe
+              them that money back or another space.
+            </Note>
+          ) : null}
+          {/* The invoice needs to know WHICH kind of space this is, so it can
+              close itself when the last one goes. Older agreements were
+              written before the offers existed and carry nothing. */}
+          <p className="t-sm t-muted">
+            {row.spaceKey ? "Check this is the right kind of space." : "Which kind of space is this? Older agreements don't say."}
+          </p>
+        </div>
+      ),
+      label: "Kind of space",
+      options: offers.map((o) => ({
+        value: o.key,
+        label: o.name,
+        hint: o.unlimited ? "No limit on these" : "One goes back on the apply page",
+      })),
+      defaultValue: row.spaceKey || offers[0].key,
+      confirmLabel: "Release the hold",
+    });
+    if (pick === null) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/release-space", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contractId: row.contractId, offerKey: pick }),
+      });
+      if (!ok) { toast.error("Couldn't open it back up", String(data.error || "")); return; }
+      const d = data as { emailed?: boolean; offerName?: string; spaceLeft?: number | null };
+      toast.success(
+        `${row.boothLabel} is back on offer`,
+        `${d.emailed ? `${row.businessName} has been emailed.` : "They could NOT be emailed — no address on file."}` +
+          (typeof d.spaceLeft === "number" ? ` ${plural(d.spaceLeft, d.offerName || "space")} now available.` : "")
+      );
+      await reloadLedger();
+    } finally { setBusy(false); }
+  };
+
+  const reholdSpace = async (row: InvoiceRow) => {
+    const yes = await dialog.confirm({
+      title: `Hold ${row.boothLabel} for them again?`,
+      body: <p>It comes back off the available list, so it stops being offered to the waiting list. Use this if you&rsquo;ve decided to keep holding it without payment.</p>,
+      confirmLabel: "Hold it again",
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/release-space", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contractId: row.contractId, rehold: true }),
+      });
+      if (!ok) { toast.error("Couldn't change it", String(data.error || "")); return; }
+      toast.success(`Booth ${row.boothLabel} is held again`);
+      await reloadLedger();
+    } finally { setBusy(false); }
   };
 
   const staffLogout = async () => {
@@ -6355,6 +6459,8 @@ export default function AdminPage() {
             busy={busy}
             onSendLink={(row) => sendRentLinkFor(row)}
             onReload={reloadLedger}
+            onRelease={(row) => void releaseSpace(row)}
+            onRehold={(row) => void reholdSpace(row)}
             onRecordPayment={async (row) => {
               await ledgerEntry(
                 { id: row.vendorId, businessName: row.businessName, balance: row.balanceCents },

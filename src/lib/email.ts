@@ -834,3 +834,39 @@ export async function sendNonPaymentNoticeEmail(opts: {
     </div>`;
   return send(opts.to, `Payment due by ${deadlineLabel(opts.deadline)} to keep booth ${opts.booth}`, shell(inner));
 }
+
+
+/**
+ * Their booth has gone back on the market because the invoice wasn't paid.
+ *
+ * Careful with the wording: this is NOT a termination. The agreement stands,
+ * the balance is still owed, and paying can still get the space back — but
+ * somebody else can take it in the meantime, and saying that plainly is the
+ * whole point of the email.
+ */
+export async function sendSpaceReleasedEmail(opts: {
+  to: string;
+  greetName: string;
+  booth: string;
+  spaceName: string;
+  amountCents: number;
+  token: string;
+  signer: string;
+}): Promise<boolean> {
+  const amount = `$${(opts.amountCents / 100).toFixed(2)}`;
+  const link = `${baseUrl()}/rent/${opts.token}`;
+  const kind = opts.spaceName ? opts.spaceName.toLowerCase() : "space";
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 14px;letter-spacing:-0.02em;">Your booth is no longer being held</h2>
+    <div style="text-align:left;font-size:14.5px;line-height:1.6;color:#111827;">
+      <p style="margin:0 0 12px;">Hi ${esc(opts.greetName)},</p>
+      <p style="margin:0 0 12px;">We haven&rsquo;t received your payment of <b>${amount}</b>, so we&rsquo;ve released the hold on <b>${esc(opts.booth)}</b> and it&rsquo;s being offered to vendors on our waiting list.</p>
+      <p style="margin:0 0 12px;"><b>You can still pay and take it back</b> — as long as one ${esc(kind)} is still free. The moment the last one is let, this invoice closes and we won&rsquo;t be able to take payment for it.</p>
+    </div>
+    <a href="${link}" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:15px;padding:14px 30px;border-radius:10px;text-decoration:none;margin:4px 0 16px;">Pay ${amount} and take it back</a>
+    <div style="text-align:left;font-size:14.5px;line-height:1.6;color:#111827;">
+      <p style="margin:0 0 12px;">Cash or check at the market works too. Your agreement hasn&rsquo;t been cancelled — if something has come up, reply to this email and tell us.</p>
+      <p style="margin:0;">Thank you,<br/>${esc(opts.signer)}<br/>Community Harvest</p>
+    </div>`;
+  return send(opts.to, `${opts.booth} is no longer being held \u2014 Community Harvest`, shell(inner));
+}

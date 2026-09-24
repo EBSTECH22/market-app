@@ -6,6 +6,7 @@ import { isAdmin } from "@/lib/auth";
 import { logView } from "@/lib/viewlog";
 import { pushToAdmin } from "@/lib/push";
 import { money } from "@/lib/format";
+import { payBlockFor } from "@/lib/spacehold";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,12 @@ export async function GET(req: NextRequest) {
   const dueCents = balance < 0 ? -balance : 0;
   const feeCents = Math.round((dueCents * PROCESSING_PERCENT) / 100);
 
+  /* Their booth was let go over this invoice. While one of that kind is still
+     free they can pay and take it back; once the last one goes, the page says
+     so instead of quietly taking the money. */
+  const block = await payBlockFor(contract);
+  const released = !!contract.spaceReleasedAt;
+
   /* Record that the VENDOR opened their invoice. An admin previewing it from
      the agreements panel is not a signal about the vendor, so their view is
      neither logged nor pushed — that check is the whole reason this sits here
@@ -64,6 +71,9 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     businessName: vendor.businessName, boothLabel: contract.boothLabel,
     dueCents, feeCents, totalCents: dueCents + feeCents, processingPercent: PROCESSING_PERCENT,
+    released,
+    payBlocked: block.blocked,
+    blockReason: block.blocked ? block.reason : "",
   });
 }
 
@@ -74,6 +84,11 @@ export async function POST(req: NextRequest) {
   const found = await vendorByToken(String(token || ""));
   if (!found) return NextResponse.json({ error: "Link not found." }, { status: 404 });
   const { vendor } = found;
+
+  /* Checked again here, not just on the page: the page could have been open in
+     a tab since this morning, and the last booth could have gone at lunch. */
+  const block = await payBlockFor(found.contract);
+  if (block.blocked) return NextResponse.json({ error: block.reason }, { status: 409 });
 
   const agg = await db.ledgerEntry.aggregate({ where: { vendorId: vendor.id }, _sum: { amountCents: true } });
   const balance = agg._sum.amountCents || 0;

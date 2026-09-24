@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { reholdOnPayment } from "@/lib/spacehold";
 import { stripe } from "@/lib/stripe";
 import { unlockIfRentPaid } from "@/lib/unlock";
 import { notifyRentPaid } from "@/lib/rentpaid";
@@ -83,6 +84,8 @@ export async function finalizeRentFromSession(
   // Outside the guard on purpose: if a previous attempt recorded the payment
   // but died before unlocking, this is what eventually puts it right.
   try { await unlockIfRentPaid(vendorId); } catch {}
+  // Paying while a space was still going takes one back off the list.
+  try { await reholdOnPayment(vendorId); } catch {}
 
   return { ok: true, vendorId, dueCents, feeCents, last4, newlyRecorded };
 }
