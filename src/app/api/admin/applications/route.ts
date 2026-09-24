@@ -112,6 +112,11 @@ export async function GET() {
               vendorSignedAt: contract.vendorSignedAt,
               marketSignedAt: contract.marketSignedAt,
               viewedAt: contract.viewedAt,
+              /* The hold on their space, so the application card can say it
+                 too — somebody working the applications list shouldn't have to
+                 go to the money screen to find out the booth was let go. */
+              spaceReleasedAt: contract.spaceReleasedAt,
+              spaceKey: contract.spaceKey,
               delivery,
             }
           : null,

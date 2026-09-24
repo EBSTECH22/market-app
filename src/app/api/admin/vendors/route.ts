@@ -25,7 +25,17 @@ export async function GET() {
     for (const a of apps) { if (!a.vendorId) emailMap[a.email.toLowerCase()] = a.id; }
     const signed = await db.contract.findMany({ where: { vendorSignedAt: { not: null }, marketSignedAt: { not: null } }, select: { vendorId: true } });
     const signedSet = new Set(signed.map((c) => c.vendorId));
-    return NextResponse.json({ vendors: vendors.map((v) => ({ ...v, balance: map[v.id] || 0, applicationId: appByVendor[v.id] || emailMap[v.email.toLowerCase()] || null, portalLocked: v.portalLocked, hasSignedContract: signedSet.has(v.id) })) });
+    /* Whose space is no longer being held over an unpaid invoice — shown on
+       the vendor record itself, so it can't be missed by anyone who opens the
+       vendor rather than the money screen. */
+    const releasedRows = await db.contract.findMany({
+      where: { spaceReleasedAt: { not: null } },
+      select: { vendorId: true, boothLabel: true, spaceReleasedAt: true },
+    });
+    const releasedMap = new Map<string, { boothLabel: string; at: Date | null }>(
+      releasedRows.map((c) => [c.vendorId, { boothLabel: c.boothLabel, at: c.spaceReleasedAt }] as [string, { boothLabel: string; at: Date | null }])
+    );
+    return NextResponse.json({ vendors: vendors.map((v) => ({ ...v, balance: map[v.id] || 0, applicationId: appByVendor[v.id] || emailMap[v.email.toLowerCase()] || null, portalLocked: v.portalLocked, hasSignedContract: signedSet.has(v.id), holdReleased: releasedMap.get(v.id) || null })) });
   });
 }
 

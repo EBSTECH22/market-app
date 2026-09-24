@@ -10,7 +10,7 @@ import {
 import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
 import { subscribeToPush } from "@/lib/pushclient";
-import { fmtLength, fmtSize, sqFt, bounds, footprint, type Pt } from "@/lib/floorplan";
+import { fmtLength, fmtSize, sqFt, bounds, centreOf, type Pt } from "@/lib/floorplan";
 
 type BoothSpot = {
   id: string; label: string; roomName: string;
@@ -34,7 +34,7 @@ function BoothMap({ spots }: { spots: BoothSpot[] }) {
         const poly = s.polygon || [];
         const pad = 24;
         const b = bounds(poly.length >= 3 ? poly : [{ x: s.xIn, y: s.yIn }, { x: s.xIn + s.widthIn, y: s.yIn + s.depthIn }]);
-        const f = footprint(s);
+        const c = centreOf(s);
         return (
           <Card
             key={s.id}
@@ -55,12 +55,13 @@ function BoothMap({ spots }: { spots: BoothSpot[] }) {
                   />
                 ) : null}
                 {s.others.map((o) => {
-                  const of_ = footprint(o);
+                  const oc = centreOf(o);
                   /* Aisles drawn as aisles, so a vendor can see which side of
                      their booth people walk past. */
                   const aisle = o.kind === "WALKWAY";
                   return (
-                    <rect key={o.id} x={o.xIn} y={o.yIn} width={of_.w} height={of_.h}
+                    <rect key={o.id} x={o.xIn} y={o.yIn} width={o.widthIn} height={o.depthIn}
+                      transform={`rotate(${o.rotationDeg || 0} ${oc.x} ${oc.y})`}
                       fill={aisle ? "var(--info-soft)" : "var(--bg-sunken)"}
                       opacity={aisle ? 0.5 : 1}
                       stroke={aisle ? "var(--info)" : "var(--border-strong)"}
@@ -68,10 +69,11 @@ function BoothMap({ spots }: { spots: BoothSpot[] }) {
                       strokeWidth="1" rx="2" />
                   );
                 })}
-                <rect x={s.xIn} y={s.yIn} width={f.w} height={f.h}
+                <rect x={s.xIn} y={s.yIn} width={s.widthIn} height={s.depthIn}
+                  transform={`rotate(${s.rotationDeg || 0} ${c.x} ${c.y})`}
                   fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth="3" rx="2" />
                 <text
-                  x={s.xIn + f.w / 2} y={s.yIn + f.h / 2}
+                  x={c.x} y={c.y}
                   textAnchor="middle" dominantBaseline="middle"
                   style={{ fontSize: 10, fontWeight: 700, fill: "var(--accent-text)" }}
                 >
@@ -95,6 +97,8 @@ type Ledger = { id: string; type: string; amountCents: number; note: string; cre
 type Me = {
   vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
+  /** Set when the market let go of the hold on their space over an unpaid invoice. */
+  hold?: { boothLabel: string; releasedAt: string; blocked: boolean; reason?: string } | null;
 };
 type Thread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; last: { sender: string; body: string } | null };
 type OpenThread = { id: string; type: string; status: string; customerName: string; email: string; phone: string; messages: { id: string; sender: string; body: string; createdAt: string }[] };
@@ -2442,7 +2446,21 @@ export default function VendorDashboard() {
                 </div>
               </Card>
 
-              {me.balance < 0 ? (
+              {/* The vendor is the first person who should know their space
+                  isn't being held, not the last. Sits above the pay card, and
+                  says whether paying still gets it back. */}
+              {me.hold ? (
+                <Note
+                  tone={me.hold.blocked ? "error" : "warn"}
+                  title={me.hold.blocked ? `Booth ${me.hold.boothLabel} has been taken` : `Booth ${me.hold.boothLabel} is no longer being held`}
+                >
+                  {me.hold.blocked
+                    ? `${me.hold.reason || "That space has been let to another vendor."} Please get in touch with the market.`
+                    : "Your space went back on offer to our waiting list because this invoice is unpaid. Paying takes it back while one is still free — once the last one is let, this closes."}
+                </Note>
+              ) : null}
+
+              {me.balance < 0 && !me.hold?.blocked ? (
                 <Card
                   title={`Rent due: ${money(Math.abs(me.balance))}`}
                   subtitle="Your sales pay this down automatically too."

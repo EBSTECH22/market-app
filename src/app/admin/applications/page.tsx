@@ -35,8 +35,22 @@ type Agreement = {
   vendorSignedAt: string | null;
   marketSignedAt: string | null;
   viewedAt: string | null;
+  /** Set when the hold on their space was released over an unpaid invoice. */
+  spaceReleasedAt?: string | null;
+  spaceKey?: string;
   delivery: Delivery | null;
 };
+
+/** One line, used wherever this applicant appears, so it reads the same everywhere. */
+function HoldReleasedNote({ ag }: { ag: Agreement | null }) {
+  if (!ag?.spaceReleasedAt) return null;
+  return (
+    <Note tone="error" title={`Hold released on ${ag.boothLabel} — ${fmtDate(ag.spaceReleasedAt)}`}>
+      Their space went back on offer to the waiting list over the unpaid invoice. They can still pay and
+      take it back while one is free; once the last one is let, their invoice closes.
+    </Note>
+  );
+}
 
 type Vendor = { id: string; code: string; businessName: string; active: boolean };
 
@@ -735,12 +749,15 @@ export default function ApplicationsPage() {
               </span>
             ) : null}
             {/* Agreement delivery first — it's the thing that stalls. */}
+            {a.agreement?.spaceReleasedAt ? <Badge tone="danger" icon="alert">Hold released</Badge> : null}
             <DeliveryBadges delivery={a.agreement?.delivery ?? null} />
             {a.stage === "CONTRACT" ? null : <Badge tone={sb.tone} dot>{sb.label}</Badge>}
           </>
         }
       >
         <div className="stack g-4">
+          <HoldReleasedNote ag={a.agreement} />
+
           <div className="stack g-1">
             <a className="row g-2 t-sm" href={`mailto:${a.email}`} style={{ minHeight: 32 }}>
               <Icon name="mail" size={14} />
@@ -942,12 +959,15 @@ export default function ApplicationsPage() {
         }
         actions={
           <>
+            {ag?.spaceReleasedAt ? <Badge tone="danger" icon="alert">Hold released</Badge> : null}
             <DeliveryBadges delivery={del} />
             {a.vendor ? <Badge tone="neutral" dot>{a.vendor.code}</Badge> : null}
           </>
         }
       >
         <div className="stack g-4">
+          <HoldReleasedNote ag={ag} />
+
           <Note tone={del?.stale ? "warn" : "info"} title={a.nextStep}>
             {waitingText(a)}
             {a.owesCents > 0 ? ` They owe ${money(a.owesCents)}.` : ""}

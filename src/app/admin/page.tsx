@@ -20,7 +20,7 @@ import { auditLabel, actorLabel } from "@/lib/auditkinds";
 import { newSaleKey } from "@/lib/offline";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string };
@@ -72,7 +72,7 @@ function DeliveryCell({ d }: { d: Delivery | undefined }) {
   );
 }
 
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean } };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean }; spaceReleasedAt?: string | null; spaceKey?: string };
 
 /** One recorded open of a vendor's invoice — /api/admin/contracts/{id}/views. */
 type InvoiceView = { id: string; viewedAt: string; userAgent: string | null };
@@ -7210,6 +7210,8 @@ export default function AdminPage() {
                       <Badge tone="neutral" dot>Deactivated</Badge>
                     ) : v.portalLocked ? (
                       <Badge tone="warn" dot>Onboarding</Badge>
+                    ) : v.holdReleased ? (
+                      <Badge tone="danger" icon="alert">Hold released</Badge>
                     ) : (
                       <Badge tone="success" dot>Active</Badge>
                     ),
@@ -7260,10 +7262,21 @@ export default function AdminPage() {
                   <div className="row wrap g-2">
                     {v.active ? <Badge tone="success" dot>Active</Badge> : <Badge tone="neutral" dot>Deactivated</Badge>}
                     {v.portalLocked ? <Badge tone="warn" dot>Onboarding</Badge> : null}
+                    {v.holdReleased ? <Badge tone="danger" icon="alert">Hold released</Badge> : null}
                     <Badge tone={v.allowSelfCheckout ? "info" : "neutral"} dot>
                       {v.allowSelfCheckout ? "Self-checkout on" : "Self-checkout off"}
                     </Badge>
                   </div>
+
+                  {v.holdReleased ? (
+                    <Note
+                      tone="error"
+                      title={`Hold released on ${v.holdReleased.boothLabel}${v.holdReleased.at ? ` — ${fmtDate(v.holdReleased.at)}` : ""}`}
+                    >
+                      Their space is back on offer to the waiting list over an unpaid invoice. Paying takes it
+                      back while one is free; once the last one is let, their invoice closes.
+                    </Note>
+                  ) : null}
 
                   {v.portalLocked ? (
                     <Note tone="warn" title="Their portal is locked until onboarding finishes">
@@ -8939,7 +8952,12 @@ export default function AdminPage() {
                   key: "status",
                   header: "Status",
                   sortBy: (c) => c.status,
-                  cell: (c) => <ContractStatusBadge status={c.status} endDate={c.endDate} />,
+                  cell: (c) => (
+                    <span className="row wrap g-2">
+                      <ContractStatusBadge status={c.status} endDate={c.endDate} />
+                      {c.spaceReleasedAt ? <Badge tone="danger" icon="alert">Hold released</Badge> : null}
+                    </span>
+                  ),
                 },
               ]}
               rowKey={(c) => c.id}
@@ -9006,6 +9024,13 @@ export default function AdminPage() {
                 }
               >
                 <div className="stack g-5">
+                  {c.spaceReleasedAt ? (
+                    <Note tone="error" title={`Hold released ${fmtDate(c.spaceReleasedAt)}`}>
+                      Booth {c.boothLabel} went back on offer to the waiting list over the unpaid invoice.
+                      They can still pay and take it back while one is free — once the last one is let,
+                      their invoice closes. The agreement itself still stands.
+                    </Note>
+                  ) : null}
                   <div className="row wrap g-2">
                     <ContractStatusBadge status={c.status} endDate={c.endDate} />
                     {c.vendorSignedAt && c.marketSignedAt ? (
