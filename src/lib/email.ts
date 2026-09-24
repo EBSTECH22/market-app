@@ -317,11 +317,31 @@ export async function sendPreorderPaidEmail(
   await send(to, `Paid ✓ — your pre-order with ${vendorName}`, shell(inner));
 }
 
-export async function sendApplicationReceivedEmail(to: string, contactName: string, businessName: string) {
+export async function sendApplicationReceivedEmail(
+  to: string,
+  contactName: string,
+  businessName: string,
+  space?: { spaceName?: string; terms?: string; waitlistPosition?: number }
+) {
+  const pos = space?.waitlistPosition || 0;
+  const what = space?.spaceName
+    ? `<p style="font-size:14px;color:#374151;">You asked about <b>${space.spaceName}</b>${space.terms ? ` &mdash; ${space.terms}` : ""}.</p>`
+    : "";
+  /* Told plainly, and told now. Somebody who finds out weeks later that they
+     were on a list the whole time is right to be annoyed. */
+  const queue = pos > 0
+    ? `<p style="font-size:14px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;text-align:left;">That one is full at the moment, so you&rsquo;re on the <b>waiting list at number ${pos}</b>. We work down the list in the order applications arrive, and we&rsquo;ll be in touch the moment a space frees up.</p>`
+    : `<p style="font-size:14px;color:#6b7280;">We review every application personally and you&rsquo;ll hear back from us soon.</p>`;
   const inner = `
-    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Application received ✅</h2>
-    <p style="font-size:14px;color:#6b7280;">Hi ${contactName} &mdash; we got your vendor application for <b>${businessName}</b>. We review every application personally and you&rsquo;ll hear back from us soon.</p>`;
-  await send(to, "We got your vendor application — Community Harvest", shell(inner));
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">${pos > 0 ? "You&rsquo;re on the list" : "Application received ✅"}</h2>
+    <p style="font-size:14px;color:#6b7280;">Hi ${esc(contactName)} &mdash; we got your vendor application for <b>${esc(businessName)}</b>.</p>
+    ${what}
+    ${queue}`;
+  await send(
+    to,
+    pos > 0 ? "You're on the waiting list — Community Harvest" : "We got your vendor application — Community Harvest",
+    shell(inner)
+  );
 }
 
 export async function sendApplicationDecisionEmail(to: string, contactName: string, businessName: string, accepted: boolean, reason: string) {

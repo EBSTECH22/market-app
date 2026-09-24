@@ -60,6 +60,25 @@ export async function GET() {
       : [];
     const balMap = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));
 
+    /* Where each waiting-list application sits in its queue: oldest first,
+       counted per space. Worked out here so the list can show "3rd for a 5×5"
+       without the screen doing arithmetic on a partial list. */
+    const waitPos = new Map<string, number>();
+    const byKey = new Map<string, typeof applications>();
+    for (const a of applications) {
+      if (a.status !== "WAITLIST") continue;
+      byKey.set(a.spaceKey, [...(byKey.get(a.spaceKey) || []), a]);
+    }
+    for (const [, list] of byKey) {
+      [...list]
+        .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime())
+        .forEach((a, i) => waitPos.set(a.id, i + 1));
+    }
+
+    const offerNames = new Map<string, string>(
+      (await db.spaceOffer.findMany({ select: { key: true, name: true } })).map((o) => [o.key, o.name] as [string, string])
+    );
+
     const rows = applications.map((a) => {
       const vendor = (a.vendorId ? vById.get(a.vendorId) : null) ?? vByEmail.get(a.email.toLowerCase()) ?? null;
       const contract = vendor ? contracts.find((c) => c.vendorId === vendor.id) ?? null : null;
@@ -77,6 +96,8 @@ export async function GET() {
 
       return {
         ...a,
+        spaceName: offerNames.get(a.spaceKey) || "",
+        waitPosition: waitPos.get(a.id) || 0,
         vendor: vendor ? { id: vendor.id, code: vendor.code, businessName: vendor.businessName, active: vendor.active } : null,
         agreement: contract
           ? {

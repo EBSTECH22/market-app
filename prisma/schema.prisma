@@ -395,6 +395,35 @@ model PreOrder {
   paidAt          DateTime?
 }
 
+/// What the market has to let, and on what terms.
+///
+/// Rows, not hard-coded options, because what is on offer changes with the
+/// building: booths sell out, a shelf programme starts, a size stops being
+/// offered. The apply page reads these, so the public page and the office can
+/// never disagree about price or availability — which is what happens the
+/// moment a price lives in two places.
+model SpaceOffer {
+  id                String  @id @default(cuid())
+  /// Stable name the application stores, so renaming the offer doesn't orphan
+  /// applications: BOOTH_5X5 | SMALL_DISPLAY | MARKET_SPACE.
+  key               String  @unique
+  name              String
+  blurb             String  @default("")
+  /// Monthly price. With priceMaxCents set, the two read as a range.
+  priceCents        Int     @default(0)
+  priceMaxCents     Int     @default(0)
+  /// Taken off their sales. Only Market Space charges one today.
+  commissionPercent Float   @default(0)
+  /// How many are left to let. -1 means no limit (shelf space, not booths).
+  available         Int     @default(0)
+  /// Applications go to the waiting list whatever the count says.
+  waitlistOnly      Boolean @default(false)
+  active            Boolean @default(true)
+  sortOrder         Int     @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
 model VendorApplication {
   id           String    @id @default(cuid())
   businessName String
@@ -417,6 +446,8 @@ model VendorApplication {
   decidedAt    DateTime?
   adminNotes String @default("")
   stage      String @default("NEW")
+  /// Which SpaceOffer they applied for (its `key`), empty for older rows.
+  spaceKey   String @default("")
   viewingAt  String @default("")
   vendorId   String @default("")
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendApplicationReceivedEmail } from "@/lib/email";
 import { pushToAdmin } from "@/lib/push";
+import { waitlisted, termsLabel } from "@/lib/spaces";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,15 @@ export async function POST(req: NextRequest) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return NextResponse.json({ error: "A real email is needed." }, { status: 400 });
   if (phone.replace(/\D/g, "").length < 10) return NextResponse.json({ error: "A phone number is needed — we call accepted vendors." }, { status: 400 });
 
-  await db.vendorApplication.create({
+  /* Which space they asked for, and whether that one is taking names rather
+     than bookings. Read from the table at the moment they apply — a booth that
+     went this morning must not be promised this afternoon. Applying is never
+     refused: a full offer puts them on the waiting list instead. */
+  const spaceKey = String(b.spaceKey || "").trim().slice(0, 40).toUpperCase();
+  const offer = spaceKey ? await db.spaceOffer.findFirst({ where: { key: spaceKey, active: true } }) : null;
+  const onWaitlist = !!offer && waitlisted(offer);
+
+  const app = await db.vendorApplication.create({
     data: {
       businessName: businessName.slice(0, 100), contactName: contactName.slice(0, 80),
       email: email.slice(0, 120), phone: phone.slice(0, 25),
@@ -28,9 +37,37 @@ export async function POST(req: NextRequest) {
       heardFrom: need(b.heardFrom).slice(0, 200),
       phoneType: ["IPHONE", "ANDROID", "OTHER"].includes(String(b.phoneType || "").toUpperCase()) ? String(b.phoneType).toUpperCase() : "",
       notes: need(b.notes).slice(0, 1000),
+      spaceKey: offer ? offer.key : "",
+      status: onWaitlist ? "WAITLIST" : "PENDING",
     },
   });
-  try { await sendApplicationReceivedEmail(email, contactName, businessName); } catch (err) { console.error("app email failed", err); }
-  try { await pushToAdmin("New vendor application 📋", `${businessName} — ${contactName}`); } catch {}
-  return NextResponse.json({ ok: true });
+
+  /* Their place in the queue: everyone waiting for the same thing who applied
+     before them, plus one. Worked out from the times rather than stored, so it
+     stays right when somebody ahead is accepted or withdraws. */
+  let position = 0;
+  if (onWaitlist && offer) {
+    position = 1 + (await db.vendorApplication.count({
+      where: { spaceKey: offer.key, status: "WAITLIST", createdAt: { lt: app.createdAt } },
+    }));
+  }
+  try {
+    await sendApplicationReceivedEmail(email, contactName, businessName, {
+      spaceName: offer ? offer.name : "",
+      terms: offer ? termsLabel(offer) : "",
+      waitlistPosition: onWaitlist ? position : 0,
+    });
+  } catch (err) { console.error("app email failed", err); }
+  try {
+    await pushToAdmin(
+      onWaitlist ? "Waiting list: new application \u23f3" : "New vendor application \ud83d\udccb",
+      `${businessName} — ${contactName}${offer ? ` · ${offer.name}` : ""}${onWaitlist ? ` · #${position} waiting` : ""}`
+    );
+  } catch {}
+  return NextResponse.json({
+    ok: true,
+    waitlisted: onWaitlist,
+    position,
+    spaceName: offer ? offer.name : "",
+  });
 }

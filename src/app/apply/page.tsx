@@ -3,12 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SponsorBanner, { type Banner } from "@/components/SponsorBanner";
 import {
-  Button, Card, Checkbox, Field, Icon, Input, LinkButton, Note, Segmented, Select, Textarea,
+  Badge, Button, Card, Checkbox, Field, Icon, Input, LinkButton, Note, Segmented, Select, Textarea,
 } from "@/components/ui";
 
 const DRAFT_KEY = "ch_apply_draft_v1";
 
-type BoothMode = "standard" | "custom" | "tent";
+/** An offer key (BOOTH_5X5, MARKET_SPACE…), or one of the two special modes. */
+type BoothMode = string;
+type Offer = {
+  key: string; name: string; blurb: string;
+  priceCents: number; priceMaxCents: number; commissionPercent: number;
+  left: number | null; waitlist: boolean; availability: string; terms: string;
+};
 type Errors = Partial<Record<string, string>>;
 
 /** Section ids double as anchor targets and progress steps. */
@@ -32,7 +38,9 @@ export default function ApplyPage() {
   const [f, setF] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<Banner | null>(null);
   const [rate, setRate] = useState(6);
+  const [offers, setOffers] = useState<Offer[]>([]);
   const [boothMode, setBoothMode] = useState<BoothMode>("standard");
+  const [waitInfo, setWaitInfo] = useState<{ position: number; spaceName: string } | null>(null);
   const [bw, setBw] = useState("5");
   const [bd, setBd] = useState("5");
   const [hffaAck, setHffaAck] = useState(false);
@@ -60,6 +68,15 @@ export default function ApplyPage() {
   useEffect(() => {
     fetch("/api/public/banner").then(async (r) => { if (r.ok) setBanner((await r.json()).banner); }).catch(() => {});
     fetch("/api/public/rates").then(async (r) => { if (r.ok) setRate((await r.json()).rentPerSqft || 6); }).catch(() => {});
+    /* What's actually on offer, with live counts. Picks the first one for them
+       so the form is never in a state nobody chose. */
+    fetch("/api/public/spaces")
+      .then(async (r) => (r.ok ? ((await r.json()).offers as Offer[]) : []))
+      .then((list) => {
+        setOffers(list || []);
+        setBoothMode((cur) => (cur === "standard" && list?.length ? list[0].key : cur));
+      })
+      .catch(() => {});
   }, []);
 
   /* --------------------------------------------------- draft restore/save -- */
@@ -75,7 +92,7 @@ export default function ApplyPage() {
         };
         if (d && typeof d === "object") {
           if (d.f && typeof d.f === "object") setF(d.f);
-          if (d.boothMode === "standard" || d.boothMode === "custom" || d.boothMode === "tent") setBoothMode(d.boothMode);
+          if (typeof d.boothMode === "string" && d.boothMode) setBoothMode(d.boothMode);
           if (typeof d.bw === "string") setBw(d.bw);
           if (typeof d.bd === "string") setBd(d.bd);
           if (typeof d.hffaAck === "boolean") setHffaAck(d.hffaAck);
@@ -117,11 +134,20 @@ export default function ApplyPage() {
   const sqft = Math.max(0, (Number(bw) || 0) * (Number(bd) || 0));
   const customRent = Math.round(sqft * rate * 100) / 100;
   const standardRent = Math.round(25 * rate * 100) / 100;
-  const boothRequest = boothMode === "standard"
-    ? `Standard 5×5 — $${standardRent.toFixed(2)}/mo`
+  const chosen = offers.find((o) => o.key === boothMode) || null;
+  /* The rent on its own — the commission is named separately right beside it,
+     so repeating it inside this string would read as two charges. */
+  const priceOf = (o: Offer) =>
+    o.priceMaxCents > o.priceCents
+      ? `$${(o.priceCents / 100).toFixed(0)}–$${(o.priceMaxCents / 100).toFixed(0)}`
+      : `$${(o.priceCents / 100).toFixed(0)}`;
+  const boothRequest = chosen
+    ? `${chosen.name} — ${chosen.terms}${chosen.waitlist ? " (waiting list)" : ""}`
     : boothMode === "custom"
     ? `Custom ${bw || "?"}×${bd || "?"} (${sqft} sqft) — $${customRent.toFixed(2)}/mo`
-    : "Outdoor tent — daily rate";
+    : boothMode === "tent"
+    ? "Outdoor tent — daily rate"
+    : `Standard 5×5 — $${standardRent.toFixed(2)}/mo`;
 
   const isFood = !!f.foodStatus && f.foodStatus !== "Not a food vendor";
 
@@ -205,12 +231,13 @@ export default function ApplyPage() {
       : "";
     const res = await fetch("/api/public/apply", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...f, licenses, boothRequest, website: "" }),
+      body: JSON.stringify({ ...f, licenses, boothRequest, spaceKey: chosen?.key || "", website: "" }),
     });
     const data = await res.json();
     setBusy(false);
     if (!res.ok) { setMsg(data.error || "Couldn't submit — check the required fields."); return; }
     clearDraft();
+    if (data.waitlisted) setWaitInfo({ position: Number(data.position) || 0, spaceName: String(data.spaceName || "") });
     setSent(true);
   };
 
@@ -222,10 +249,21 @@ export default function ApplyPage() {
         <div className="hero">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" style={{ width: 120, margin: "0 auto var(--sp-3)", display: "block" }} />
-          <h1 className="hero-title">Application sent</h1>
+          <h1 className="hero-title">{waitInfo ? "You're on the waiting list" : "Application sent"}</h1>
           <p className="hero-sub">
-            Thanks{f.contactName ? `, ${f.contactName.trim().split(/\s+/)[0]}` : ""} — we read every application ourselves,
-            and we reply to all of them either way.
+            {waitInfo ? (
+              <>
+                Thanks{f.contactName ? `, ${f.contactName.trim().split(/\s+/)[0]}` : ""} —{" "}
+                {waitInfo.spaceName || "that space"} is full right now, so you&rsquo;re
+                {waitInfo.position > 0 ? <> <b>number {waitInfo.position}</b> on the list</> : " on the list"}.
+                We work down it in the order applications arrive.
+              </>
+            ) : (
+              <>
+                Thanks{f.contactName ? `, ${f.contactName.trim().split(/\s+/)[0]}` : ""} — we read every application ourselves,
+                and we reply to all of them either way.
+              </>
+            )}
           </p>
         </div>
 
@@ -509,22 +547,71 @@ export default function ApplyPage() {
 
         {/* ----------------------------------------------------- booth size -- */}
         <div id="booth" style={{ scrollMarginTop: "calc(var(--topbar-h) + 150px)" }}>
-          <Card title="Booth size" subtitle={`Priced by the square foot — $${rate}/sqft per month.`} className="mb-4">
+          <Card title="What you're applying for" subtitle="What's open right now, and what it costs." className="mb-4">
             <div className="stack g-4">
               <p className="t-sm t-secondary" style={{ margin: 0 }}>
-                Pick the standard or tell us what you need — final size and spot get settled on the call.
+                Pick what suits you — the final size and spot get settled on the call.
               </p>
 
+              {/* Cards, not a segmented control: each option now carries a
+                  price, what it includes, and how many are left, and none of
+                  that fits in a tab. */}
+              <div className="grid-auto" style={{ ["--min" as string]: "230px" }}>
+                {offers.map((o) => {
+                  const picked = boothMode === o.key;
+                  return (
+                    <button
+                      key={o.key}
+                      type="button"
+                      aria-pressed={picked}
+                      onClick={() => { setBoothMode(o.key); setErrors((e) => ({ ...e, bw: undefined, bd: undefined })); }}
+                      className="stack g-2"
+                      style={{
+                        textAlign: "left", cursor: "pointer", padding: "var(--sp-4)",
+                        borderRadius: "var(--r-lg)", background: picked ? "var(--accent-soft)" : "var(--surface)",
+                        border: `2px solid ${picked ? "var(--accent)" : "var(--border)"}`,
+                      }}
+                    >
+                      <span className="row between g-2" style={{ alignItems: "flex-start" }}>
+                        <b className="t-body">{o.name}</b>
+                        {o.waitlist
+                          ? <Badge tone="warn">Waiting list</Badge>
+                          : o.left === null
+                            ? <Badge tone="success" dot>Available</Badge>
+                            : <Badge tone="success" dot>{o.left} left</Badge>}
+                      </span>
+                      <span className="t-sm" style={{ fontWeight: 600 }}>{o.terms}</span>
+                      {o.blurb ? <span className="t-xs t-muted">{o.blurb}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
               <Segmented<BoothMode>
-                label="Booth type"
-                value={boothMode}
-                onChange={(v) => { setBoothMode(v); setErrors((e) => ({ ...e, bw: undefined, bd: undefined })); }}
+                label="Or something else"
+                value={boothMode === "custom" || boothMode === "tent" ? boothMode : ""}
+                onChange={(v) => { if (v) { setBoothMode(v); setErrors((e) => ({ ...e, bw: undefined, bd: undefined })); } }}
                 options={[
-                  { value: "standard", label: `Standard 5×5 — $${standardRent.toFixed(0)}/mo` },
+                  { value: "", label: "One of the above" },
                   { value: "custom", label: "Custom size" },
                   { value: "tent", label: "Outdoor tent — daily" },
                 ]}
               />
+
+              {/* Said before they fill the form in, not after they send it. */}
+              {chosen?.waitlist ? (
+                <Note tone="warn" title={`${chosen.name} is full right now`}>
+                  You can still apply — your application goes on the <b>waiting list in the order it arrives</b>,
+                  and we work down the list as spaces free up. We&rsquo;ll email you your place on the list.
+                </Note>
+              ) : null}
+              {chosen && chosen.commissionPercent > 0 ? (
+                <Note tone="info" title="How market space works">
+                  Your items go on our shelves and sell through our register — no booth of your own to set up or man.
+                  It&rsquo;s {priceOf(chosen)} a month plus <b>{chosen.commissionPercent}% commission</b> on what sells;
+                  the rest is paid out to you.
+                </Note>
+              ) : null}
 
               {boothMode === "tent" && (
                 <Note tone="info" title="Outdoor tent spots — how they work">

@@ -53,6 +53,9 @@ type App = {
   phase: Phase;
   /** Already computed server-side. Display it; never re-derive it here. */
   nextStep: string;
+  /** Which space they applied for, and their place in that queue (0 = not waiting). */
+  spaceName?: string;
+  waitPosition?: number;
 };
 
 type Counts = Record<Phase, number>;
@@ -115,10 +118,171 @@ function DeliveryBadges({ delivery }: { delivery: Delivery | null }) {
   );
 }
 
-const statusTone = (s: string): BadgeTone =>
-  s === "ACCEPTED" ? "success" : s === "DECLINED" ? "danger" : "neutral";
+/* ------------------------------------------------ spaces & waiting list -- */
 
-const statusLabel = (s: string) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : "—");
+type OfferRow = {
+  id: string; key: string; name: string; blurb: string;
+  priceCents: number; priceMaxCents: number; commissionPercent: number;
+  available: number; waitlistOnly: boolean; active: boolean;
+  waitlist: boolean; availability: string; terms: string; waitingCount: number;
+};
+
+/**
+ * What the apply page offers, and how many are left.
+ *
+ * Lives here rather than in Settings because it is the same conversation as
+ * the applications underneath it: a booth frees up, you change the number, and
+ * the next person on the list gets a call. Editing a count or flicking
+ * "waiting list only" changes the public page immediately.
+ */
+function SpacesCard() {
+  const toast = useToast();
+  const [offers, setOffers] = useState<OfferRow[]>([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const r = await fetch("/api/admin/spaces");
+    if (r.ok) setOffers((await r.json()).offers || []);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const patch = async (id: string, body: Record<string, unknown>, okMsg: string) => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/spaces", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, ...body }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't save that", String(d.error || "")); return; }
+      toast.success(okMsg);
+      await load();
+    } finally { setBusy(false); }
+  };
+
+  const dollars = (cents: number) => (cents / 100).toFixed(2).replace(/\.00$/, "");
+
+  return (
+    <Card
+      title="Spaces &amp; waiting list"
+      subtitle="What the apply page offers, what it costs, and how many are left."
+      actions={
+        <Button size="sm" variant="ghost" icon={open ? "chevronUp" : "chevronDown"} onClick={() => setOpen((v) => !v)}>
+          {open ? "Done" : "Edit"}
+        </Button>
+      }
+    >
+      <div className="stack g-3">
+        {offers.length === 0 ? (
+          <span className="t-sm t-muted">Loading…</span>
+        ) : null}
+
+        {offers.map((o) => (
+          <div key={o.id} className="stack g-2" style={{ paddingBottom: open ? "var(--sp-3)" : 0, borderBottom: open ? "1px solid var(--border)" : "none" }}>
+            <div className="row between wrap g-2" style={{ alignItems: "center" }}>
+              <span className="stack g-1" style={{ minWidth: 0 }}>
+                <span className="row g-2 wrap" style={{ alignItems: "center" }}>
+                  <b>{o.name}</b>
+                  {!o.active ? <Badge tone="neutral">Hidden</Badge>
+                    : o.waitlist ? <Badge tone="warn">Waiting list</Badge>
+                    : <Badge tone="success" dot>{o.availability}</Badge>}
+                  {o.waitingCount > 0 ? (
+                    <Badge tone="info">{plural(o.waitingCount, "person")} waiting</Badge>
+                  ) : null}
+                </span>
+                <span className="t-xs t-muted">{o.terms}</span>
+              </span>
+
+              {!open ? null : (
+                <div className="row wrap g-2">
+                  <Button
+                    size="sm"
+                    variant={o.waitlistOnly ? "primary" : "secondary"}
+                    disabled={busy}
+                    onClick={() => void patch(o.id, { waitlistOnly: !o.waitlistOnly }, o.waitlistOnly ? `${o.name} is open again` : `${o.name} is waiting list only`)}
+                  >
+                    {o.waitlistOnly ? "Waiting list only" : "Put on waiting list"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void patch(o.id, { active: !o.active }, o.active ? `${o.name} hidden` : `${o.name} shown`)}
+                  >
+                    {o.active ? "Hide" : "Show"}
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {open ? (
+              <div className="row wrap g-3" style={{ alignItems: "flex-end" }}>
+                <Field label="Name">
+                  {(p) => (
+                    <Input {...p} key={`n${o.id}${o.name}`} defaultValue={o.name} style={{ width: 170 }}
+                      onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== o.name) void patch(o.id, { name: v }, "Name saved"); }} />
+                  )}
+                </Field>
+                <Field label="Price / month" hint="Leave the second box empty unless it's a range">
+                  {(p) => (
+                    <MoneyInput {...p} key={`p${o.id}${o.priceCents}`} defaultValue={dollars(o.priceCents)} style={{ width: 110 }}
+                      onBlur={(e) => {
+                        const cents = Math.round(Number(String(e.target.value).replace(/[^0-9.]/g, "")) * 100);
+                        if (Number.isFinite(cents) && cents !== o.priceCents) void patch(o.id, { priceCents: cents }, "Price saved");
+                      }} />
+                  )}
+                </Field>
+                <Field label="Up to">
+                  {(p) => (
+                    <MoneyInput {...p} key={`pm${o.id}${o.priceMaxCents}`} defaultValue={o.priceMaxCents ? dollars(o.priceMaxCents) : ""} style={{ width: 110 }}
+                      onBlur={(e) => {
+                        const raw = String(e.target.value).replace(/[^0-9.]/g, "");
+                        const cents = raw ? Math.round(Number(raw) * 100) : 0;
+                        if (Number.isFinite(cents) && cents !== o.priceMaxCents) void patch(o.id, { priceMaxCents: cents }, "Price range saved");
+                      }} />
+                  )}
+                </Field>
+                <Field label="Commission %">
+                  {(p) => (
+                    <Input {...p} key={`c${o.id}${o.commissionPercent}`} type="number" min="0" max="90" step="1"
+                      defaultValue={String(o.commissionPercent)} style={{ width: 100 }}
+                      onBlur={(e) => {
+                        const pct = Number(e.target.value);
+                        if (Number.isFinite(pct) && pct !== o.commissionPercent) void patch(o.id, { commissionPercent: pct }, "Commission saved");
+                      }} />
+                  )}
+                </Field>
+                <Field label="How many left" hint="-1 for no limit">
+                  {(p) => (
+                    <Input {...p} key={`a${o.id}${o.available}`} type="number" min="-1" step="1"
+                      defaultValue={String(o.available)} style={{ width: 110 }}
+                      onBlur={(e) => {
+                        const n = Math.round(Number(e.target.value));
+                        if (Number.isFinite(n) && n !== o.available) void patch(o.id, { available: n }, "Availability saved");
+                      }} />
+                  )}
+                </Field>
+              </div>
+            ) : null}
+          </div>
+        ))}
+
+        {open ? (
+          <span className="t-xs t-muted">
+            Anything on the waiting list still takes applications — they queue in the order they arrive, and
+            you&rsquo;ll see the queue position on each one below.
+          </span>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+const statusTone = (s: string): BadgeTone =>
+  s === "ACCEPTED" ? "success" : s === "DECLINED" ? "danger" : s === "WAITLIST" ? "warn" : "neutral";
+
+const statusLabel = (s: string) => (s === "WAITLIST" ? "Waiting list" : s ? s.charAt(0) + s.slice(1).toLowerCase() : "—");
 
 /* ------------------------------------------------------ contact actions -- */
 
@@ -590,6 +754,18 @@ export default function ApplicationsPage() {
             <span className="row g-2 t-sm t-muted" style={{ minHeight: 32 }}>
               <Icon name="clock" size={14} />Applied {fmtDate(a.createdAt)}
             </span>
+            {/* What they asked for, and where they sit in that queue — the two
+                things you need before picking up the phone. */}
+            {a.spaceName || a.waitPosition ? (
+              <span className="row g-2 wrap" style={{ minHeight: 32, alignItems: "center" }}>
+                {a.spaceName ? <Badge tone="neutral">{a.spaceName}</Badge> : null}
+                {a.waitPosition ? (
+                  <Badge tone="warn" icon="clock">
+                    #{a.waitPosition} on the waiting list
+                  </Badge>
+                ) : null}
+              </span>
+            ) : null}
           </div>
 
           <div className="row wrap g-2">
@@ -895,6 +1071,8 @@ export default function ApplicationsPage() {
         </div>
       ) : (
         <div className="stack g-4">
+          <SpacesCard />
+
           <Segmented
             value={phase}
             onChange={setPhase}
