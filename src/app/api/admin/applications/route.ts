@@ -129,6 +129,7 @@ export async function GET() {
 
     const counts = {
       NEW: rows.filter((r) => r.phase === "NEW").length,
+      WAITLIST: rows.filter((r) => r.phase === "WAITLIST").length,
       IN_PROGRESS: rows.filter((r) => r.phase === "IN_PROGRESS").length,
       LIVE: rows.filter((r) => r.phase === "LIVE").length,
       WITHDRAWN: rows.filter((r) => r.phase === "WITHDRAWN").length,

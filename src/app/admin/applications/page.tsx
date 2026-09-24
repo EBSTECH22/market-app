@@ -73,15 +73,16 @@ type App = {
 };
 
 type Counts = Record<Phase, number>;
-const ZERO_COUNTS: Counts = { NEW: 0, IN_PROGRESS: 0, LIVE: 0, WITHDRAWN: 0, DECLINED: 0 };
+const ZERO_COUNTS: Counts = { NEW: 0, WAITLIST: 0, IN_PROGRESS: 0, LIVE: 0, WITHDRAWN: 0, DECLINED: 0 };
 
 /* Backed out sits between the people who are selling and the people we turned
    down, because that's what it is: someone we said yes to who said no. */
-const PHASES: Phase[] = ["NEW", "IN_PROGRESS", "LIVE", "WITHDRAWN", "DECLINED"];
+const PHASES: Phase[] = ["NEW", "WAITLIST", "IN_PROGRESS", "LIVE", "WITHDRAWN", "DECLINED"];
 
 /** Short enough to sit in a segmented control on a phone. */
 const PHASE_SHORT: Record<Phase, string> = {
   NEW: "New",
+  WAITLIST: "Waiting list",
   IN_PROGRESS: "In progress",
   LIVE: "Selling",
   WITHDRAWN: "Backed out",
@@ -732,6 +733,63 @@ export default function ApplicationsPage() {
     },
   ];
 
+  /* The queue, in the order it was promised. Contact details on the row,
+     because the only thing you do from this screen is ring the next person. */
+  const waitlistColumns: Column<App>[] = [
+    {
+      key: "pos",
+      header: "#",
+      cell: (a) => <b className="num">{a.waitPosition || "—"}</b>,
+      sortBy: (a) => a.waitPosition || 0,
+    },
+    {
+      key: "business",
+      header: "Business",
+      primary: true,
+      sortBy: (a) => a.businessName,
+      cell: (a) => (
+        <span className="stack g-1">
+          <b>{a.businessName}</b>
+          <span className="t-xs t-muted">{a.contactName}</span>
+        </span>
+      ),
+    },
+    {
+      key: "applied",
+      header: "Waiting since",
+      sortBy: (a) => a.createdAt,
+      cell: (a) => (
+        <span className="stack g-1">
+          <span>{fmtDate(a.createdAt)}</span>
+          <span className="t-xs t-muted">{relTime(a.createdAt)}</span>
+        </span>
+      ),
+    },
+    {
+      key: "products",
+      header: "Sells",
+      hideBelow: 900,
+      cell: (a) => <span className="truncate" style={{ display: "block", maxWidth: 260 }}>{a.products}</span>,
+    },
+    {
+      key: "reach",
+      header: "",
+      align: "right",
+      cell: (a) => (
+        <span className="row g-2 end wrap">
+          {a.phone ? (
+            <a className="btn btn-secondary btn-sm" href={`tel:${a.phone.replace(/\D/g, "")}`}>
+              <Icon name="phone" size={14} /> Call
+            </a>
+          ) : null}
+          <a className="btn btn-ghost btn-sm" href={`mailto:${a.email}`}>
+            <Icon name="mail" size={14} /> Email
+          </a>
+        </span>
+      ),
+    },
+  ];
+
   /* ----------------------------------------------------------- new cards -- */
 
   const renderNew = (a: App) => {
@@ -1112,6 +1170,46 @@ export default function ApplicationsPage() {
               </Card>
             ) : (
               <div className="stack g-4">{rows.map(renderNew)}</div>
+            )
+          ) : null}
+
+          {/* ------------------------------------------ waiting list ---- */}
+          {phase === "WAITLIST" ? (
+            rows.length === 0 ? (
+              <Card>
+                <EmptyState
+                  icon="clock"
+                  title="Nobody is waiting"
+                  body="When a space is full, applications for it come here in the order they arrive instead of being turned away."
+                />
+              </Card>
+            ) : (
+              <div className="stack g-4">
+                {/* Grouped by what they're waiting for, oldest first inside
+                    each group — that order IS the promise made to them, so it
+                    is the order the screen shows and never a sort you picked. */}
+                {[...new Set(rows.map((a) => a.spaceName || "Space not recorded"))].map((space) => {
+                  const queue = rows
+                    .filter((a) => (a.spaceName || "Space not recorded") === space)
+                    .sort((x, y) => (x.waitPosition || 0) - (y.waitPosition || 0));
+                  return (
+                    <Card
+                      key={space}
+                      title={space}
+                      subtitle={`${plural(queue.length, "person")} waiting — first in line at the top`}
+                      flush
+                    >
+                      <DataTable
+                        rows={queue}
+                        columns={waitlistColumns}
+                        rowKey={(a) => a.id}
+                        mobileCards
+                        caption={`Waiting list for ${space}`}
+                      />
+                    </Card>
+                  );
+                })}
+              </div>
             )
           ) : null}
 

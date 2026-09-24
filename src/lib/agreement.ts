@@ -75,10 +75,11 @@ export function deliveryFor(c: {
 
 /* ------------------------------------------------------- pipeline phase --- */
 
-export type Phase = "NEW" | "IN_PROGRESS" | "LIVE" | "WITHDRAWN" | "DECLINED";
+export type Phase = "NEW" | "WAITLIST" | "IN_PROGRESS" | "LIVE" | "WITHDRAWN" | "DECLINED";
 
 export const PHASE_LABEL: Record<Phase, string> = {
   NEW: "New applications",
+  WAITLIST: "Waiting list",
   IN_PROGRESS: "Agreement in progress",
   LIVE: "Selling at the market",
   WITHDRAWN: "Backed out",
@@ -112,6 +113,11 @@ export function phaseFor(a: {
      "Declined", which said we rejected them. */
   if (a.status === "WITHDRAWN" || a.agreementStatus === "WITHDRAWN") return "WITHDRAWN";
   if (a.status === "DECLINED") return "DECLINED";
+  /* Waiting on a space rather than waiting on us. Checked before the vendor
+     checks below so somebody already taken on for a different space doesn't
+     get pulled back into the queue, and after the two exits above so a
+     withdrawal still reads as a withdrawal. */
+  if (a.status === "WAITLIST" && !a.vendorId && !a.hasAgreement) return "WAITLIST";
   if (a.vendorId && a.vendorPortalLocked === false) return "LIVE";
   if (a.vendorId || a.hasAgreement) return "IN_PROGRESS";
   return "NEW";
@@ -126,6 +132,8 @@ export function nextStepFor(
   if (phase === "WITHDRAWN") return "Backed out before starting";
   if (phase === "DECLINED") return "Declined";
   if (phase === "LIVE") return "Live at the market";
+  /* Nothing to chase — they're waiting on a space, not on us. */
+  if (phase === "WAITLIST") return "On the waiting list for a space";
   if (!delivery) return "Create their agreement";
   switch (delivery.state) {
     case "DRAFT": return "Send the agreement for signature";
