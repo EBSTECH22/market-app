@@ -7,6 +7,7 @@ import {
 } from "@/components/ui";
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
 import { ScanBurst, looksLikeProductBarcode } from "@/lib/scanner";
+import { WedgeBuffer, isTerminator, isBarcodeChar } from "@/lib/wedge";
 import { PrintAgent } from "@/components/PrintAgent";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
@@ -432,6 +433,76 @@ export default function RegisterKiosk() {
     if (who && drawer && !closing && !receipt && pay === "NONE") scanRef.current?.focus();
   }, [who, drawer, closing, receipt, pay, cart.length]);
 
+  /* ------------------------------------------------------- the whole page --
+     The scanner types into whatever has the cursor, and most of them finish
+     with Tab — which MOVES the cursor. So the first scan lands in the scan box
+     and the cursor leaves, and the next one goes into the search box, or the
+     cash box, or nowhere. Watching one input cannot fix that.
+
+     So the page watches instead. Every keystroke is collected, anywhere, and
+     judged afterwards on speed: a scanner is twenty times faster than hands,
+     so a burst that fast is a barcode no matter where it was aimed. Anything
+     slower is left completely alone, and typing behaves exactly as before.
+
+     Whatever field caught the characters gets cleared afterwards, because they
+     went in there too — that is why a scan used to leave its code sitting in
+     the search box. */
+  const wedgeRef = useRef(new WedgeBuffer());
+  /* doScan is rebuilt every render and reads the current cart and floor. The
+     listener below is installed once, so it must reach the CURRENT one — a
+     captured copy would ring up against the cart as it was when the till
+     opened. */
+  const doScanRef = useRef<(raw?: string) => Promise<void>>(async () => {});
+
+  const wedgeScan = useCallback((code: string) => {
+    /* The characters leaked into whichever box had the cursor. Tidy both, put
+       the cursor back where it belongs, and ring the item up. */
+    setScan("");
+    setSearch("");
+    burstRef.current.reset();
+    if (scanTimerRef.current) { window.clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
+    scanRef.current?.focus();
+    void doScanRef.current(code);
+  }, []);
+
+  useEffect(() => {
+    /* Only while a till is actually open and selling. Nobody wants a stray
+       keystroke ringing something up on the count-out screen. */
+    if (!who || !drawer || closing || receipt) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (isTerminator(e.key)) {
+        const code = wedgeRef.current.terminate();
+        if (code) {
+          /* Swallow the key. An unswallowed Tab is what moved the cursor into
+             the search box in the first place. */
+          e.preventDefault();
+          e.stopPropagation();
+          wedgeScan(code);
+        }
+        return;
+      }
+      if (!isBarcodeChar(e.key, e.ctrlKey, e.metaKey, e.altKey)) return;
+      wedgeRef.current.push(e.key, Date.now());
+    };
+
+    /* Capture phase, so the code is caught before any field gets to react to
+       it — including the browser's own tab-to-next-field behaviour. */
+    window.addEventListener("keydown", onKey, true);
+
+    /* For scanners set to send no finishing key: sweep for a burst that has
+       simply stopped growing. */
+    const sweep = window.setInterval(() => {
+      const code = wedgeRef.current.settle(Date.now(), 160);
+      if (code) wedgeScan(code);
+    }, 80);
+
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.clearInterval(sweep);
+    };
+  }, [who, drawer, closing, receipt, wedgeScan]);
+
   /* ------------------------------------------------------------- scanner --
      A USB barcode scanner is a keyboard as far as the tablet is concerned: it
      types the code and, USUALLY, presses something afterwards to say it's
@@ -522,6 +593,8 @@ export default function RegisterKiosk() {
       setScanErr("No connection — the item couldn't be looked up.");
     }
   };
+
+  doScanRef.current = doScan;
 
   /* -------------------------------------------------------------- drawer -- */
 
