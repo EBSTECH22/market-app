@@ -24,6 +24,10 @@ import {
   getPrinterDeviceId,
   setPrinterDeviceId,
   getPrinterLog,
+  getPrinterHost,
+  setPrinterHost,
+  getPrintMode,
+  setPrintMode,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +55,8 @@ export async function GET() {
     const deviceId = await getPrinterDeviceId();
     const log = await getPrinterLog();
     const sdpStyle = await getSdpStyle();
+    const printerHost = await getPrinterHost();
+    const printMode = await getPrintMode();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -73,7 +79,11 @@ export async function GET() {
       deviceId,
       log,
       sdpStyle,
-      configured: !!(await getPrinterKey()),
+      printerHost,
+      printMode,
+      /* Set up enough to print: an address in direct mode, a poll key in
+         collect mode. */
+      configured: printMode === "direct" ? !!printerHost : !!(await getPrinterKey()),
     });
   });
 }
@@ -196,6 +206,8 @@ export async function PATCH(req: NextRequest) {
     if (body.autoPrint !== undefined) await setAutoPrint(!!body.autoPrint);
     if (body.sdpVersion !== undefined) await setSdpVersion(String(body.sdpVersion));
     if (body.sdpStyle !== undefined) await setSdpStyle(String(body.sdpStyle));
+    if (body.printerHost !== undefined) await setPrinterHost(String(body.printerHost));
+    if (body.printMode !== undefined) await setPrintMode(String(body.printMode));
     if (body.deviceId !== undefined) await setPrinterDeviceId(String(body.deviceId));
 
     const key = await getPrinterKey();
@@ -207,6 +219,8 @@ export async function PATCH(req: NextRequest) {
       autoPrint: await getAutoPrint(),
       sdpVersion: await getSdpVersion(),
       sdpStyle: await getSdpStyle(),
+      printerHost: await getPrinterHost(),
+      printMode: await getPrintMode(),
       deviceId: await getPrinterDeviceId(),
     });
   });

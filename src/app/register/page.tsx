@@ -7,6 +7,7 @@ import {
 } from "@/components/ui";
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
 import { ScanBurst, looksLikeProductBarcode } from "@/lib/scanner";
+import { PrintAgent } from "@/components/PrintAgent";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
 import { CashTender } from "@/components/register/CashTender";
@@ -119,6 +120,10 @@ export default function RegisterKiosk() {
      talks to hardware that isn't there. */
   const [readerReady, setReaderReady] = useState(false);
   const [printerReady, setPrinterReady] = useState(false);
+  /* In direct mode this till is what actually reaches the printer, so it
+     carries the receipts itself. See components/PrintAgent. */
+  const [printDirect, setPrintDirect] = useState(false);
+  const [printTrouble, setPrintTrouble] = useState("");
   const [charge, setCharge] = useState<Charge | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
 
@@ -248,6 +253,7 @@ export default function RegisterKiosk() {
     if (typeof d.cardAdjustPercent === "number") setCardAdjustPercent(d.cardAdjustPercent);
     setReaderReady(!!d.cardReaderReady);
     setPrinterReady(!!d.printerReady);
+    setPrintDirect(d.printMode === "direct");
   }, []);
 
   /* Only ever the ready ones. A cashier has no use for an order the vendor
@@ -910,6 +916,13 @@ export default function RegisterKiosk() {
      That's why it's a sibling of the shell rather than inside it. */
   const shell = (inner: React.ReactNode) => (
     <>
+      {/* Runs wherever the till is on screen, including the lock screen and
+          the receipt screen: a receipt rung a minute ago must not wait on
+          somebody navigating back to the sell view. */}
+      <PrintAgent
+        active={printDirect && printerReady && !!who}
+        onStatus={(s) => setPrintTrouble(s.trouble)}
+      />
       <div style={{ minHeight: "100dvh", background: "var(--bg-sunken)", padding: "var(--sp-4)" }}>
         <div className="stack g-4" style={{ maxWidth: 940, margin: "0 auto" }}>{inner}</div>
       </div>
@@ -1000,6 +1013,7 @@ export default function RegisterKiosk() {
           <Badge tone="warn" dot>No drawer</Badge>
         )}
         {!online ? <Badge tone="danger" dot>Offline</Badge> : null}
+        {printTrouble ? <Badge tone="warn" dot>Printer</Badge> : null}
         {pickups.length ? (
           <Badge tone="info" dot>{plural(pickups.length, "order")} to collect</Badge>
         ) : null}

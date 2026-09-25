@@ -10,6 +10,7 @@ import {
   PageHeader, useDialog, useToast, type BadgeTone,
 } from "@/components/ui";
 import { relTime } from "@/lib/format";
+import { PrintAgent } from "@/components/PrintAgent";
 
 type Reader = {
   id: string; label: string; status: string; deviceType: string;
@@ -28,6 +29,8 @@ type PrintState = {
   lastEvent: { at: string; what: string } | null;
   lastResponse: string;
   deviceId: string;
+  printerHost: string;
+  printMode: "direct" | "collect";
   log: { at: string; what: string }[];
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
@@ -49,6 +52,7 @@ export default function TillHardware() {
   const [printerKey, setPrinterKey] = useState("");
   const [header, setHeader] = useState("");
   const [deviceId, setDeviceId] = useState("local_printer");
+  const [host, setHost] = useState("");
   const [footer, setFooter] = useState("");
 
   const loadReaders = useCallback(async () => {
@@ -77,6 +81,7 @@ export default function TillHardware() {
     const d = await r.json();
     setPrinterKey(String(d.key || ""));
     setDeviceId(String(d.deviceId || "local_printer"));
+    setHost(String(d.printerHost || ""));
     setHeader(String(d.header || ""));
     setFooter(String(d.footer || ""));
   }, []);
@@ -167,7 +172,6 @@ export default function TillHardware() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { toast.error("Couldn't do that", String(d.error || "")); return; }
       setPrinterKey(String(d.key || ""));
-    setDeviceId(String(d.deviceId || "local_printer"));
       toast.success("Address made", "Type it into the printer next.");
       await loadPrint();
     } finally { setBusy(false); }
@@ -182,6 +186,21 @@ export default function TillHardware() {
       });
       if (!r.ok) { toast.error("Couldn't save that"); return; }
       toast.success("Receipt wording saved");
+    } finally { setBusy(false); }
+  };
+
+  const saveHost = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ printerHost: host, printMode: "direct" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't save that", String(d.error || "")); return; }
+      setHost(String(d.printerHost || ""));
+      await loadPrint();
+      toast.success("Saved", "Now open the printer once to trust it, then print a test.");
     } finally { setBusy(false); }
   };
 
@@ -297,6 +316,9 @@ export default function TillHardware() {
 
   return (
     <main className="content content-narrow">
+      {/* So the test buttons on this page actually print when this device is
+          the one on the market wifi. */}
+      <PrintAgent active={print?.printMode === "direct" && !!print?.printerHost} />
       <div className="mb-3">
         <LinkButton href="/admin" variant="ghost" size="sm" icon="arrowLeft">Admin</LinkButton>
       </div>
@@ -374,9 +396,41 @@ export default function TillHardware() {
           }
         >
           <div className="stack g-4">
+            {/* Direct is the way this printer actually works. Its own Server
+                Direct Print takes a job and never hands it to its print
+                engine, so the till carries receipts itself. */}
+            <Field
+              label="Printer address on the market wifi"
+              hint="The same address you type into a browser to reach the printer's settings."
+            >
+              {(p) => (
+                <div className="row g-2 wrap" style={{ alignItems: "center" }}>
+                  <Input {...p} className="mono" value={host} placeholder="192.168.1.9"
+                    style={{ maxWidth: 220 }} onChange={(e) => setHost(e.target.value)} />
+                  <Button size="sm" variant="primary" icon="check" disabled={busy || !host.trim()} onClick={() => void saveHost()}>
+                    Save
+                  </Button>
+                  {host.trim() ? (
+                    <a className="btn btn-secondary btn-sm" href={`https://${host.trim()}/`} target="_blank" rel="noopener">
+                      <Icon name="external" size={14} /> Trust the printer
+                    </a>
+                  ) : null}
+                </div>
+              )}
+            </Field>
+
+            {print?.printMode === "direct" && print?.printerHost ? (
+              <Note tone="info" title="One thing on each device that runs the till">
+                Tap <b>Trust the printer</b> above, once, on that device. It opens the printer&rsquo;s own
+                page and warns you the connection isn&rsquo;t private — that&rsquo;s its own certificate, which is
+                expected. Choose <b>Advanced</b>, then <b>Proceed</b>. After that the till can send it
+                receipts. If printing stops later with a &ldquo;can&rsquo;t reach the printer&rdquo; warning, do it again.
+              </Note>
+            ) : null}
+
             {!printerKey ? (
               <div className="stack g-2">
-                <Note tone="info" title="One setting, on the printer itself">
+                <Note tone="info" title="The other way — only if direct printing can't be used">
                   The printer sits on the market&rsquo;s wifi where nothing on the internet can reach it, so it
                   fetches its own work instead. Make the address here, type it into the printer once, and it
                   prints from anywhere you ring a sale.

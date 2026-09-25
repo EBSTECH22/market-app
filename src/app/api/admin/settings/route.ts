@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { denyUnless } from "@/lib/perm";
-import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey } from "@/lib/settings";
+import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey, getPrinterHost, getPrintMode } from "@/lib/settings";
 import { getApprovalThresholdCents, setApprovalThresholdCents, recordAudit } from "@/lib/audit";
 import { getPayoutFee, setPayoutFee } from "@/lib/payouts";
 import { db } from "@/lib/db";
@@ -26,7 +26,9 @@ export async function GET() {
        it can offer "put it on the reader" or fall back to typing an approval
        code, without a second round trip to find out which. */
     cardReaderReady: !!(await getTerminalReaderId()),
-    printerReady: !!(await getPrinterKey()) });
+    printerReady: (await getPrintMode()) === "direct" ? !!(await getPrinterHost()) : !!(await getPrinterKey()),
+    /* The till prints for itself in direct mode, so it needs to know. */
+    printMode: await getPrintMode() });
 }
 
 /** Every change to a market-wide setting goes in the log, with what it was. */

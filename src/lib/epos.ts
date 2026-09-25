@@ -359,3 +359,23 @@ export function readPrintResponse(xml: string): { jobId: string; ok: boolean; co
  */
 export const plainTestXml = (): string =>
   eposDoc(`<text>PLAIN TEST&#10;</text><text>If this prints, the link works.&#10;</text><feed line="3"/><cut/>`);
+
+/**
+ * The envelope the printer wants when it is spoken to directly.
+ *
+ * Server Direct Print wraps jobs in PrintRequestInfo because the printer is
+ * fetching them. Talking to the printer's own ePOS-Print endpoint is the other
+ * way round — we do the asking — and there it expects a SOAP body. Same
+ * epos-print document inside either way, which is why the receipt builder
+ * neither knows nor cares which route it takes.
+ */
+export const soapEnvelope = (eposPrintDoc: string): string =>
+  '<?xml version="1.0" encoding="utf-8"?>' +
+  '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">' +
+  `<s:Body>${eposPrintDoc}</s:Body>` +
+  "</s:Envelope>";
+
+/** Where the printer listens when it is being spoken to directly. */
+export const directPrintUrl = (host: string, devid = "local_printer"): string =>
+  `https://${String(host).trim().replace(/^https?:\/\//, "").replace(/\/+$/, "")}` +
+  `/cgi-bin/epos/service.cgi?devid=${encodeURIComponent(devid || "local_printer")}&timeout=10000`;

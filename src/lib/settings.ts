@@ -224,3 +224,35 @@ export async function getSdpStyle(): Promise<"pretty" | "compact" | "bare"> {
 export async function setSdpStyle(v: string): Promise<void> {
   await put("sdpStyle", v === "compact" || v === "bare" ? v : "pretty");
 }
+
+/**
+ * The printer's address on the market's own wifi.
+ *
+ * Only meaningful in direct mode, where the till talks to the printer itself
+ * rather than leaving jobs for it to collect.
+ */
+export async function getPrinterHost(): Promise<string> {
+  return str("printerHost");
+}
+
+export async function setPrinterHost(v: string): Promise<void> {
+  await put("printerHost", String(v || "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "").slice(0, 80));
+}
+
+/**
+ * How receipts reach the paper.
+ *
+ * "direct"  — whichever till is open sends the job to the printer over the
+ *             shop wifi. Instant, and the only route that works on this
+ *             printer's firmware.
+ * "collect" — the printer fetches its own work (Epson's Server Direct Print).
+ *             Works from anywhere, and does not work here: this firmware takes
+ *             the job and never hands it to its own print engine.
+ */
+export async function getPrintMode(): Promise<"direct" | "collect"> {
+  return (await str("printMode", "direct")) === "collect" ? "collect" : "direct";
+}
+
+export async function setPrintMode(v: string): Promise<void> {
+  await put("printMode", v === "collect" ? "collect" : "direct");
+}
