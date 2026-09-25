@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { claim, complete, noteSeen, requeueStale } from "@/lib/printqueue";
 import { printRequestXml } from "@/lib/epos";
-import { getPrinterKey, getSdpVersion, notePrinterEvent, notePrinterResponse } from "@/lib/settings";
+import { getPrinterKey, getSdpVersion, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 /* The reply is held open while waiting for a receipt to appear — see below.
@@ -69,9 +69,13 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
     await notePrinterResponse(report).catch(() => {});
     const done = await complete(report).catch(() => null);
     await noteSeen().catch(() => {});
-    await notePrinterEvent(
-      done ? `reported a job ${done.ok ? "printed" : "refused"}` : "reported on a job we don't have"
-    ).catch(() => {});
+    const verdict = done
+      ? `reported a job ${done.ok ? "PRINTED" : "REFUSED"}`
+      : report.includes("<response")
+        ? "reported on a job we don't have"
+        : "sent an empty report (nothing to say)";
+    await notePrinterEvent(verdict).catch(() => {});
+    await logPrinter(`${verdict} :: ${report.replace(/\s+/g, " ").slice(0, 200)}`).catch(() => {});
     return xml("");
   }
 
@@ -88,14 +92,20 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   await requeueStale().catch(() => {});
 
   const version = await getSdpVersion();
+  const devid = await getPrinterDeviceId();
   const deadline = Date.now() + 9_000;
   for (;;) {
     const jobs = await claim(1);
     if (jobs.length) {
       await notePrinterEvent(`was handed ${jobs[0].label}`).catch(() => {});
-      return xml(printRequestXml(jobs, 60_000, version));
+      await logPrinter(`handed over ${jobs[0].label}`).catch(() => {});
+      return xml(printRequestXml(jobs, 60_000, version, devid));
     }
-    if (Date.now() >= deadline) return xml("");
+    if (Date.now() >= deadline) {
+      /* Not logged. An idle poll every three seconds all day would push
+         everything worth reading out of a twelve-line log. */
+      return xml("");
+    }
     /* Quarter of a second. Short enough that a receipt rung now prints now;
        long enough that holding the line costs four queries a second rather
        than a thousand. */

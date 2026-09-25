@@ -19,6 +19,9 @@ import {
   setSdpVersion,
   getPrinterEvent,
   getPrinterResponse,
+  getPrinterDeviceId,
+  setPrinterDeviceId,
+  getPrinterLog,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +46,8 @@ export async function GET() {
       getPrinterEvent(),
     ]);
     const lastResponse = await getPrinterResponse();
+    const deviceId = await getPrinterDeviceId();
+    const log = await getPrinterLog();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -62,6 +67,8 @@ export async function GET() {
          and "reported a job refused" is the whole diagnosis. */
       lastEvent,
       lastResponse,
+      deviceId,
+      log,
       configured: !!(await getPrinterKey()),
     });
   });
@@ -184,6 +191,7 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.autoPrint !== undefined) await setAutoPrint(!!body.autoPrint);
     if (body.sdpVersion !== undefined) await setSdpVersion(String(body.sdpVersion));
+    if (body.deviceId !== undefined) await setPrinterDeviceId(String(body.deviceId));
 
     const key = await getPrinterKey();
     return NextResponse.json({
@@ -193,6 +201,7 @@ export async function PATCH(req: NextRequest) {
       footer: (await getReceiptFooter()).join("\n"),
       autoPrint: await getAutoPrint(),
       sdpVersion: await getSdpVersion(),
+      deviceId: await getPrinterDeviceId(),
     });
   });
 }

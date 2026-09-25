@@ -113,7 +113,14 @@ export async function claim(limit = 3): Promise<{ id: string; body: string; labe
  * order and one at a time, which is exactly how they are handed over.
  */
 export async function complete(responseXml: string): Promise<{ jobId: string; ok: boolean } | null> {
-  const { jobId: reportedId, ok, code } = readPrintResponse(responseXml);
+  const { jobId: reportedId, ok, code, reported } = readPrintResponse(responseXml);
+
+  /* AN EMPTY REPORT IS NOT A VERDICT. The printer sends one of these after a
+     cycle where it had nothing to do, and it names no job because there was
+     no job. Applying it to whatever happened to be outstanding is how a
+     receipt that printed perfectly well gets marked as refused — and, worse,
+     gets printed again. A report that mentions no job changes no job. */
+  if (!reported) return null;
 
   const job = reportedId
     ? await db.printJob.findUnique({ where: { id: reportedId }, select: { id: true, attempts: true } })
@@ -139,7 +146,12 @@ export async function complete(responseXml: string): Promise<{ jobId: string; ok
     data: {
       status: dead ? "FAILED" : "QUEUED",
       sentAt: null,
-      error: describe(code),
+      /* An empty report is not a refusal, it is the printer saying it had
+         nothing to run — which means the device name it was given is not one
+         it has. Saying that plainly saves an afternoon. */
+      error: reported
+        ? describe(code)
+        : "The printer didn't recognise the device name. Check the Device ID on its own Device Admin \u2192 Printer page and set it below.",
     },
   });
   return { jobId, ok: false };

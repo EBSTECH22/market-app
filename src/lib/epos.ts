@@ -267,13 +267,18 @@ export type QueuedPrint = { id: string; body: string };
  */
 export type SdpVersion = "1.00" | "2.00";
 
-export function printRequestXml(jobs: QueuedPrint[], timeoutMs = 60000, version: SdpVersion = "1.00"): string {
+export function printRequestXml(
+  jobs: QueuedPrint[],
+  timeoutMs = 60000,
+  version: SdpVersion = "1.00",
+  devid = "local_printer"
+): string {
   const parts = jobs
     .map(
       (j) =>
         `<ePOSPrint>` +
         `<Parameter>` +
-        `<devid>local_printer</devid>` +
+        `<devid>${esc(devid || "local_printer")}</devid>` +
         `<timeout>${Math.round(timeoutMs)}</timeout>` +
         (version === "2.00" ? `<printjobid>${esc(j.id)}</printjobid>` : "") +
         `</Parameter>` +
@@ -294,20 +299,26 @@ export function printRequestXml(jobs: QueuedPrint[], timeoutMs = 60000, version:
  * printing path. Anything it can't make sense of is treated as a failure,
  * which puts the job back rather than losing it.
  */
-export function readPrintResponse(xml: string): { jobId: string; ok: boolean; code: string; status: string } {
+export function readPrintResponse(xml: string): { jobId: string; ok: boolean; code: string; status: string; reported: boolean } {
   const s = String(xml || "");
   const jobId = (s.match(/<printjobid>([^<]*)<\/printjobid>/i) || [])[1] || "";
   /* Attributes are read from inside the <response> tag rather than from the
      document at large. The envelope around it carries a Version attribute and
      a namespace, and a loose search for code= has no way of knowing it has
      wandered into one of those. */
-  const tag = (s.match(/<response\b[^>]*>/i) || [])[0] || s;
+  /* No <response> element AT ALL is its own answer, and a different one from
+     a job that failed. It means the printer read the request, found nothing it
+     could run, and had nothing to report — which in practice means the device
+     name in the request is not one this printer has. */
+  const found = s.match(/<response\b[^>]*>/i);
+  const tag = found ? found[0] : "";
   const attr = (name: string) => (tag.match(new RegExp(`${name}\\s*=\\s*"([^"]*)"`, "i")) || [])[1] || "";
   return {
     jobId: jobId.trim(),
     ok: /^(true|1)$/i.test(attr("success").trim()),
     code: attr("code").trim(),
     status: attr("status").trim(),
+    reported: !!found,
   };
 }
 

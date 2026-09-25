@@ -168,3 +168,49 @@ export async function notePrinterResponse(raw: string): Promise<void> {
 export async function getPrinterResponse(): Promise<string> {
   return str("printerLastResponse");
 }
+
+/**
+ * Which printer on the device the paper comes out of.
+ *
+ * "local_printer" is Epson's usual name for it and is right on most units,
+ * but it is a SETTING on the printer, not a constant — a hybrid like the
+ * TM-H6000V has a receipt station, a slip station and a customer display, each
+ * with its own name, and those names can be changed. Send one the printer
+ * doesn't have and it runs nothing and reports nothing, which looks for all
+ * the world like a printer that is ignoring you.
+ */
+export async function getPrinterDeviceId(): Promise<string> {
+  return (await str("printerDeviceId", "local_printer")) || "local_printer";
+}
+
+export async function setPrinterDeviceId(v: string): Promise<void> {
+  await put("printerDeviceId", String(v || "").trim().slice(0, 60) || "local_printer");
+}
+
+/**
+ * The last dozen things the printer did, oldest last.
+ *
+ * One line of "last event" was not enough to tell what was going on: the
+ * interesting thing was never the most recent exchange but the SHAPE of
+ * several in a row — handed a job, then an empty report, then handed it
+ * again. Best-effort and lossy under concurrency, which is fine for something
+ * whose only job is to be read by a person trying to work out why the paper
+ * isn't moving.
+ */
+export async function logPrinter(what: string): Promise<void> {
+  const now = new Date().toISOString();
+  const line = `${now}|${String(what).slice(0, 300)}`;
+  const prev = (await str("printerLog")).split("\n").filter(Boolean);
+  await put("printerLog", [...prev, line].slice(-12).join("\n"));
+}
+
+export async function getPrinterLog(): Promise<{ at: string; what: string }[]> {
+  return (await str("printerLog"))
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => {
+      const i = l.indexOf("|");
+      return { at: l.slice(0, i), what: l.slice(i + 1) };
+    })
+    .reverse();
+}

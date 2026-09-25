@@ -26,6 +26,8 @@ type PrintState = {
   sdpVersion: "1.00" | "2.00";
   lastEvent: { at: string; what: string } | null;
   lastResponse: string;
+  deviceId: string;
+  log: { at: string; what: string }[];
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
 
@@ -45,6 +47,7 @@ export default function TillHardware() {
   const [print, setPrint] = useState<PrintState | null>(null);
   const [printerKey, setPrinterKey] = useState("");
   const [header, setHeader] = useState("");
+  const [deviceId, setDeviceId] = useState("local_printer");
   const [footer, setFooter] = useState("");
 
   const loadReaders = useCallback(async () => {
@@ -72,6 +75,7 @@ export default function TillHardware() {
     if (!r.ok) return;
     const d = await r.json();
     setPrinterKey(String(d.key || ""));
+    setDeviceId(String(d.deviceId || "local_printer"));
     setHeader(String(d.header || ""));
     setFooter(String(d.footer || ""));
   }, []);
@@ -162,6 +166,7 @@ export default function TillHardware() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { toast.error("Couldn't do that", String(d.error || "")); return; }
       setPrinterKey(String(d.key || ""));
+    setDeviceId(String(d.deviceId || "local_printer"));
       toast.success("Address made", "Type it into the printer next.");
       await loadPrint();
     } finally { setBusy(false); }
@@ -176,6 +181,21 @@ export default function TillHardware() {
       });
       if (!r.ok) { toast.error("Couldn't save that"); return; }
       toast.success("Receipt wording saved");
+    } finally { setBusy(false); }
+  };
+
+  const saveDeviceId = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't save that", String(d.error || "")); return; }
+      setDeviceId(String(d.deviceId || "local_printer"));
+      await loadPrint();
+      toast.success("Saved", "Send a plain test.");
     } finally { setBusy(false); }
   };
 
@@ -395,6 +415,29 @@ export default function TillHardware() {
                   </div>
                 ) : null}
 
+                {/* Which station on the printer the paper comes out of. It
+                    is a setting on the printer, not a constant, and a name it
+                    doesn't have makes it run nothing and say nothing. */}
+                <Field
+                  label="Device ID"
+                  hint="On the printer: Device Admin \u2192 Printer. Almost always local_printer."
+                >
+                  {(p) => (
+                    <div className="row g-2" style={{ alignItems: "center" }}>
+                      <Input
+                        {...p}
+                        className="mono"
+                        value={deviceId}
+                        style={{ maxWidth: 260 }}
+                        onChange={(e) => setDeviceId(e.target.value)}
+                      />
+                      <Button size="sm" variant="secondary" icon="check" disabled={busy} onClick={() => void saveDeviceId()}>
+                        Save
+                      </Button>
+                    </div>
+                  )}
+                </Field>
+
                 {/* Two dialects of the same protocol, and which one a printer
                     understands is down to its firmware. Firmware that doesn't
                     know the newer one ignores the job in silence rather than
@@ -473,6 +516,19 @@ export default function TillHardware() {
               </div>
             ))}
           </div>
+
+          {/* What the printer has actually been doing, newest first. The
+              useful thing is never one exchange but the shape of several. */}
+          {print.log?.length ? (
+            <div className="stack g-1 mt-3">
+              <span className="t-label">Printer trace</span>
+              {print.log.map((l, i) => (
+                <span key={`${l.at}${i}`} className="t-xs t-muted mono" style={{ wordBreak: "break-all" }}>
+                  {relTime(l.at)} — {l.what}
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           {/* The printer's own words, untouched. A tidied message is no help
               when the tidying is what's wrong. */}
