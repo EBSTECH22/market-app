@@ -589,7 +589,11 @@ export default function TillHardware() {
       </div>
 
       {/* ------------------------------------------------------ wording -- */}
-      {printerKey ? (
+      {/* Shown whenever the printer is set up EITHER way. This used to hang off
+          the Server Direct Print address alone, which hid the receipt wording —
+          and the logo switch with it — from anyone using direct printing, which
+          is everyone. */}
+      {printerKey || print?.printerHost ? (
         <div className="mb-4">
           <Card title="What the receipt says" subtitle="One line each. Leave them empty for the market's usual wording.">
             <div className="stack g-3">
