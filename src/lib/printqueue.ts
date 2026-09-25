@@ -103,13 +103,27 @@ export async function claim(limit = 3): Promise<{ id: string; body: string; labe
   return taken;
 }
 
-/** The printer's report on a job it was given. */
+/**
+ * The printer's report on a job it was given.
+ *
+ * Version 2.00 of the protocol puts the job's id in the report, so there is no
+ * doubt which one it is about. Version 1.00 — which is what most firmware
+ * actually speaks — puts nothing, so the report has to be matched to the
+ * oldest job still outstanding. That is correct as long as jobs go out in
+ * order and one at a time, which is exactly how they are handed over.
+ */
 export async function complete(responseXml: string): Promise<{ jobId: string; ok: boolean } | null> {
-  const { jobId, ok, code } = readPrintResponse(responseXml);
-  if (!jobId) return null;
+  const { jobId: reportedId, ok, code } = readPrintResponse(responseXml);
 
-  const job = await db.printJob.findUnique({ where: { id: jobId }, select: { id: true, attempts: true } });
+  const job = reportedId
+    ? await db.printJob.findUnique({ where: { id: reportedId }, select: { id: true, attempts: true } })
+    : await db.printJob.findFirst({
+        where: { status: "SENT" },
+        orderBy: { sentAt: "asc" },
+        select: { id: true, attempts: true },
+      });
   if (!job) return null;
+  const jobId = job.id;
 
   if (ok) {
     await db.printJob.update({ where: { id: jobId }, data: { status: "DONE", doneAt: new Date(), error: "" } });

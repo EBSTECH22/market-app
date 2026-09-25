@@ -125,3 +125,31 @@ export async function getAutoPrint(): Promise<boolean> {
 export async function setAutoPrint(on: boolean): Promise<void> {
   await put("autoPrintReceipts", on ? "1" : "0");
 }
+
+/**
+ * Which version of Server Direct Print the printer is spoken to in.
+ *
+ * "1.00" is the default and the safe one. Firmware that doesn't understand a
+ * 2.00 document ignores it silently rather than complaining, which looks
+ * exactly like a printer that never received anything — so the broadest
+ * version is the one used until somebody has a reason to change it.
+ */
+export async function getSdpVersion(): Promise<"1.00" | "2.00"> {
+  return (await str("sdpVersion", "1.00")) === "2.00" ? "2.00" : "1.00";
+}
+
+export async function setSdpVersion(v: string): Promise<void> {
+  await put("sdpVersion", v === "2.00" ? "2.00" : "1.00");
+}
+
+/** The last thing the printer said to us, for working out why it's quiet. */
+export async function notePrinterEvent(what: string): Promise<void> {
+  await put("printerLastEvent", `${new Date().toISOString()}|${what}`.slice(0, 200));
+}
+
+export async function getPrinterEvent(): Promise<{ at: string; what: string } | null> {
+  const raw = await str("printerLastEvent");
+  if (!raw) return null;
+  const i = raw.indexOf("|");
+  return i < 0 ? null : { at: raw.slice(0, i), what: raw.slice(i + 1) };
+}

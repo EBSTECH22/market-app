@@ -252,10 +252,22 @@ export type QueuedPrint = { id: string; body: string };
  *
  * `devid` names which printer on the device — "local_printer" is the one the
  * paper comes out of. The timeout is the printer's own patience with the job,
- * not ours. `printjobid` is what comes back in the completion report, and is
- * how a job gets marked done rather than sent twice.
+ * not ours.
+ *
+ * TWO VERSIONS, and which one a printer understands depends on its firmware.
+ * Version 2.00 carries a job id that comes back in the completion report, so
+ * a job can be matched exactly. Version 1.00 has no job id at all, and older
+ * firmware IGNORES A 2.00 DOCUMENT ENTIRELY rather than complaining about it
+ * — the printer asks, is handed a document it can't read, and says nothing,
+ * which looks from here exactly like a printer that never got anything.
+ *
+ * So 1.00 is the default. It is understood by every printer that does Server
+ * Direct Print at all, and the cost is only that a completion has to be
+ * matched to the oldest job outstanding instead of by name.
  */
-export function printRequestXml(jobs: QueuedPrint[], timeoutMs = 60000): string {
+export type SdpVersion = "1.00" | "2.00";
+
+export function printRequestXml(jobs: QueuedPrint[], timeoutMs = 60000, version: SdpVersion = "1.00"): string {
   const parts = jobs
     .map(
       (j) =>
@@ -263,13 +275,14 @@ export function printRequestXml(jobs: QueuedPrint[], timeoutMs = 60000): string 
         `<Parameter>` +
         `<devid>local_printer</devid>` +
         `<timeout>${Math.round(timeoutMs)}</timeout>` +
-        `<printjobid>${esc(j.id)}</printjobid>` +
+        (version === "2.00" ? `<printjobid>${esc(j.id)}</printjobid>` : "") +
         `</Parameter>` +
         `<PrintData>${j.body}</PrintData>` +
         `</ePOSPrint>`
     )
     .join("");
-  return `<?xml version="1.0" encoding="utf-8"?><PrintRequestInfo Version="2.00">${parts}</PrintRequestInfo>`;
+  const open = version === "2.00" ? `<PrintRequestInfo Version="2.00">` : `<PrintRequestInfo>`;
+  return `<?xml version="1.0" encoding="utf-8"?>${open}${parts}</PrintRequestInfo>`;
 }
 
 /**

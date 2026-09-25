@@ -15,6 +15,9 @@ import {
   setReceiptFooter,
   getAutoPrint,
   setAutoPrint,
+  getSdpVersion,
+  setSdpVersion,
+  getPrinterEvent,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +28,7 @@ export async function GET() {
     { const denied = await denyUnless("ops"); if (denied) return denied; }
     await requeueStale().catch(() => {});
 
-    const [seen, queued, failed, recent, autoPrint] = await Promise.all([
+    const [seen, queued, failed, recent, autoPrint, sdpVersion, lastEvent] = await Promise.all([
       lastSeen(),
       db.printJob.count({ where: { status: { in: ["QUEUED", "SENT"] } } }),
       db.printJob.count({ where: { status: "FAILED" } }),
@@ -35,6 +38,8 @@ export async function GET() {
         select: { id: true, kind: true, label: true, status: true, error: true, createdAt: true, doneAt: true, attempts: true },
       }),
       getAutoPrint(),
+      getSdpVersion(),
+      getPrinterEvent(),
     ]);
 
     /* "Online" is the printer having asked for work recently, which is the
@@ -49,6 +54,11 @@ export async function GET() {
       failed,
       recent,
       autoPrint,
+      sdpVersion,
+      /* The last thing the printer actually did, in words. When nothing
+         prints, the difference between "was handed Receipt #12" over and over
+         and "reported a job refused" is the whole diagnosis. */
+      lastEvent,
       configured: !!(await getPrinterKey()),
     });
   });
@@ -163,6 +173,7 @@ export async function PATCH(req: NextRequest) {
       await setReceiptFooter(String(body.footer).split("\n"));
     }
     if (body.autoPrint !== undefined) await setAutoPrint(!!body.autoPrint);
+    if (body.sdpVersion !== undefined) await setSdpVersion(String(body.sdpVersion));
 
     const key = await getPrinterKey();
     return NextResponse.json({
@@ -171,6 +182,7 @@ export async function PATCH(req: NextRequest) {
       header: (await getReceiptHeader()).join("\n"),
       footer: (await getReceiptFooter()).join("\n"),
       autoPrint: await getAutoPrint(),
+      sdpVersion: await getSdpVersion(),
     });
   });
 }

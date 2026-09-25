@@ -23,6 +23,8 @@ type PrintState = {
   failed: number;
   configured: boolean;
   autoPrint: boolean;
+  sdpVersion: "1.00" | "2.00";
+  lastEvent: { at: string; what: string } | null;
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
 
@@ -173,6 +175,18 @@ export default function TillHardware() {
       });
       if (!r.ok) { toast.error("Couldn't save that"); return; }
       toast.success("Receipt wording saved");
+    } finally { setBusy(false); }
+  };
+
+  const setVersion = async (sdpVersion: "1.00" | "2.00") => {
+    setBusy(true);
+    try {
+      await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sdpVersion }),
+      });
+      await loadPrint();
+      toast.success(`Talking to the printer in ${sdpVersion}`, "Send another test print.");
     } finally { setBusy(false); }
   };
 
@@ -352,14 +366,47 @@ export default function TillHardware() {
                 </div>
 
                 {print ? (
-                  <div className="row wrap g-3" style={{ alignItems: "center" }}>
-                    <span className="t-xs t-muted">
-                      {print.lastSeen ? `Last checked in ${relTime(print.lastSeen)}` : "Never checked in"}
-                      {print.queued ? ` · ${print.queued} waiting` : ""}
-                    </span>
-                    <Button size="sm" variant={print.autoPrint ? "primary" : "secondary"} disabled={busy} onClick={() => void toggleAuto()}>
-                      {print.autoPrint ? "Printing every sale" : "Only when asked"}
+                  <div className="stack g-2">
+                    <div className="row wrap g-3" style={{ alignItems: "center" }}>
+                      <span className="t-xs t-muted">
+                        {print.lastSeen ? `Last checked in ${relTime(print.lastSeen)}` : "Never checked in"}
+                        {print.queued ? ` · ${print.queued} waiting` : ""}
+                      </span>
+                      <Button size="sm" variant={print.autoPrint ? "primary" : "secondary"} disabled={busy} onClick={() => void toggleAuto()}>
+                        {print.autoPrint ? "Printing every sale" : "Only when asked"}
+                      </Button>
+                    </div>
+                    {/* The last thing the printer actually did. When paper
+                        isn't coming out, this one line is the difference
+                        between a printer that isn't listening and one that is
+                        listening and refusing. */}
+                    {print.lastEvent ? (
+                      <span className="t-xs t-muted">
+                        It last {print.lastEvent.what} · {relTime(print.lastEvent.at)}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/* Two dialects of the same protocol, and which one a printer
+                    understands is down to its firmware. Firmware that doesn't
+                    know the newer one ignores the job in silence rather than
+                    complaining, so when the printer is plainly online and the
+                    paper still isn't moving, this is the switch to try. */}
+                {print ? (
+                  <div className="row wrap g-2" style={{ alignItems: "center" }}>
+                    <span className="t-xs t-muted">Printer language</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => void setVersion(print.sdpVersion === "2.00" ? "1.00" : "2.00")}
+                    >
+                      {print.sdpVersion === "2.00" ? "Newer (2.00)" : "Older (1.00)"} — switch
                     </Button>
+                    <span className="t-xs t-muted">
+                      Only worth touching if it&rsquo;s online and nothing prints.
+                    </span>
                   </div>
                 ) : null}
 
