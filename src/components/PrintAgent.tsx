@@ -40,6 +40,44 @@ import { soapEnvelope, directPrintUrl, readPrintResponse, troubleText } from "@/
  * picks it up, so nothing depends on a tab shutting down tidily.
  */
 const LEASE_KEY = "marketPrintAgentLease";
+
+/**
+ * Only the till device carries receipts.
+ *
+ * The Till hardware page runs a print agent too, on whatever device opens it —
+ * including the office PC. The PC doesn't trust the printer's certificate (that
+ * was only installed on the tablet), so every job it picked up failed in a few
+ * milliseconds and went back on the pile, and the receipt bounced between the
+ * PC and the tablet until the tablet happened to win. The turn-taking note
+ * above only works between tabs on ONE device, so it couldn't stop that.
+ *
+ * Opening the register marks the device it's on as the till. Nothing else
+ * carries receipts.
+ */
+const TILL_KEY = "marketTillDevice";
+
+export function markTillDevice(): void {
+  try { window.localStorage.setItem(TILL_KEY, "1"); } catch { /* storage blocked: see isTillDevice */ }
+}
+
+function isTillDevice(): boolean {
+  try {
+    return window.localStorage.getItem(TILL_KEY) === "1";
+  } catch {
+    /* Can't tell. Only a tablet or phone could plausibly be the till. */
+    return /Android|iPad|iPhone/i.test(navigator.userAgent);
+  }
+}
+
+/** Which kind of device reported, for the printer trace. */
+function deviceName(): string {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  if (/Android/i.test(ua)) return "Android";
+  if (/iPad|iPhone/i.test(ua)) return "iPhone/iPad";
+  if (/Windows/i.test(ua)) return "Windows PC";
+  if (/Mac/i.test(ua)) return "Mac";
+  return "other device";
+}
 const LEASE_STALE_MS = 9_000;
 
 function holdsLease(me: string): boolean {
@@ -120,7 +158,7 @@ export async function deliverJob(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         jobId: job.id, ok, raw,
-        why: `${why ? why + " " : ""}after ${ms}ms${online ? "" : " (tablet offline)"}${document.visibilityState === "hidden" ? " (tab hidden)" : ""}`,
+        why: `${deviceName()}: ${why ? why + " " : ""}after ${ms}ms${online ? "" : " (tablet offline)"}${document.visibilityState === "hidden" ? " (tab hidden)" : ""}`,
       }),
     });
   } catch {
@@ -167,6 +205,7 @@ export function PrintAgent({
 
   const tick = useCallback(async () => {
     if (runningRef.current) return;
+    if (!isTillDevice()) return;
     if (!holdsLease(meRef.current)) return;
     runningRef.current = true;
     try {

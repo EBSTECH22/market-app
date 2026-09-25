@@ -8,7 +8,7 @@ import {
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
 import { ScanBurst, looksLikeProductBarcode } from "@/lib/scanner";
 import { WedgeTiming, isTerminator, readCode } from "@/lib/wedge";
-import { PrintAgent, deliverJob } from "@/components/PrintAgent";
+import { PrintAgent, deliverJob, markTillDevice } from "@/components/PrintAgent";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
 import { CashTender } from "@/components/register/CashTender";
@@ -438,6 +438,9 @@ export default function RegisterKiosk() {
   }, [refreshQueue, loadDrawer, loadFloor, toast]);
 
   useEffect(() => { void refreshQueue(); }, [refreshQueue]);
+
+  /* This device is the till: it's the one that carries receipts to the printer. */
+  useEffect(() => { markTillDevice(); }, []);
 
   /* navigator.onLine only knows whether there is A network, not whether the
      server is reachable — a market wifi that's up but has no internet still
