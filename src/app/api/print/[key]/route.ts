@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { claim, complete, noteSeen, requeueStale, peek } from "@/lib/printqueue";
 import { printRequestXml } from "@/lib/epos";
-import { getPrinterKey, getSdpVersion, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
+import { getPrinterKey, getSdpVersion, getSdpStyle, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 /* Nothing here waits on anything now, so this is only a ceiling against a
@@ -108,6 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
 
   const version = await getSdpVersion();
   const devid = await getPrinterDeviceId();
+  const style = await getSdpStyle();
   /* Answer at once, either way.
      There used to be a few seconds of holding the line here so a receipt rung
      during the wait could go out on a connection already standing open. It is
@@ -116,7 +117,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
      seconds; three seconds is a perfectly good wait for a receipt. */
   const jobs = await claim(1);
   if (jobs.length) {
-    const doc = printRequestXml(jobs, 10_000, version, devid);
+    const doc = printRequestXml(jobs, 10_000, version, devid, style);
     await notePrinterEvent(`was handed ${jobs[0].label}`).catch(() => {});
     /* What kind of client is actually asking. The document is right and the
        printer reads our root tag and not our children, which a correct body
@@ -128,7 +129,7 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
       `accept=${req.headers.get("accept") || "none"} ` +
       `ctype=${req.headers.get("content-type") || "none"}`;
     await logPrinter(
-      `handed over ${jobs[0].label} (${Buffer.byteLength(doc, "utf8")} bytes, v${version}, devid ${devid}) :: ${asked}`
+      `handed over ${jobs[0].label} (${Buffer.byteLength(doc, "utf8")} bytes, v${version}, ${style}, devid ${devid}) :: ${asked}`
     ).catch(() => {});
     return xml(doc);
   }
@@ -157,7 +158,7 @@ export async function GET(req: NextRequest, { params }: { params: { key: string 
   if (req.nextUrl.searchParams.get("peek")) {
     const next = await peek();
     const body = next
-      ? printRequestXml([next], 10_000, await getSdpVersion(), await getPrinterDeviceId())
+      ? printRequestXml([next], 10_000, await getSdpVersion(), await getPrinterDeviceId(), await getSdpStyle())
       : "Nothing waiting to print. Queue a test first, then reload this.";
     const bytes = Buffer.from(body, "utf8");
     return new NextResponse(bytes, {

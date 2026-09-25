@@ -17,6 +17,8 @@ import {
   setAutoPrint,
   getSdpVersion,
   setSdpVersion,
+  getSdpStyle,
+  setSdpStyle,
   getPrinterEvent,
   getPrinterResponse,
   getPrinterDeviceId,
@@ -48,6 +50,7 @@ export async function GET() {
     const lastResponse = await getPrinterResponse();
     const deviceId = await getPrinterDeviceId();
     const log = await getPrinterLog();
+    const sdpStyle = await getSdpStyle();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -69,6 +72,7 @@ export async function GET() {
       lastResponse,
       deviceId,
       log,
+      sdpStyle,
       configured: !!(await getPrinterKey()),
     });
   });
@@ -191,6 +195,7 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.autoPrint !== undefined) await setAutoPrint(!!body.autoPrint);
     if (body.sdpVersion !== undefined) await setSdpVersion(String(body.sdpVersion));
+    if (body.sdpStyle !== undefined) await setSdpStyle(String(body.sdpStyle));
     if (body.deviceId !== undefined) await setPrinterDeviceId(String(body.deviceId));
 
     const key = await getPrinterKey();
@@ -201,6 +206,7 @@ export async function PATCH(req: NextRequest) {
       footer: (await getReceiptFooter()).join("\n"),
       autoPrint: await getAutoPrint(),
       sdpVersion: await getSdpVersion(),
+      sdpStyle: await getSdpStyle(),
       deviceId: await getPrinterDeviceId(),
     });
   });

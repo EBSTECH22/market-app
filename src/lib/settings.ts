@@ -214,3 +214,13 @@ export async function getPrinterLog(): Promise<{ at: string; what: string }[]> {
     })
     .reverse();
 }
+
+/** How the request document is laid out. See SdpStyle in lib/epos. */
+export async function getSdpStyle(): Promise<"pretty" | "compact" | "bare"> {
+  const v = await str("sdpStyle", "pretty");
+  return v === "compact" || v === "bare" ? v : "pretty";
+}
+
+export async function setSdpStyle(v: string): Promise<void> {
+  await put("sdpStyle", v === "compact" || v === "bare" ? v : "pretty");
+}

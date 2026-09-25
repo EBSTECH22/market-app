@@ -267,6 +267,21 @@ export type QueuedPrint = { id: string; body: string };
  */
 export type SdpVersion = "1.00" | "2.00";
 
+/**
+ * How the request document is laid out on the wire.
+ *
+ * "pretty" writes it across lines the way Epson's manual prints it. "compact"
+ * puts it on one line. Whitespace between elements is meaningless to an XML
+ * parser and ought to make no difference whatsoever — but the thing reading
+ * this is embedded firmware, not a browser, and the manual's sample is the
+ * only known-good example in existence. "bare" additionally drops the XML
+ * declaration, for the same reason.
+ *
+ * This is a knob rather than a decision because each round of finding out
+ * costs somebody at a counter twenty minutes.
+ */
+export type SdpStyle = "pretty" | "compact" | "bare";
+
 export function printRequestXml(
   jobs: QueuedPrint[],
   /* Epson's own sample says 10000 and there is no reason to differ. A value
@@ -274,25 +289,32 @@ export function printRequestXml(
      printer skip a job without saying why. */
   timeoutMs = 10000,
   version: SdpVersion = "1.00",
-  devid = "local_printer"
+  devid = "local_printer",
+  style: SdpStyle = "pretty"
 ): string {
+  const nl = style === "compact" ? "" : "\n";
   const parts = jobs
-    .map(
-      (j) =>
-        `<ePOSPrint>` +
-        `<Parameter>` +
-        `<devid>${esc(devid || "local_printer")}</devid>` +
-        `<timeout>${Math.round(timeoutMs)}</timeout>` +
-        (version === "2.00" ? `<printjobid>${esc(j.id)}</printjobid>` : "") +
-        `</Parameter>` +
-        `<PrintData>${j.body}</PrintData>` +
-        `</ePOSPrint>`
+    .map((j) =>
+      [
+        `<ePOSPrint>`,
+        `<Parameter>`,
+        `<devid>${esc(devid || "local_printer")}</devid>`,
+        `<timeout>${Math.round(timeoutMs)}</timeout>`,
+        ...(version === "2.00" ? [`<printjobid>${esc(j.id)}</printjobid>`] : []),
+        `</Parameter>`,
+        `<PrintData>`,
+        j.body,
+        `</PrintData>`,
+        `</ePOSPrint>`,
+      ].join(nl)
     )
-    .join("");
+    .join(nl);
+
   const open = version === "2.00" ? `<PrintRequestInfo Version="2.00">` : `<PrintRequestInfo>`;
+  const body = [open, parts, `</PrintRequestInfo>`].join(nl);
   /* Spelled the way Epson's sample spells it, space before the close and all.
      There is no reason a parser should care and no reason to find out. */
-  return `<?xml version="1.0" encoding="utf-8" ?>${open}${parts}</PrintRequestInfo>`;
+  return style === "bare" ? body : `<?xml version="1.0" encoding="utf-8" ?>${nl}${body}`;
 }
 
 /**

@@ -24,6 +24,7 @@ type PrintState = {
   configured: boolean;
   autoPrint: boolean;
   sdpVersion: "1.00" | "2.00";
+  sdpStyle: "pretty" | "compact" | "bare";
   lastEvent: { at: string; what: string } | null;
   lastResponse: string;
   deviceId: string;
@@ -196,6 +197,27 @@ export default function TillHardware() {
       setDeviceId(String(d.deviceId || "local_printer"));
       await loadPrint();
       toast.success("Saved", "Send a plain test.");
+    } finally { setBusy(false); }
+  };
+
+  const STYLE_LABEL: Record<string, string> = {
+    pretty: "Across lines",
+    compact: "One line",
+    bare: "No XML header",
+  };
+
+  const nextStyle = async () => {
+    const order = ["pretty", "compact", "bare"] as const;
+    const at = order.indexOf((print?.sdpStyle || "pretty") as typeof order[number]);
+    const sdpStyle = order[(at + 1) % order.length];
+    setBusy(true);
+    try {
+      await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sdpStyle }),
+      });
+      await loadPrint();
+      toast.success(`Layout: ${STYLE_LABEL[sdpStyle]}`, "Clear, then send another test.");
     } finally { setBusy(false); }
   };
 
@@ -462,6 +484,9 @@ export default function TillHardware() {
                       onClick={() => void setVersion(print.sdpVersion === "2.00" ? "1.00" : "2.00")}
                     >
                       {print.sdpVersion === "2.00" ? "Newer (2.00)" : "Older (1.00)"} — switch
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => void nextStyle()}>
+                      Layout: {STYLE_LABEL[print.sdpStyle] || print.sdpStyle} — change
                     </Button>
                     <span className="t-xs t-muted">
                       Only worth touching if it&rsquo;s online and nothing prints.
