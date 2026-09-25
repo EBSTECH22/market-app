@@ -24,9 +24,12 @@ export function CashTender({
   busy,
   onCancel,
   onConfirm,
+  compact = false,
 }: {
   totalCents: number;
   busy: boolean;
+  /** The kiosk till: two columns, sized to fit a landscape tablet with no scrolling. */
+  compact?: boolean;
   onCancel: () => void;
   /** Called with what they handed over and what goes back, both in cents. */
   onConfirm: (tenderedCents: number, changeCents: number) => void;
@@ -64,6 +67,83 @@ export function CashTender({
     if (!state.sufficient || busy) return;
     onConfirm(tendered, state.changeCents);
   };
+
+  if (compact) {
+    return (
+      <div className="ct-c">
+        <style>{COMPACT_CSS}</style>
+        <div className="ct-c-left">
+          <span className="t-label">Tap each bill they hand you</span>
+          <div className="ct-c-bills">
+            {QUICK_BILLS_CENTS.map((c) => (
+              <button key={c} type="button" className="ct-c-bill" disabled={busy} onClick={() => addBill(c)}>+{money(c)}</button>
+            ))}
+            <button type="button" className="ct-c-bill exact" disabled={busy} onClick={() => setExactly(totalCents)}>Exact</button>
+          </div>
+          {suggestions.filter((x) => x !== totalCents).length ? (
+            <>
+              <span className="t-label">Or they gave</span>
+              <div className="ct-c-sugg">
+                {suggestions.filter((x) => x !== totalCents).map((x) => (
+                  <button key={x} type="button" className="ct-c-bill" disabled={busy} onClick={() => setExactly(x)}>{money(x)}</button>
+                ))}
+              </div>
+            </>
+          ) : null}
+          <Input
+            className="mono"
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="Or type it: 20.00"
+            aria-label="Amount they gave you"
+            value={typed}
+            style={{ height: 52, fontSize: "var(--fs-lg)" }}
+            onChange={(e) => onTyped(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") confirm(); }}
+          />
+        </div>
+
+        <div className="ct-c-right">
+          <div className="ct-c-row"><span>Due</span><b className="num">{money(totalCents)}</b></div>
+          <div className="ct-c-row">
+            <span>Given</span>
+            <b className="num">{money(tendered)}</b>
+            {tendered > 0 ? (
+              <button type="button" className="ct-c-reset" disabled={busy} onClick={() => { setTendered(0); setTyped(""); }}>Reset</button>
+            ) : null}
+          </div>
+          <div className={`ct-c-change${tendered > 0 && !state.sufficient ? " short" : ""}`}>
+            {tendered === 0 ? (
+              <span className="t-sm">Tap the bills, or Exact.</span>
+            ) : !state.sufficient ? (
+              <>
+                <span className="t-label">Still short</span>
+                <span className="ct-c-big num">{money(state.shortCents)}</span>
+              </>
+            ) : (
+              <>
+                <span className="t-label">Change</span>
+                <span className="ct-c-big num">{money(state.changeCents)}</span>
+                {state.changeCents > 0 ? (
+                  <span className="ct-c-parts">
+                    {parts.map((p) => (
+                      <span key={p.cents} className="badge badge-neutral">
+                        {p.coin ? `${p.count} ${p.count === 1 ? p.label : p.plural}` : `${p.count} × ${p.label}`}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
+              </>
+            )}
+          </div>
+          <Button variant="primary" size="xl" icon="check" block loading={busy} disabled={busy || !state.sufficient} onClick={confirm}>
+            {state.changeCents > 0 ? `Book it — give ${money(state.changeCents)}` : "Book the sale"}
+          </Button>
+          <Button variant="ghost" size="lg" block disabled={busy} onClick={onCancel}>Back</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -190,3 +270,22 @@ export function CashTender({
     </div>
   );
 }
+
+const COMPACT_CSS = `
+.ct-c { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 14px; }
+.ct-c-left, .ct-c-right { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ct-c-bills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.ct-c-sugg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.ct-c-bill { height: 56px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font-size: 1.125rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ct-c-bill:active:not(:disabled) { transform: scale(.97); background: var(--accent-soft); border-color: var(--accent); }
+.ct-c-bill.exact { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ct-c-row { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-md); }
+.ct-c-row span:first-child { color: var(--text-secondary); min-width: 52px; }
+.ct-c-row b { font-size: 1.5rem; font-weight: 800; }
+.ct-c-reset { margin-left: auto; border: 0; background: none; color: var(--text-secondary); text-decoration: underline; font-size: var(--fs-sm); }
+.ct-c-change { flex: 1 1 auto; min-height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 10px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-text); text-align: center; }
+.ct-c-change.short { background: var(--danger-soft); color: var(--danger-text); }
+.ct-c-big { font-size: 2.5rem; font-weight: 800; line-height: 1.05; }
+.ct-c-parts { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+@media (max-width: 620px) { .ct-c { grid-template-columns: 1fr; } }
+`;

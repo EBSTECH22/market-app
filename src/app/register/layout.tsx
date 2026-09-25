@@ -7,7 +7,9 @@ import { AppProviders } from "@/components/AppProviders";
 
 export const metadata: Metadata = {
   title: "Register — Community Harvest",
-  manifest: "/admin-manifest.json",
+  /* Its own app: added to the home screen it opens full-screen, sideways,
+     straight onto the till — no address bar eating the ticket. */
+  manifest: "/register-manifest.json",
 };
 
 export default function RegisterLayout({ children }: { children: React.ReactNode }) {

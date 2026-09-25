@@ -105,6 +105,14 @@ export default function RegisterKiosk() {
   const [scan, setScan] = useState("");
   const [scanErr, setScanErr] = useState("");
   const [search, setSearch] = useState("");
+  /* The line just rung, highlighted and scrolled into view like a real till. */
+  const [lastSku, setLastSku] = useState("");
+  /* Right-hand pane: selling, pre-order pickups, or a vendor's booth ticket. */
+  const [tab, setTab] = useState<"items" | "pickups" | "booth">("items");
+  /* The on-screen keyboard is OFF for the scan box — the scanner is the
+     keyboard, and the tablet's keyboard would cover the ticket. This turns it
+     on for typing a name or code by hand. */
+  const [kb, setKb] = useState(false);
   const [openVendor, setOpenVendor] = useState<string | null>(null);
   const [taxRate, setTaxRate] = useState(0);
   const [foodTaxRate, setFoodTaxRate] = useState(0);
@@ -610,6 +618,7 @@ export default function RegisterKiosk() {
 
   const addItem = (i: { id: string; sku: string; name: string; priceCents: number; basePriceCents: number; vendorName: string; taxClass?: string }) => {
     setScanErr("");
+    setLastSku(i.sku);
     setCart((c) => {
       const line = c.find((l) => l.sku === i.sku);
       if (line) return c.map((l) => (l.sku === i.sku ? { ...l, quantity: l.quantity + 1 } : l));
@@ -1114,221 +1123,189 @@ export default function RegisterKiosk() {
     } finally { setBusy(false); }
   };
 
-  /* ---------------------------------------------------------------- view -- */
+  /* ---------------------------------------------------------------- view --
+     Laid out like a real till on a landscape tablet: a thin bar across the
+     top, the TICKET on the left (always on screen, total and pay buttons
+     pinned to its foot), and everything you do — scan, pick, take money — on
+     the right. The page itself never scrolls; only the lists inside do. */
+
+  /* Scroll the line just rung into view, the way a till's display follows. */
+  useEffect(() => {
+    if (!lastSku) return;
+    document.getElementById(`rg-line-${lastSku}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [lastSku, cart]);
+
+  /* Switching the scan box's keyboard on or off only takes effect on the next
+     focus, so it is blurred and focused again. */
+  const toggleKeyboard = () => {
+    setKb((on) => !on);
+    const el = scanRef.current;
+    if (el) {
+      el.blur();
+      window.setTimeout(() => el.focus(), 60);
+    }
+  };
 
   /* #printzone must be a DIRECT child of body: the print stylesheet is
      `body.receiptmode > *:not(#printzone) { display: none }`, so nesting it
      inside the page wrapper would hide the wrapper and the receipt with it.
      That's why it's a sibling of the shell rather than inside it. */
-  const shell = (inner: React.ReactNode) => (
+  const frame = (top: React.ReactNode, inner: React.ReactNode) => (
     <>
-      {/* Runs wherever the till is on screen, including the lock screen and
-          the receipt screen: a receipt rung a minute ago must not wait on
-          somebody navigating back to the sell view. */}
+      <style>{TILL_CSS}</style>
+      {/* Runs wherever the till is on screen, including the receipt screen:
+          a receipt rung a minute ago must not wait on somebody navigating
+          back to the sell view. */}
       <PrintAgent
         active={printDirect && printerReady && !!who}
         onStatus={(s) => setPrintTrouble(s.trouble)}
       />
-      <div style={{ minHeight: "100dvh", background: "var(--bg-sunken)", padding: "var(--sp-4)" }}>
-        <div className="stack g-4" style={{ maxWidth: 940, margin: "0 auto" }}>{inner}</div>
+      <div className="rg">
+        {top}
+        {inner}
       </div>
       <div id="printzone" ref={printRef} />
     </>
   );
 
+  const center = (inner: React.ReactNode) => <div className="rg-center">{inner}</div>;
+
   if (checking) {
-    return shell(
-      <div className="stack g-3" aria-busy="true">
-        <Skeleton height={80} radius="var(--r-lg)" />
-        <Skeleton height={320} radius="var(--r-lg)" />
-      </div>
-    );
+    return frame(null, center(<Skeleton height={320} radius="var(--r-lg)" />));
   }
 
   /* ----- locked ----- */
   if (!who) {
     const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "enter"];
-    return shell(
-      <div className="stack g-4" style={{ maxWidth: 380, margin: "8vh auto 0" }}>
-        <div className="stack g-2" style={{ textAlign: "center" }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" style={{ width: 56, height: 56, margin: "0 auto" }} />
-          <h1 className="display" style={{ fontSize: "var(--fs-2xl)", margin: 0 }}>Register</h1>
-          <p className="t-sm t-muted">Enter your PIN to start a shift.</p>
+    return frame(
+      null,
+      center(
+        <div className="rg-lock">
+          <div className="stack g-3" style={{ textAlign: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="" style={{ width: 72, height: 72, margin: "0 auto" }} />
+            <h1 className="display" style={{ fontSize: "var(--fs-2xl)", margin: 0 }}>Register</h1>
+            <p className="t-sm t-muted" style={{ margin: 0 }}>Enter your PIN to start.</p>
+            <div className="rg-dots" aria-live="polite" aria-label={`${pin.length} digits entered`}>
+              {pin
+                ? Array.from({ length: pin.length }).map((_, i) => <span key={i} className="rg-dot" />)
+                : <span className="t-muted t-sm">PIN</span>}
+            </div>
+            {pinErr ? <Note tone="error">{pinErr}</Note> : null}
+            {/* A physical keyboard works too. Invisible, and never raises the
+                on-screen keyboard — the pad is right there. */}
+            <input
+              type="password"
+              inputMode="none"
+              autoComplete="off"
+              autoFocus
+              aria-label="PIN"
+              className="rg-hidden"
+              value={pin}
+              onChange={(e) => { setPinErr(""); setPin(e.target.value.replace(/\D/g, "").slice(0, 12)); }}
+              onKeyDown={(e) => { if (e.key === "Enter") void signIn(pin); }}
+            />
+          </div>
+          <div className="rg-pad">
+            {keys.map((k) =>
+              k === "clear" ? (
+                <button key={k} type="button" className="rg-key clear" disabled={busy} onClick={() => { setPin(""); setPinErr(""); }}>
+                  Clear
+                </button>
+              ) : k === "enter" ? (
+                <button key={k} type="button" className="rg-key go" disabled={busy || pin.length < 3} onClick={() => void signIn(pin)}>
+                  {busy ? "…" : "Enter"}
+                </button>
+              ) : (
+                <button
+                  key={k}
+                  type="button"
+                  className="rg-key"
+                  disabled={busy}
+                  onClick={() => { setPinErr(""); setPin((p) => (p.length >= 12 ? p : p + k)); }}
+                >
+                  {k}
+                </button>
+              )
+            )}
+          </div>
         </div>
-
-        <div
-          className="card card-pad"
-          style={{ textAlign: "center", letterSpacing: "0.5em", fontSize: "var(--fs-2xl)", minHeight: 64 }}
-          aria-live="polite"
-          aria-label={`${pin.length} digits entered`}
-        >
-          {pin ? "•".repeat(pin.length) : <span className="t-muted" style={{ letterSpacing: 0, fontSize: "var(--fs-sm)" }}>PIN</span>}
-        </div>
-
-        {pinErr ? <Note tone="error">{pinErr}</Note> : null}
-
-        <div className="grid-auto" style={{ ["--min" as string]: "96px" }}>
-          {keys.map((k) =>
-            k === "clear" ? (
-              <Button key={k} size="xl" variant="ghost" block disabled={busy} onClick={() => { setPin(""); setPinErr(""); }}>
-                Clear
-              </Button>
-            ) : k === "enter" ? (
-              <Button key={k} size="xl" variant="primary" block loading={busy} disabled={busy || pin.length < 3} onClick={() => void signIn(pin)}>
-                Enter
-              </Button>
-            ) : (
-              <Button
-                key={k}
-                size="xl"
-                variant="secondary"
-                block
-                disabled={busy}
-                onClick={() => { setPinErr(""); setPin((p) => (p.length >= 12 ? p : p + k)); }}
-              >
-                {k}
-              </Button>
-            )
-          )}
-        </div>
-
-        {/* A physical keyboard should work too — some tills have one. */}
-        <input
-          className="input"
-          type="password"
-          inputMode="numeric"
-          autoComplete="off"
-          aria-label="PIN"
-          value={pin}
-          onChange={(e) => { setPinErr(""); setPin(e.target.value.replace(/\D/g, "").slice(0, 12)); }}
-          onKeyDown={(e) => { if (e.key === "Enter") void signIn(pin); }}
-        />
-      </div>
+      )
     );
   }
 
-  const header = (
-    <div className="row wrap g-3" style={{ justifyContent: "space-between", alignItems: "center" }}>
-      <div className="row g-2">
-        <Icon name="register" size={18} />
-        <span style={{ fontWeight: 700 }}>{who}</span>
-        {drawer ? (
-          <Badge tone="success" dot>Drawer open {fmtTime(drawer.openedAt)}</Badge>
-        ) : (
-          <Badge tone="warn" dot>No drawer</Badge>
-        )}
-        {!online ? <Badge tone="danger" dot>Offline</Badge> : null}
-        {printTrouble ? <Badge tone="warn" dot>Printer</Badge> : null}
-        {pickups.length ? (
-          <Badge tone="info" dot>{plural(pickups.length, "order")} to collect</Badge>
-        ) : null}
-        {queue.length ? (
-          <Badge tone={queue.some(isStuck) ? "danger" : "warn"} dot>
-            {plural(queue.length, "sale")} waiting to sync
-          </Badge>
-        ) : null}
-      </div>
-      <div className="row wrap g-2">
-        {/* No sale. It pops the till without ringing anything, which is what
-            you need for change and a miskey — and it goes in the log with a
-            name on it every single time. */}
-        {drawer && !closing && printerReady ? (
-          <Button size="sm" variant="ghost" icon="cash" disabled={busy} onClick={() => void popDrawer()}>
-            No sale
-          </Button>
-        ) : null}
-        {drawer && !closing ? (
-          <Button size="sm" variant="secondary" icon="lock" onClick={() => setClosing(true)}>
-            Close drawer
-          </Button>
-        ) : null}
-        <Button size="sm" variant="ghost" icon="logout" onClick={() => void lock()}>Lock</Button>
-      </div>
+  const topBar = (
+    <div className="rg-top">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.png" alt="" style={{ width: 28, height: 28 }} />
+      <span className="rg-who">{who}</span>
+      {drawer ? <Badge tone="success" dot>Drawer open {fmtTime(drawer.openedAt)}</Badge> : <Badge tone="warn" dot>No drawer</Badge>}
+      {!online ? <Badge tone="danger" dot>Offline</Badge> : null}
+      {printTrouble ? (
+        <span className="rg-trouble" title={printTrouble}><Icon name="print" size={14} /> {printTrouble}</span>
+      ) : null}
+      {queue.length ? (
+        <Badge tone={queue.some(isStuck) ? "danger" : "warn"} dot>{plural(queue.length, "sale")} to sync</Badge>
+      ) : null}
+      <span className="rg-sp" />
+      {/* No sale pops the till without ringing anything, and goes in the log
+          with a name on it every single time. */}
+      {drawer && !closing && printerReady ? (
+        <Button size="md" variant="secondary" icon="cash" disabled={busy} onClick={() => void popDrawer()}>No sale</Button>
+      ) : null}
+      {drawer && !closing ? (
+        <Button size="md" variant="secondary" icon="lock" onClick={() => setClosing(true)}>Close drawer</Button>
+      ) : null}
+      <Button size="md" variant="ghost" icon="logout" onClick={() => void lock()}>Lock</Button>
     </div>
   );
 
-  /* Shown wherever the till is being used, not just on the sell screen: the
-     one thing a cashier must never wonder about is whether the sale they just
-     took is actually recorded anywhere. */
+  /* Shown wherever the till is being used: the one thing a cashier must never
+     wonder about is whether the sale they just took is recorded anywhere. */
   const offlineBanner =
     !online || queue.length ? (
-      <div
-        className="card card-pad stack g-2"
-        style={{
-          background: online ? "var(--warn-soft, var(--bg-sunken))" : "var(--danger-soft, var(--bg-sunken))",
-          borderColor: online ? "var(--warn-border, var(--border-subtle))" : "var(--danger-border, var(--border-subtle))",
-        }}
-        aria-live="polite"
-      >
-        <div className="row wrap g-2" style={{ alignItems: "center", justifyContent: "space-between" }}>
-          <div className="stack g-1">
-            <span style={{ fontWeight: 700 }}>
-              {!online ? "No connection — still taking sales" : `${plural(queue.length, "sale")} waiting to sync`}
-            </span>
-            <span className="t-sm">
-              {!online
-                ? "Sales are being saved on this device and will post themselves when the wifi is back. Card sales still need running on the terminal."
-                : "They're saved here and haven't reached the books yet."}
-            </span>
-          </div>
-          {queue.length ? (
-            <Button size="sm" variant="secondary" icon="refresh" loading={syncing} disabled={syncing} onClick={() => void drainQueue(true)}>
-              Sync now
-            </Button>
-          ) : null}
+      <div className={`rg-banner ${online ? "warn" : "err"}`} aria-live="polite">
+        <div className="stack g-1" style={{ flex: 1, minWidth: 0 }}>
+          <b>{!online ? "No connection — still taking sales" : `${plural(queue.length, "sale")} waiting to sync`}</b>
+          <span>
+            {!online
+              ? "Sales save on this tablet and post themselves when the wifi is back. Card sales still need the terminal."
+              : queue.some(isStuck)
+                ? `${queue.filter(isStuck).map((q) => q.lastError).find(Boolean) || "The server keeps rejecting some."} Nothing is lost — show this to the office.`
+                : "Saved here; not in the books yet."}
+          </span>
         </div>
-
         {queue.length ? (
-          <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-2)" }}>
-            {queue.slice(0, 6).map((q) => (
-              <div key={q.key} className="row g-2" style={{ alignItems: "center" }}>
-                <span className="t-xs t-muted">{fmtTime(q.createdAtIso)}</span>
-                <span className="grow truncate t-sm">
-                  {plural(q.lines.reduce((n, l) => n + l.quantity, 0), "item")} · {q.paymentMethod === "CASH" ? "cash" : "card"}
-                </span>
-                <span className="num t-sm">{money(q.totalCents)}</span>
-                {isStuck(q) ? <Badge tone="danger">Needs a look</Badge> : null}
-              </div>
-            ))}
-            {queue.length > 6 ? <span className="t-xs t-muted">and {queue.length - 6} more</span> : null}
-          </div>
-        ) : null}
-
-        {queue.some(isStuck) ? (
-          <Note tone="error" title="Some sales won't post">
-            {queue.filter(isStuck).map((q) => q.lastError).find(Boolean) || "The server keeps rejecting them."}{" "}
-            Nothing has been lost — show this screen to whoever runs the market.
-          </Note>
+          <Button size="sm" variant="secondary" icon="refresh" loading={syncing} disabled={syncing} onClick={() => void drainQueue(true)}>
+            Sync now
+          </Button>
         ) : null}
       </div>
     ) : null;
 
   /* ----- no drawer open ----- */
   if (drawerLoaded && !drawer) {
-    return shell(
-      <>
-        {header}
-        <Card title="Open the drawer" subtitle="Count the starting cash before the first sale.">
-          <div className="stack g-4">
-            <Field label="Starting cash in the drawer" hint="What's in there right now, before you sell anything.">
-              {(p) => (
-                <MoneyInput
-                  {...p}
-                  value={openFloat}
-                  placeholder="150.00"
-                  style={{ height: 64, fontSize: "var(--fs-xl)" }}
-                  onChange={(e) => setOpenFloat(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void openDrawer(); }}
-                />
-              )}
-            </Field>
-            <Button variant="primary" size="xl" block icon="unlock" loading={busy} disabled={busy || !openFloat.trim()} onClick={() => void openDrawer()}>
-              Open the drawer with {money(dollarsToCents(openFloat) || 0)}
-            </Button>
+    return frame(
+      topBar,
+      center(
+        <div className="card card-pad stack g-4" style={{ width: "100%", maxWidth: 520 }}>
+          <div className="stack g-1">
+            <h2 style={{ margin: 0, fontSize: "var(--fs-xl)" }}>Open the drawer</h2>
+            <span className="t-sm t-muted">Count the starting cash before the first sale.</span>
           </div>
-        </Card>
-      </>
+          <MoneyInput
+            value={openFloat}
+            placeholder="150.00"
+            aria-label="Starting cash in the drawer"
+            style={{ height: 64, fontSize: "var(--fs-xl)" }}
+            onChange={(e) => setOpenFloat(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void openDrawer(); }}
+          />
+          <Button variant="primary" size="xl" block icon="unlock" loading={busy} disabled={busy || !openFloat.trim()} onClick={() => void openDrawer()}>
+            Open with {money(dollarsToCents(openFloat) || 0)}
+          </Button>
+        </div>
+      )
     );
   }
 
@@ -1337,605 +1314,578 @@ export default function RegisterKiosk() {
     const expected = drawer.openTotalCents + drawer.cashSalesCents;
     const counted = dollarsToCents(closeCount) || 0;
     const diff = counted - expected;
-    return shell(
-      <>
-        {header}
-        <Card title="Count out" subtitle="Count everything in the drawer, including the float you started with.">
-          <div className="stack g-4">
-            <div className="row wrap g-4">
-              <div className="stack g-1">
-                <span className="t-label">Should be there</span>
-                <span className="display num" style={{ fontSize: "var(--fs-3xl)" }}>{money(expected)}</span>
-                <span className="t-xs t-muted">{money(drawer.openTotalCents)} start + {money(drawer.cashSalesCents)} cash sales</span>
-              </div>
+    return frame(
+      topBar,
+      center(
+        <div className="card card-pad stack g-4" style={{ width: "100%", maxWidth: 560 }}>
+          <div className="row between wrap g-3" style={{ alignItems: "flex-end" }}>
+            <div className="stack g-1">
+              <h2 style={{ margin: 0, fontSize: "var(--fs-xl)" }}>Count out</h2>
+              <span className="t-xs t-muted">{money(drawer.openTotalCents)} start + {money(drawer.cashSalesCents)} cash sales</span>
             </div>
-            <Field label="What you actually counted">
-              {(p) => (
-                <MoneyInput
-                  {...p}
-                  value={closeCount}
-                  placeholder="0.00"
-                  style={{ height: 64, fontSize: "var(--fs-xl)" }}
-                  onChange={(e) => setCloseCount(e.target.value)}
-                />
-              )}
-            </Field>
-            {closeCount.trim() ? (
-              <Note tone={diff === 0 ? "success" : Math.abs(diff) < 500 ? "warn" : "error"}>
-                {diff === 0 ? "Exactly right." : diff > 0 ? `${money(diff)} over.` : `${money(-diff)} short.`}
-              </Note>
-            ) : null}
-            <div className="row wrap g-2">
-              <Button variant="primary" size="xl" className="grow" icon="lock" loading={busy} disabled={busy || !closeCount.trim()} onClick={() => void closeDrawer()}>
-                Close the drawer
-              </Button>
-              <Button variant="ghost" size="xl" disabled={busy} onClick={() => { setClosing(false); setCloseCount(""); }}>
-                Back
-              </Button>
+            <div className="stack g-1" style={{ textAlign: "right" }}>
+              <span className="t-label">Should be there</span>
+              <span className="num" style={{ fontSize: "var(--fs-3xl)", fontWeight: 800 }}>{money(expected)}</span>
             </div>
           </div>
-        </Card>
-      </>
+          <MoneyInput
+            value={closeCount}
+            placeholder="What you counted"
+            aria-label="What you actually counted"
+            style={{ height: 64, fontSize: "var(--fs-xl)" }}
+            onChange={(e) => setCloseCount(e.target.value)}
+          />
+          {closeCount.trim() ? (
+            <Note tone={diff === 0 ? "success" : Math.abs(diff) < 500 ? "warn" : "error"}>
+              {diff === 0 ? "Exactly right." : diff > 0 ? `${money(diff)} over.` : `${money(-diff)} short.`}
+            </Note>
+          ) : null}
+          <div className="row g-2">
+            <Button variant="primary" size="xl" className="grow" icon="lock" loading={busy} disabled={busy || !closeCount.trim()} onClick={() => void closeDrawer()}>
+              Close the drawer
+            </Button>
+            <Button variant="ghost" size="xl" disabled={busy} onClick={() => { setClosing(false); setCloseCount(""); }}>Back</Button>
+          </div>
+        </div>
+      )
     );
   }
+
+  /* ---------------------------------------------- the two-pane till body -- */
+  const till = (left: React.ReactNode, right: React.ReactNode) =>
+    frame(topBar, <div className="rg-body"><section className="rg-pane">{left}</section><section className="rg-pane">{right}</section></div>);
+
+  /* Totals block, shared by the ticket and the booth ticket. */
+  const totals = (rows: { label: string; cents: number; minus?: boolean }[], totalCents: number) => (
+    <>
+      {rows.map((r) => (
+        <div key={r.label} className="rg-sum"><span>{r.label}</span><span>{r.minus ? "-" : ""}{money(r.cents)}</span></div>
+      ))}
+      <div className="rg-total"><span className="lbl">Total</span><span className="amt">{money(totalCents)}</span></div>
+    </>
+  );
 
   /* ----- receipt ----- */
   if (receipt) {
-    return shell(
+    const change = receipt.paymentMethod === "CASH" ? receipt.changeCents || 0 : 0;
+    const tendered = receipt.cashTenderedCents || 0;
+    return till(
       <>
-        {header}
-        {offlineBanner}
-        {/* Holds the cursor so a scan here starts the next ticket. Invisible,
-            and inputMode none so focusing it never pops the on-screen keyboard. */}
-        <input
-          ref={nextScanRef}
-          aria-hidden="true"
-          tabIndex={-1}
-          inputMode="none"
-          autoComplete="off"
-          style={{ position: "absolute", opacity: 0, width: 1, height: 1, pointerEvents: "none" }}
-        />
-        <Card
-          title={receipt.offline ? "Saved on this device" : `Sale #${receipt.number}`}
-          subtitle={receipt.offline ? "Take the money — it posts itself when the connection is back." : "Done — hand over the receipt."}
-        >
-          <div className="stack g-4" style={{ textAlign: "center" }}>
-            <div className="stack g-1">
-              <span className="t-label">Total</span>
-              <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(receipt.totalCents)}</span>
+        <div className="rg-pane-head">
+          <b>{receipt.offline ? "Saved on this tablet" : `Sale #${receipt.number}`}</b>
+          <Badge tone="success" dot>Paid</Badge>
+        </div>
+        <div className="rg-scroll" style={{ padding: "14px" }}>
+          <div className="stack g-3">
+            <div className="rg-sum" style={{ fontSize: "var(--fs-md)" }}><span>Total</span><b>{money(receipt.totalCents)}</b></div>
+            <div className="rg-sum" style={{ fontSize: "var(--fs-md)" }}>
+              <span>Paid by</span>
+              <b>{receipt.paymentMethod === "CASH" ? "Cash" : `Card${receipt.cardName ? ` — ${receipt.cardName}` : ""}`}</b>
             </div>
-            {receipt.paymentMethod === "CASH" && (receipt.cashTenderedCents ?? 0) > 0 ? (
-              <div className="row g-4" style={{ justifyContent: "center" }}>
-                <div className="stack g-1">
-                  <span className="t-label">Cash given</span>
-                  <span className="num" style={{ fontSize: "var(--fs-xl)" }}>{money(receipt.cashTenderedCents || 0)}</span>
-                </div>
-                <div className="stack g-1">
-                  <span className="t-label">Change given</span>
-                  <span className="num" style={{ fontSize: "var(--fs-xl)" }}>{money(receipt.changeCents || 0)}</span>
-                </div>
-              </div>
-            ) : null}
-            <div className="row wrap g-2">
-              <Button variant="primary" size="xl" className="grow" icon="plus" onClick={() => setReceipt(null)}>
-                Next customer
-              </Button>
-              {/* A printed receipt is built from the booked sale, which doesn't
-                  exist yet for an offline ticket. Rather than print something
-                  that can't be looked up later, say so. */}
-              {receipt.offline ? null : (
-                <Button variant="secondary" size="xl" icon="print" disabled={busy} onClick={() => void printAgain(receipt.id)}>
-                  Print again
-                </Button>
-              )}
-            </div>
-            {receipt.cardName ? (
-              <span className="t-xs t-muted">Paid by card — {receipt.cardName}</span>
-            ) : null}
-            {printerReady && !receipt.offline ? (
-              /* The receipt is already on its way out; this line is here so a
-                 cashier waiting a second for paper knows it's coming rather
-                 than pressing print and getting two. */
-              <span className="t-xs t-muted">The receipt is printing itself.</span>
+            {receipt.paymentMethod === "CASH" && tendered > 0 ? (
+              <div className="rg-sum" style={{ fontSize: "var(--fs-md)" }}><span>Cash given</span><b>{money(tendered)}</b></div>
             ) : null}
             {receipt.offline ? (
-              <Note tone="warn">
-                No ticket number and no printed receipt until this syncs. If the customer needs paper, write the
-                total down — the sale itself is safe on this device.
-              </Note>
+              <Note tone="warn">No ticket number and no printed receipt until this syncs. The sale is safe on this tablet.</Note>
+            ) : printerReady ? (
+              <span className="t-sm t-muted">The receipt is printing.</span>
             ) : null}
           </div>
-        </Card>
-      </>
+        </div>
+      </>,
+      <div className="rg-center" style={{ flexDirection: "column", gap: 16 }}>
+        {/* Holds the cursor so a scan here starts the next ticket. Invisible,
+            and never raises the on-screen keyboard. */}
+        <input ref={nextScanRef} aria-hidden="true" tabIndex={-1} inputMode="none" autoComplete="off" className="rg-hidden" />
+        {receipt.paymentMethod === "CASH" && tendered > 0 ? (
+          <div className="stack g-1" style={{ textAlign: "center" }}>
+            <span className="t-label">Change due</span>
+            <span className="rg-hero num">{money(change)}</span>
+          </div>
+        ) : (
+          <div className="stack g-1" style={{ textAlign: "center" }}>
+            <span className="t-label">Total</span>
+            <span className="rg-hero num">{money(receipt.totalCents)}</span>
+          </div>
+        )}
+        <div className="stack g-2" style={{ width: "100%", maxWidth: 420 }}>
+          <Button variant="primary" size="xl" block icon="plus" onClick={() => setReceipt(null)}>Next customer</Button>
+          {receipt.offline ? null : (
+            <Button variant="secondary" size="lg" block icon="print" disabled={busy} onClick={() => void printAgain(receipt.id)}>Print again</Button>
+          )}
+        </div>
+        <span className="t-sm t-muted">Or just scan the next item.</span>
+      </div>
     );
   }
 
-  /* ----- selling ----- */
-  const hits = search.trim()
-    ? floor.filter((i) =>
-        i.name.toLowerCase().includes(search.trim().toLowerCase()) ||
-        i.sku.toLowerCase().includes(search.trim().toLowerCase())
-      ).slice(0, 12)
-    : [];
-  const vendorList = [...new Map(floor.map((i) => [i.vendorCode, i.vendorName])).entries()];
-
-  /* A vendor's booth ticket takes over the screen: it is already priced and
-     already attributed, so mixing it with whatever is in the cart would only
-     create ways to ring the wrong thing. */
-  /* A scanned order takes over the screen, for the same reason a booth ticket
-     does: it is already paid and already priced, and the only decision left is
-     whether the person in front of you is the person on the order. That
-     decision deserves the whole screen, not a row in a list. */
+  /* ----- a pre-order being collected ----- */
   if (scanned) {
-    return shell(
+    return till(
       <>
-        {header}
-        <Card
-          title={scanned.customerName}
-          subtitle={`Order #${scanned.number} · ${scanned.vendorName}`}
-          actions={<Button size="sm" variant="ghost" onClick={() => { setScanned(null); setScannedErr(""); }}>Back</Button>}
-        >
-          <div className="stack g-4">
-            <Note tone="success" title="Code checks out">
-              Paid in full online — {money(scanned.totalCents)}. Take no money.
-            </Note>
-
-            <div className="stack g-2">
-              {scanned.lines.map((l, idx) => (
-                <div key={`${l.name}-${idx}`} className="row g-3" style={{ alignItems: "center" }}>
-                  <span className="grow truncate">{l.quantity}× {l.name}</span>
-                </div>
-              ))}
+        <div className="rg-pane-head"><b>Order #{scanned.number}</b><span className="t-sm t-muted">{scanned.vendorName}</span></div>
+        <div className="rg-scroll">
+          {scanned.lines.map((l, idx) => (
+            <div key={`${l.name}-${idx}`} className="rg-line" style={{ gridTemplateColumns: "auto 1fr" }}>
+              <span className="num" style={{ fontWeight: 700 }}>{l.quantity}×</span>
+              <span className="rg-name"><b>{l.name}</b></span>
             </div>
-
-            <div className="stack g-1">
-              <span className="t-sm t-muted">
-                {scanned.readyAt ? `Dropped off ${fmtTime(scanned.readyAt)}` : "Marked ready"}
-                {scanned.customerPhone ? ` · ${scanned.customerPhone}` : ""}
-              </span>
-              <span className="t-sm t-muted">Check the name matches before you hand it over.</span>
-            </div>
-
-            <Button size="xl" block variant="primary" icon="check" loading={busy} disabled={busy} onClick={() => void handOver(scanned)}>
-              Hand it over
-            </Button>
-          </div>
-        </Card>
-      </>
+          ))}
+        </div>
+        <div className="rg-foot">
+          <div className="rg-total"><span className="lbl">Paid online</span><span className="amt">{money(scanned.totalCents)}</span></div>
+        </div>
+      </>,
+      <div className="rg-center" style={{ flexDirection: "column", gap: 14, alignItems: "stretch" }}>
+        <div className="stack g-1">
+          <h2 style={{ margin: 0, fontSize: "var(--fs-2xl)" }}>{scanned.customerName}</h2>
+          <span className="t-sm t-muted">
+            {scanned.readyAt ? `Dropped off ${fmtTime(scanned.readyAt)}` : "Marked ready"}
+            {scanned.customerPhone ? ` · ${scanned.customerPhone}` : ""}
+          </span>
+        </div>
+        <Note tone="success" title="Paid in full online">Take no money. Check the name matches before you hand it over.</Note>
+        <Button size="xl" block variant="primary" icon="check" loading={busy} disabled={busy} onClick={() => void handOver(scanned)}>
+          Hand it over
+        </Button>
+        <Button size="lg" block variant="ghost" onClick={() => { setScanned(null); setScannedErr(""); }}>Back</Button>
+      </div>
     );
   }
 
+  /* ----- a vendor's booth ticket, paid in cash here ----- */
   if (vt) {
-    return shell(
+    return till(
       <>
-        {header}
-        <Card
-          title={`${vt.vendorName} — booth ticket ${vt.code}`}
-          subtitle="Rung up at their own booth. Take the cash; it books as their sale, not yours."
-          actions={<Button size="sm" variant="ghost" onClick={() => { setVt(null); setVtErr(""); }}>Back</Button>}
-        >
-          <div className="stack g-3">
-            {vt.lines.map((l, idx) => (
-              <div key={`${l.sku}-${idx}`} className="row g-3" style={{ alignItems: "center" }}>
-                <span className="grow truncate">{l.quantity}× {l.name}</span>
-                <span className="num">{money(l.priceCents * l.quantity)}</span>
-              </div>
-            ))}
-            <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
-              <div className="t-body">Subtotal <b className="num">{money(vt.subtotalCents)}</b></div>
-              <div className="t-body">Tax <b className="num">{money(vt.taxCents)}</b></div>
+        <div className="rg-pane-head"><b>Booth ticket {vt.code}</b><span className="t-sm t-muted">{vt.vendorName}</span></div>
+        <div className="rg-scroll">
+          {vt.lines.map((l, idx) => (
+            <div key={`${l.sku}-${idx}`} className="rg-line" style={{ gridTemplateColumns: "auto 1fr auto" }}>
+              <span className="num" style={{ fontWeight: 700 }}>{l.quantity}×</span>
+              <span className="rg-name"><b>{l.name}</b></span>
+              <span className="rg-amt">{money(l.priceCents * l.quantity)}</span>
             </div>
-            {vtErr ? <Note tone="error">{vtErr}</Note> : null}
-          </div>
-        </Card>
+          ))}
+        </div>
+        <div className="rg-foot">
+          {totals([{ label: "Subtotal", cents: vt.subtotalCents }, { label: "Tax", cents: vt.taxCents }], vt.totalCents)}
+        </div>
+      </>,
+      <div className="rg-scroll" style={{ padding: 10 }}>
+        {vtErr ? <div className="rg-banner err" style={{ margin: "0 0 10px" }}>{vtErr}</div> : null}
         <CashTender
+          compact
           totalCents={vt.totalCents}
           busy={busy}
           onCancel={() => { setVt(null); setVtErr(""); }}
           onConfirm={(tendered) => void bookVendorTicket(tendered)}
         />
-      </>
+      </div>
     );
   }
 
+  /* ----- selling ----- */
+  const query = scan.trim().toLowerCase();
+  const hits = query.length >= 2
+    ? floor.filter((i) => i.name.toLowerCase().includes(query) || i.sku.toLowerCase().includes(query)).slice(0, 24)
+    : [];
+  const vendorList = [...new Map<string, string>(floor.map((i) => [i.vendorCode, i.vendorName] as [string, string])).entries()];
   const stranded = unbooked.filter((u) => u.paymentIntentId !== charge?.paymentIntentId);
+  const itemCount = cart.reduce((n, l) => n + l.quantity, 0);
 
-  return shell(
+  const itemTile = (i: FloorItem) => (
+    <button key={i.id} type="button" className={`rg-tile${i.quantity === 0 ? " out" : ""}`} onClick={() => addItem(i)}>
+      <b>{i.name}</b>
+      <span className="meta"><span>{i.quantity === 0 ? "Out" : `${i.quantity} left`}</span><span className="num">{money(i.priceCents)}</span></span>
+    </button>
+  );
+
+  /* LEFT: the ticket. Always on screen, total and pay buttons pinned. */
+  const ticket = (
     <>
-      {header}
-      {offlineBanner}
-
-      {stranded.length ? (
-        <Note tone="error" title={stranded.length === 1 ? "A card was charged with no ticket" : `${stranded.length} cards were charged with no ticket`}>
-          <div className="stack g-2" style={{ marginTop: "var(--sp-2)" }}>
-            {stranded.map((u) => (
-              <div key={u.paymentIntentId} className="row wrap g-2" style={{ alignItems: "center" }}>
-                <span className="grow t-sm">
-                  <b className="num">{money(u.amountCents)}</b>
-                  {u.cardLabel ? ` · ${u.cardLabel}` : ""} · {fmtTime(u.createdAt)}{u.employee ? ` · ${u.employee}` : ""}
-                </span>
-                <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => void saveUnbooked(u)}>
-                  Save the ticket
-                </Button>
-              </div>
-            ))}
-            <span className="t-xs t-muted">The money is taken. Saving books the exact items that were charged.</span>
+      <div className="rg-pane-head">
+        <b>Ticket{itemCount ? ` · ${plural(itemCount, "item")}` : ""}</b>
+        {cart.length && pay === "NONE" ? (
+          <Button size="sm" variant="dangerSoft" icon="trash" onClick={() => { setCart([]); setLastSku(""); }}>Clear</Button>
+        ) : null}
+      </div>
+      <div className="rg-scroll">
+        {cart.length === 0 ? (
+          <div className="rg-empty">
+            <Icon name="scan" size={36} />
+            <b>Scan an item to start</b>
+            <span className="t-sm">Or search and tap it on the right.</span>
           </div>
-        </Note>
+        ) : (
+          cart.map((l) => (
+            <div key={l.sku} id={`rg-line-${l.sku}`} className={`rg-line${l.sku === lastSku ? " is-new" : ""}`}>
+              {pay === "NONE" ? (
+                <span className="rg-qty">
+                  <button type="button" aria-label={`One fewer ${l.name}`} onClick={() => setQty(l.sku, l.quantity - 1)}>−</button>
+                  <span>{l.quantity}</span>
+                  <button type="button" aria-label={`One more ${l.name}`} onClick={() => { setQty(l.sku, l.quantity + 1); setLastSku(l.sku); }}>+</button>
+                </span>
+              ) : (
+                <span className="num" style={{ fontWeight: 700, minWidth: 36 }}>{l.quantity}×</span>
+              )}
+              <span className="rg-name">
+                <b>{l.name}</b>
+                <small>{l.vendorName} · {money(l.priceCents)} each</small>
+              </span>
+              <span className="rg-amt">{money(l.priceCents * l.quantity)}</span>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="rg-foot">
+        {totals(
+          [
+            { label: "Subtotal", cents: subtotal },
+            { label: shownRate === null ? "Tax (mixed)" : `Tax (${shownRate}%)`, cents: taxCents },
+          ],
+          total
+        )}
+        {pay === "NONE" ? (
+          <div className="rg-pay">
+            <button type="button" className="rg-paybtn rg-cash" disabled={busy || !cart.length} onClick={() => setPay("CASH")}>
+              <span><Icon name="cash" size={20} /> Cash</span>
+              <small>{money(total)}</small>
+            </button>
+            <button type="button" className="rg-paybtn rg-card" disabled={busy || !cart.length} onClick={() => setPay("CARD")}>
+              <span><Icon name="card" size={20} /> Card</span>
+              <small>{money(cardTotal)}</small>
+            </button>
+          </div>
+        ) : (
+          <div className="rg-paying">
+            Taking {pay === "CASH" ? "cash" : "card"} — {money(pay === "CASH" ? total : cardTotal)}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  /* RIGHT, while paying by card. */
+  const cardPanel = (
+    <div className="rg-scroll" style={{ padding: 14 }}>
+      <div className="stack g-3">
+        <div className="stack g-1">
+          <span className="t-label t-accent">Charge the card</span>
+          <span className="rg-hero num">{money(cardTotal)}</span>
+          {cardAdjustCents > 0 ? (
+            <span className="t-xs t-muted">{money(total)} cash price + {money(cardAdjustCents)} non-cash adjustment, tax included</span>
+          ) : null}
+        </div>
+        {readerReady ? (
+          charge ? (
+            <>
+              {charge.state === "failed" ? (
+                <Note tone="error" title="Not paid">{charge.message}</Note>
+              ) : (
+                <Note
+                  tone={charge.state === "booking" ? "success" : "info"}
+                  title={charge.state === "sending" ? "Sending…" : charge.state === "booking" ? "Approved" : charge.state === "succeeded" ? "Paid — save the ticket" : "On the reader now"}
+                >
+                  {charge.message}
+                  {charge.cardLabel ? ` (${charge.cardLabel})` : ""}
+                </Note>
+              )}
+              {charge.state === "failed" ? (
+                <div className="row g-2">
+                  <Button variant="primary" size="xl" className="grow" icon="card" disabled={busy} onClick={() => void startCharge()}>Try the card again</Button>
+                  <Button variant="ghost" size="xl" disabled={busy} onClick={() => void cancelCharge()}>Cancel</Button>
+                </div>
+              ) : charge.state === "succeeded" ? (
+                /* Paid, but the ticket didn't save. The only button that
+                   matters is the one that tries again. */
+                <Button variant="primary" size="xl" block icon="check" loading={busy} disabled={busy}
+                  onClick={() => void book("CARD", 0, { paymentIntentId: charge.paymentIntentId, cardLabel: charge.cardLabel })}>
+                  Finish the sale
+                </Button>
+              ) : (
+                /* Not while it's still being sent: the reader would show the
+                   total a moment later with nobody watching for the tap. */
+                <Button variant="ghost" size="xl" block loading={busy} disabled={busy || charge.state === "booking" || charge.state === "sending"} onClick={() => void cancelCharge()}>
+                  Cancel the payment
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              <Note tone="info">The reader asks for the card. Nothing is charged until they tap.</Note>
+              <Button variant="primary" size="xl" block icon="card" loading={busy} disabled={busy} onClick={() => void startCharge()}>
+                Send {money(cardTotal)} to the reader
+              </Button>
+              <Button variant="ghost" size="lg" block disabled={busy} onClick={() => setPay("NONE")}>Back</Button>
+            </>
+          )
+        ) : (
+          <>
+            <Field label="Approval code or last 4" hint="Optional, but it's the only thing tying this ticket to the terminal.">
+              {(p) => (
+                <Input {...p} className="mono" value={cardRef} placeholder="APPR 004571 · 4242" autoComplete="off" onChange={(e) => setCardRef(e.target.value)} />
+              )}
+            </Field>
+            <Note tone="info">Run the card on the terminal first. Nothing is recorded here until you book it.</Note>
+            <Button variant="primary" size="xl" block icon="check" loading={busy} disabled={busy} onClick={() => void book("CARD")}>Book the sale</Button>
+            <Button variant="ghost" size="lg" block disabled={busy} onClick={() => setPay("NONE")}>Back</Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  /* RIGHT, while ringing up: scan box, tabs, tiles. */
+  const pickingPanel = (
+    <>
+      <div className="rg-scanbar">
+        <input
+          ref={scanRef}
+          className="mono"
+          value={scan}
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          inputMode={kb ? "text" : "none"}
+          placeholder="Scan, or tap ⌨ to type a name or code"
+          aria-label="Scan a barcode or search"
+          onChange={(e) => { onScanChange(e.target.value); if (tab !== "items") setTab("items"); }}
+          onKeyDown={(e) => {
+            /* Enter and Tab both mean "that's the whole code". A typed name
+               with exactly one match rings that one up. */
+            if (e.key === "Enter" || e.key === "Tab") {
+              e.preventDefault();
+              const exact = floor.some((i) => i.sku === scan.trim().toUpperCase());
+              if (!exact && hits.length === 1) { addItem(hits[0]); setScan(""); return; }
+              void doScan();
+            }
+          }}
+        />
+        {scan ? (
+          <button type="button" className="rg-iconbtn" aria-label="Clear" onClick={() => { setScan(""); scanRef.current?.focus(); }}>
+            <Icon name="close" size={20} />
+          </button>
+        ) : null}
+        <button type="button" className={`rg-iconbtn${kb ? " on" : ""}`} aria-pressed={kb} aria-label="Keyboard" title="Keyboard" onClick={toggleKeyboard}>
+          <span style={{ fontSize: 22, lineHeight: 1 }}>⌨</span>
+        </button>
+      </div>
+      {scanErr ? <div className="rg-banner err">{scanErr}</div> : null}
+      {offlineBanner}
+      {stranded.length ? (
+        <div className="rg-banner err" style={{ flexDirection: "column", alignItems: "stretch" }}>
+          <b>{stranded.length === 1 ? "A card was charged with no ticket" : `${stranded.length} cards were charged with no ticket`}</b>
+          {stranded.map((u) => (
+            <div key={u.paymentIntentId} className="row wrap g-2" style={{ alignItems: "center" }}>
+              <span className="grow">
+                <b className="num">{money(u.amountCents)}</b>
+                {u.cardLabel ? ` · ${u.cardLabel}` : ""} · {fmtTime(u.createdAt)}{u.employee ? ` · ${u.employee}` : ""}
+              </span>
+              <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={() => void saveUnbooked(u)}>Save the ticket</Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {probeOn ? (
+        <div className="rg-banner warn"><code className="mono t-xs" style={{ wordBreak: "break-all" }}>{probe || "scan something"}</code></div>
       ) : null}
 
-      {/* Collections come first on the screen because they come first at the
-          counter: somebody standing there for a paid order is not queuing to
-          buy anything, and making them wait behind a ring-up is the fastest
-          way to make online ordering feel worse than just turning up. Hidden
-          entirely when there's nothing waiting — a permanent empty panel on a
-          till is noise. */}
-      {pay === "NONE" && (pickups.length > 0 || camOpen || scannedErr) ? (
-        <Card
-          title="Ready to collect"
-          subtitle="Already paid online. Scan their code, or find them by name."
-          actions={
-            <Button size="sm" variant="ghost" icon="refresh" onClick={() => void loadPickups()}>
-              Refresh
-            </Button>
-          }
-        >
-          <div className="stack g-3">
+      <div className="rg-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "items"} className={`rg-tab${tab === "items" ? " on" : ""}`} onClick={() => setTab("items")}>Items</button>
+        <button type="button" role="tab" aria-selected={tab === "pickups"} className={`rg-tab${tab === "pickups" ? " on" : ""}`} onClick={() => setTab("pickups")}>
+          Pickups{pickups.length ? ` (${pickups.length})` : ""}
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "booth"} className={`rg-tab${tab === "booth" ? " on" : ""}`} onClick={() => setTab("booth")}>Booth ticket</button>
+      </div>
+
+      <div className="rg-scroll rg-tabbody">
+        {tab === "items" ? (
+          query.length >= 2 ? (
+            hits.length ? (
+              <div className="rg-tiles">{hits.map(itemTile)}</div>
+            ) : (
+              <div className="rg-empty"><b>No matches on the floor</b><span className="t-sm">Try part of the name, or the vendor code.</span></div>
+            )
+          ) : openVendor ? (
+            <>
+              <div className="rg-crumb">
+                <Button size="md" variant="secondary" icon="arrowLeft" onClick={() => setOpenVendor(null)}>All vendors</Button>
+                <b className="truncate">{vendorList.find(([c]) => c === openVendor)?.[1] || openVendor}</b>
+              </div>
+              <div className="rg-tiles">{floor.filter((i) => i.vendorCode === openVendor).map(itemTile)}</div>
+            </>
+          ) : (
+            <div className="rg-tiles">
+              {vendorList.map(([code, name]) => (
+                <button key={code} type="button" className="rg-tile vendor" onClick={() => setOpenVendor(code)}>
+                  <b>{name}</b>
+                  <span className="meta"><span className="mono">{code}</span><span>{floor.filter((i) => i.vendorCode === code).length} items</span></span>
+                </button>
+              ))}
+            </div>
+          )
+        ) : tab === "pickups" ? (
+          <div className="stack g-3" style={{ padding: 10 }}>
             {camOpen ? (
               <div className="stack g-2">
-                <div
-                  id="collect-scan-box"
-                  style={{ width: "100%", maxWidth: 380, margin: "0 auto", borderRadius: "var(--r-lg)", overflow: "hidden", background: "#000" }}
-                />
+                <div id="collect-scan-box" style={{ width: "100%", maxWidth: 360, margin: "0 auto", borderRadius: "var(--r-lg)", overflow: "hidden", background: "#000" }} />
                 <Button size="lg" variant="secondary" block onClick={() => void stopCam()}>Stop scanning</Button>
               </div>
             ) : (
-              <Button size="lg" variant="primary" block icon="search" onClick={() => void startCam()}>
-                Scan their code
-              </Button>
+              <Button size="lg" variant="primary" block icon="camera" onClick={() => void startCam()}>Scan their code with the camera</Button>
             )}
-
             {scannedErr ? <Note tone="error">{scannedErr}</Note> : null}
-            {pickups.length > 4 ? (
-              <Field label="Find it">
-                {(p) => (
-                  <SearchInput
-                    {...p}
-                    value={pickupQ}
-                    onValueChange={setPickupQ}
-                    placeholder="name or order number"
-                    aria-label="Search orders waiting for collection"
-                  />
-                )}
-              </Field>
-            ) : null}
-
-            {(() => {
-              if (pickups.length === 0) return null;
-              const q = pickupQ.trim().toLowerCase();
-              const shown = q
-                ? pickups.filter(
-                    (o) =>
-                      o.customerName.toLowerCase().includes(q) ||
-                      String(o.number).includes(q) ||
-                      o.vendorName.toLowerCase().includes(q)
-                  )
-                : pickups;
-
-              if (shown.length === 0) {
-                return <EmptyState icon="search" title="No match" body="Try their surname, or the number on their email." />;
-              }
-
-              return shown.map((o) => (
-                <div
-                  key={o.id}
-                  className="row wrap g-3"
-                  style={{
-                    alignItems: "center",
-                    padding: "var(--sp-3)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--r-lg)",
-                  }}
-                >
-                  <div className="stack g-1 grow" style={{ minWidth: 200 }}>
-                    <span className="row g-2" style={{ alignItems: "baseline" }}>
-                      <b style={{ fontSize: "var(--fs-lg)" }}>{o.customerName}</b>
-                      <span className="t-sm t-muted num">#{o.number}</span>
-                    </span>
-                    <span className="t-sm t-muted truncate">
-                      {o.vendorName} · {o.lines.map((l) => `${l.quantity}× ${l.name}`).join(", ")}
-                    </span>
-                    <span className="t-xs t-muted">
-                      {o.readyAt ? `Dropped off ${fmtTime(o.readyAt)}` : "Ready"} · paid {money(o.totalCents)}
-                      {o.customerPhone ? ` · ${o.customerPhone}` : ""}
-                    </span>
-                  </div>
-                  <Button
-                    size="lg"
-                    variant="primary"
-                    icon="check"
-                    disabled={busy}
-                    onClick={() => void handOver(o)}
-                  >
-                    Handed over
-                  </Button>
-                </div>
-              ));
-            })()}
-
-            {pickups.length > 0 ? (
-              <Note tone="info">
-                Nothing to ring up — these are paid in full. Take no money at the counter.
-              </Note>
-            ) : null}
+            {pickups.length === 0 ? (
+              <div className="rg-empty" style={{ height: "auto" }}><b>No orders waiting</b><span className="t-sm">Paid online orders show here once the vendor drops them off.</span></div>
+            ) : (
+              <>
+                {pickups.length > 4 ? (
+                  <SearchInput value={pickupQ} onValueChange={setPickupQ} placeholder="Name or order number" aria-label="Search orders waiting for collection" />
+                ) : null}
+                {(() => {
+                  const q = pickupQ.trim().toLowerCase();
+                  const shown = q
+                    ? pickups.filter((o) => o.customerName.toLowerCase().includes(q) || String(o.number).includes(q) || o.vendorName.toLowerCase().includes(q))
+                    : pickups;
+                  if (!shown.length) return <EmptyState icon="search" title="No match" body="Try their surname, or the number on their email." />;
+                  return shown.map((o) => (
+                    <div key={o.id} className="rg-order">
+                      <div className="stack g-1" style={{ flex: 1, minWidth: 0 }}>
+                        <span className="row g-2" style={{ alignItems: "baseline" }}>
+                          <b style={{ fontSize: "var(--fs-lg)" }}>{o.customerName}</b>
+                          <span className="t-sm t-muted num">#{o.number}</span>
+                        </span>
+                        <span className="t-sm t-muted truncate">{o.vendorName} · {o.lines.map((l) => `${l.quantity}× ${l.name}`).join(", ")}</span>
+                        <span className="t-xs t-muted">
+                          {o.readyAt ? `Dropped off ${fmtTime(o.readyAt)}` : "Ready"} · paid {money(o.totalCents)}{o.customerPhone ? ` · ${o.customerPhone}` : ""}
+                        </span>
+                      </div>
+                      <Button size="lg" variant="primary" icon="check" disabled={busy} onClick={() => void handOver(o)}>Handed over</Button>
+                    </div>
+                  ));
+                })()}
+                <span className="t-xs t-muted">Paid in full online — take no money for these.</span>
+              </>
+            )}
           </div>
-        </Card>
-      ) : null}
-
-      {probeOn ? (
-        <div className="card card-pad mb-3">
-          <span className="t-label">Scanner probe</span>
-          <code className="mono t-xs" style={{ display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-            {probe || "scan something"}
-          </code>
-        </div>
-      ) : null}
-
-      {pay === "NONE" ? (
-        <Card
-          title="Vendor booth ticket"
-          subtitle="A vendor rang something up at their own booth and sent the customer here to pay cash."
-        >
-          <div className="stack g-2">
-            <div className="row wrap g-2" style={{ alignItems: "flex-end" }}>
-              <Field label="Their code" className="grow">
-                {(p) => (
-                  <Input
-                    {...p}
-                    className="mono"
-                    value={vtCode}
-                    autoComplete="off"
-                    placeholder="K4M7Q"
-                    style={{ height: 56, fontSize: "var(--fs-xl)", letterSpacing: "0.12em", textTransform: "uppercase" }}
-                    onChange={(e) => { setVtCode(e.target.value.toUpperCase()); setVtErr(""); }}
-                    onKeyDown={(e) => { if (e.key === "Enter") void findVendorTicket(); }}
-                  />
-                )}
-              </Field>
-              <Button size="lg" variant="secondary" icon="search" loading={busy} disabled={busy || !vtCode.trim()} onClick={() => void findVendorTicket()}>
-                Find it
-              </Button>
+        ) : (
+          <div className="stack g-3" style={{ padding: 14 }}>
+            <span className="t-sm t-muted">A vendor rang something up at their booth and sent the customer here to pay cash. Type the code from their phone.</span>
+            <div className="row g-2">
+              <Input
+                className="mono grow"
+                value={vtCode}
+                autoComplete="off"
+                autoCapitalize="characters"
+                placeholder="K4M7Q"
+                aria-label="Booth ticket code"
+                style={{ height: 56, fontSize: "var(--fs-xl)", letterSpacing: "0.12em", textTransform: "uppercase" }}
+                onChange={(e) => { setVtCode(e.target.value.toUpperCase()); setVtErr(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter") void findVendorTicket(); }}
+              />
+              <Button size="xl" variant="primary" icon="search" loading={busy} disabled={busy || !vtCode.trim()} onClick={() => void findVendorTicket()}>Find</Button>
             </div>
             {vtErr ? <Note tone="error">{vtErr}</Note> : null}
           </div>
-        </Card>
-      ) : null}
-
-      {pay === "NONE" ? (
-        <Card title="Ring up" subtitle="Scan, search, or tap a vendor's line.">
-          <div className="stack g-4">
-            <Field label="Scan a barcode, or type a code and press Enter" error={scanErr || undefined}>
-              {(p) => (
-                <Input
-                  {...p}
-                  ref={scanRef}
-                  className="mono"
-                  value={scan}
-                  autoComplete="off"
-                  placeholder="V01-0001"
-                  style={{ height: 64, fontSize: "var(--fs-xl)", letterSpacing: "0.04em" }}
-                  onChange={(e) => onScanChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    /* Enter and Tab both mean "that's the whole code" — which
-                       one you get depends on how the scanner was programmed.
-                       Tab would otherwise move the cursor out of the box and
-                       the next scan would go nowhere, so it is swallowed. */
-                    if (e.key === "Enter" || e.key === "Tab") {
-                      e.preventDefault();
-                      void doScan();
-                    }
-                  }}
-                />
-              )}
-            </Field>
-
-            <Field label="Or search">
-              {(p) => (
-                <SearchInput {...p} value={search} onValueChange={setSearch} placeholder="honey / cutting board" aria-label="Search the floor" />
-              )}
-            </Field>
-
-            {search.trim() ? (
-              hits.length === 0 ? (
-                <EmptyState icon="search" title="No matches on the floor" body="Try part of the name, or the vendor code." />
-              ) : (
-                <div className="row wrap g-2">
-                  {hits.map((i) => (
-                    <Button key={i.id} variant="secondary" size="lg" icon="plus" onClick={() => addItem(i)}>
-                      <span className="truncate">{i.name}</span>
-                      <span className="num">{money(i.priceCents)}</span>
-                      {i.quantity === 0 ? <Badge tone="warn">Out</Badge> : null}
-                    </Button>
-                  ))}
-                </div>
-              )
-            ) : (
-              <div className="stack g-2">
-                <span className="t-label">Browse a vendor</span>
-                <div className="row wrap g-2">
-                  {vendorList.map(([code, name]) => (
-                    <Button
-                      key={code}
-                      variant={openVendor === code ? "primary" : "secondary"}
-                      icon="store"
-                      aria-pressed={openVendor === code}
-                      onClick={() => setOpenVendor(openVendor === code ? null : code)}
-                    >
-                      <span className="mono t-xs">{code}</span>
-                      <span className="truncate">{name}</span>
-                    </Button>
-                  ))}
-                </div>
-                {openVendor ? (
-                  <div className="row wrap g-2">
-                    {floor.filter((i) => i.vendorCode === openVendor).map((i) => (
-                      <Button key={i.id} variant="secondary" size="lg" icon="plus" onClick={() => addItem(i)}>
-                        <span className="truncate">{i.name}</span>
-                        <span className="num">{money(i.priceCents)}</span>
-                        {i.quantity === 0 ? <Badge tone="warn">Out</Badge> : null}
-                      </Button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </Card>
-      ) : null}
-
-      <Card
-        title="Ticket"
-        subtitle={cart.length ? `${plural(cart.reduce((n, l) => n + l.quantity, 0), "item")}` : undefined}
-        actions={cart.length && pay === "NONE" ? (
-          <Button size="sm" variant="dangerSoft" icon="trash" onClick={() => setCart([])}>Clear</Button>
-        ) : undefined}
-      >
-        {cart.length === 0 ? (
-          <EmptyState icon="receipt" title="Nothing on the ticket" body="Scan something to get started." />
-        ) : (
-          <div className="stack g-3">
-            <div className="stack g-2">
-              {cart.map((l) => (
-                <div key={l.sku} className="row g-3" style={{ alignItems: "center" }}>
-                  <div className="stack g-1 grow" style={{ minWidth: 0 }}>
-                    <span className="truncate" style={{ fontWeight: 600 }}>{l.name}</span>
-                    <span className="t-xs t-muted">{l.vendorName} · {money(l.priceCents)} each</span>
-                  </div>
-                  {pay === "NONE" ? (
-                    <div className="row g-1" style={{ alignItems: "center" }}>
-                      <Button size="sm" variant="secondary" aria-label={`One fewer ${l.name}`} onClick={() => setQty(l.sku, l.quantity - 1)}>−</Button>
-                      <span className="num" style={{ minWidth: 28, textAlign: "center" }}>{l.quantity}</span>
-                      <Button size="sm" variant="secondary" aria-label={`One more ${l.name}`} onClick={() => setQty(l.sku, l.quantity + 1)}>+</Button>
-                    </div>
-                  ) : (
-                    <span className="num">×{l.quantity}</span>
-                  )}
-                  <span className="num" style={{ minWidth: 72, textAlign: "right" }}>{money(l.priceCents * l.quantity)}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
-              <div className="t-body">Subtotal <b className="num">{money(subtotal)}</b></div>
-              <div className="t-body">Tax{shownRate === null ? " (mixed)" : ` (${shownRate}%)`} <b className="num">{money(taxCents)}</b></div>
-              <div className="row g-3 mt-1" style={{ alignItems: "baseline" }}>
-                <span className="t-label">Total</span>
-                <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>
-              </div>
-            </div>
-
-            {pay === "NONE" ? (
-              <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
-                <Button variant="primary" size="xl" block icon="cash" disabled={busy} onClick={() => setPay("CASH")}>Cash</Button>
-                <Button variant="dark" size="xl" block icon="card" disabled={busy} onClick={() => setPay("CARD")}>
-                  Card{cardAdjustCents > 0 ? ` ${money(cardTotal)}` : ""}
-                </Button>
-              </div>
-            ) : null}
-          </div>
         )}
-      </Card>
-
-      {pay === "CASH" && cart.length > 0 ? (
-        <CashTender
-          totalCents={total}
-          busy={busy}
-          onCancel={() => setPay("NONE")}
-          onConfirm={(tendered) => void book("CASH", tendered)}
-        />
-      ) : null}
-
-      {pay === "CARD" && cart.length > 0 ? (
-        <div className="card card-pad stack g-3" style={{ background: "var(--accent-soft)", borderColor: "var(--accent-border)" }}>
-          <div className="stack g-1">
-            <span className="t-label t-accent">Charge the card terminal</span>
-            <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(cardTotal)}</span>
-            {cardAdjustCents > 0 ? (
-              <span className="t-xs t-muted">
-                {money(total)} cash price + {money(cardAdjustCents)} non-cash adjustment, tax included
-              </span>
-            ) : null}
-          </div>
-          {readerReady ? (
-            charge ? (
-              <>
-                {charge.state === "failed" ? (
-                  <Note tone="error" title="Not paid">{charge.message}</Note>
-                ) : (
-                  <Note tone={charge.state === "booking" ? "success" : "info"} title={
-                    charge.state === "sending" ? "Sending…"
-                      : charge.state === "booking" ? "Approved"
-                      : "On the reader now"
-                  }>
-                    {charge.message}
-                    {charge.cardLabel ? ` (${charge.cardLabel})` : ""}
-                  </Note>
-                )}
-                <div className="row wrap g-2">
-                  {charge.state === "failed" ? (
-                    <>
-                      <Button variant="primary" size="xl" className="grow" icon="card" disabled={busy} onClick={() => void startCharge()}>
-                        Try the card again
-                      </Button>
-                      <Button variant="ghost" size="xl" disabled={busy} onClick={() => void cancelCharge()}>
-                        Cancel
-                      </Button>
-                    </>
-                  ) : charge.state === "succeeded" ? (
-                    /* Paid, but the ticket didn't save. The only button that
-                       matters is the one that tries again. */
-                    <Button variant="primary" size="xl" className="grow" icon="check" loading={busy} disabled={busy}
-                      onClick={() => void book("CARD", 0, { paymentIntentId: charge.paymentIntentId, cardLabel: charge.cardLabel })}>
-                      Finish the sale
-                    </Button>
-                  ) : (
-                    /* Not while it's still being sent: the reader would show the
-                       total a moment later with nobody watching for the tap. */
-                    <Button variant="ghost" size="xl" className="grow" loading={busy} disabled={busy || charge.state === "booking" || charge.state === "sending"} onClick={() => void cancelCharge()}>
-                      Cancel the payment
-                    </Button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <Note tone="info">The reader will ask for the card. Nothing is charged until they tap.</Note>
-                <div className="row wrap g-2">
-                  <Button variant="primary" size="xl" className="grow" icon="card" loading={busy} disabled={busy} onClick={() => void startCharge()}>
-                    Send {money(cardTotal)} to the reader
-                  </Button>
-                  <Button variant="ghost" size="xl" disabled={busy} onClick={() => setPay("NONE")}>Cancel</Button>
-                </div>
-              </>
-            )
-          ) : (
-            <>
-              <Field label="Approval code or last 4" hint="Optional, but it's the only thing tying this ticket to the terminal.">
-                {(p) => (
-                  <Input {...p} className="mono" value={cardRef} placeholder="APPR 004571 · 4242" autoComplete="off" onChange={(e) => setCardRef(e.target.value)} />
-                )}
-              </Field>
-              <Note tone="info">Run the card on the terminal first. Nothing is recorded here until you book it.</Note>
-              <div className="row wrap g-2">
-                <Button variant="primary" size="xl" className="grow" icon="check" loading={busy} disabled={busy} onClick={() => void book("CARD")}>
-                  Book the sale
-                </Button>
-                <Button variant="ghost" size="xl" disabled={busy} onClick={() => setPay("NONE")}>Cancel</Button>
-              </div>
-            </>
-          )}
-        </div>
-      ) : null}
+      </div>
     </>
   );
+
+  return till(
+    ticket,
+    pay === "CASH" && cart.length > 0 ? (
+      <div className="rg-scroll" style={{ padding: 10 }}>
+        <CashTender compact totalCents={total} busy={busy} onCancel={() => setPay("NONE")} onConfirm={(tendered) => void book("CASH", tendered)} />
+      </div>
+    ) : pay === "CARD" && cart.length > 0 ? (
+      cardPanel
+    ) : (
+      pickingPanel
+    )
+  );
 }
+
+/* The till's own layout. Kept here rather than in globals.css because nothing
+   else in the app looks like a cash register, and nothing else should. */
+const TILL_CSS = `
+.rg { height: 100dvh; display: flex; flex-direction: column; background: var(--bg-sunken); overflow: hidden; }
+.rg-top { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 52px; background: var(--surface); border-bottom: 1px solid var(--border); overflow: hidden; }
+.rg-who { font-weight: 700; font-size: var(--fs-md); white-space: nowrap; }
+.rg-sp { flex: 1 1 auto; }
+.rg-trouble { display: inline-flex; align-items: center; gap: 4px; max-width: 280px; padding: 3px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-text); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rg-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(330px, 42%) minmax(0, 1fr); gap: 10px; padding: 10px; }
+.rg-pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.rg-pane-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 6px 14px; border-bottom: 1px solid var(--border-subtle); font-size: var(--fs-md); }
+.rg-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.rg-foot { flex: 0 0 auto; padding: 10px 14px 12px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.rg-line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border-subtle); transition: background .4s; }
+.rg-line.is-new { background: var(--accent-soft); }
+.rg-qty { display: inline-flex; align-items: center; gap: 4px; }
+.rg-qty button { width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 20px; line-height: 1; }
+.rg-qty button:active { background: var(--surface-active); }
+.rg-qty span { min-width: 26px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rg-name { min-width: 0; display: flex; flex-direction: column; }
+.rg-name b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rg-name small { color: var(--text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rg-amt { font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+.rg-sum { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.rg-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 2px; }
+.rg-total .lbl { font-weight: 700; font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: .05em; }
+.rg-total .amt { font-size: 2.25rem; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.rg-pay { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.rg-paybtn { height: 66px; border: 0; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 1.125rem; font-weight: 700; cursor: pointer; }
+.rg-paybtn span { display: inline-flex; align-items: center; gap: 8px; }
+.rg-paybtn small { font-size: var(--fs-sm); font-weight: 600; opacity: .85; font-variant-numeric: tabular-nums; }
+.rg-paybtn:active:not(:disabled) { transform: scale(.98); }
+.rg-paybtn:disabled { opacity: .4; cursor: default; }
+.rg-cash { background: var(--accent); color: #fff; }
+.rg-card { background: var(--n-900); color: #fff; }
+.rg-paying { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-text); font-weight: 700; text-align: center; }
+.rg-scanbar { flex: 0 0 auto; display: flex; gap: 8px; padding: 10px; }
+.rg-scanbar input { flex: 1 1 auto; min-width: 0; height: 54px; padding: 0 14px; font-size: 1.125rem; border: 2px solid var(--border-strong); border-radius: 12px; background: var(--bg-elevated); color: var(--text); }
+.rg-scanbar input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rg-iconbtn { flex: 0 0 auto; width: 54px; height: 54px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); }
+.rg-iconbtn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.rg-tabs { flex: 0 0 auto; display: flex; gap: 6px; padding: 8px 10px 0; border-bottom: 1px solid var(--border); }
+.rg-tab { flex: 1 1 0; height: 44px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; background: transparent; color: var(--text-secondary); font-weight: 650; font-size: var(--fs-md); }
+.rg-tab.on { background: var(--bg-sunken); border-color: var(--border); color: var(--text); box-shadow: inset 0 3px 0 var(--accent); }
+.rg-tabbody { background: var(--bg-sunken); }
+.rg-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 10px; }
+.rg-tile { min-height: 78px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); cursor: pointer; }
+.rg-tile:active { transform: scale(.98); background: var(--accent-soft); border-color: var(--accent); }
+.rg-tile b { font-weight: 650; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rg-tile .meta { display: flex; justify-content: space-between; gap: 6px; font-size: var(--fs-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.rg-tile .meta .num { color: var(--text); font-weight: 700; }
+.rg-tile.out { opacity: .5; }
+.rg-tile.vendor { border-left: 4px solid var(--accent); }
+.rg-crumb { display: flex; align-items: center; gap: 10px; padding: 10px 10px 0; }
+.rg-banner { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; margin: 0 10px 8px; padding: 10px 12px; border-radius: 10px; font-size: var(--fs-sm); }
+.rg-banner.err { background: var(--danger-soft); color: var(--danger-text); }
+.rg-banner.warn { background: var(--warn-soft); color: var(--warn-text); }
+.rg-order { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.rg-empty { height: 100%; min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--text-muted); }
+.rg-empty b { color: var(--text-secondary); }
+.rg-hero { font-size: 3rem; font-weight: 800; letter-spacing: -.02em; line-height: 1.05; }
+.rg-center { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px; overflow-y: auto; }
+.rg-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.rg-lock { width: 100%; max-width: 780px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+.rg-dots { height: 60px; display: flex; align-items: center; justify-content: center; gap: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.rg-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--text); }
+.rg-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.rg-key { height: clamp(54px, 12vh, 80px); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); font-size: 1.625rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rg-key:active:not(:disabled) { background: var(--surface-active); transform: scale(.97); }
+.rg-key.clear { font-size: var(--fs-md); color: var(--text-secondary); }
+.rg-key.go { background: var(--accent); border-color: var(--accent); color: #fff; font-size: var(--fs-lg); }
+.rg-key:disabled { opacity: .5; }
+@media (max-width: 860px) {
+  .rg-body { grid-template-columns: 1fr; grid-template-rows: minmax(0, 45%) minmax(0, 1fr); }
+  .rg-lock { grid-template-columns: 1fr; gap: 20px; max-width: 380px; }
+  .rg-top .btn span { display: none; }
+}
+@media (max-height: 560px) {
+  .rg-total .amt { font-size: 1.875rem; }
+  .rg-paybtn { height: 58px; }
+  .rg-hero { font-size: 2.5rem; }
+}
+`;
