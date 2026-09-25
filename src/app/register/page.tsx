@@ -448,6 +448,12 @@ export default function RegisterKiosk() {
      went in there too — that is why a scan used to leave its code sitting in
      the search box. */
   const wedgeRef = useRef(new WedgeTiming());
+  /* A readout of what the scanner listener is actually seeing, shown only when
+     the address ends in ?probe=1. Three fixes for this scanner have missed
+     because I was reasoning about what the tablet probably does instead of
+     looking, so the till can now say so itself. */
+  const [probe, setProbe] = useState("");
+  const probeOn = typeof window !== "undefined" && window.location.search.includes("probe=1");
   /* doScan is rebuilt every render and reads the current cart and floor. The
      listener below is installed once, so it must reach the CURRENT one — a
      captured copy would ring up against the cart as it was when the till
@@ -459,6 +465,7 @@ export default function RegisterKiosk() {
        from keystrokes — on this tablet some characters arrive with no
        character attached at all. See lib/wedge. */
     const code = readCode(document.activeElement, scanRef.current);
+    if (probeOn) setProbe((p) => `${p}  ->  FIRED code="${code}"`);
     wedgeRef.current.reset();
     if (!code) return;
 
@@ -478,6 +485,13 @@ export default function RegisterKiosk() {
     if (!who || !drawer || closing || receipt) return;
 
     const onKey = (e: KeyboardEvent) => {
+      if (probeOn) {
+        const el = document.activeElement as HTMLInputElement | null;
+        setProbe(
+          `key=${e.key} keys=${wedgeRef.current.keys} machine=${wedgeRef.current.looksMachine()} ` +
+            `term=${isTerminator(e.key)} focus=${el?.tagName || "?"}:${(el?.value ?? "").slice(0, 20)}`
+        );
+      }
       if (isTerminator(e.key) && wedgeRef.current.looksMachine()) {
         /* Swallow it. An arrow key that reaches Android moves the cursor to
            the next field, which is what sent every scan after the first one
@@ -503,7 +517,7 @@ export default function RegisterKiosk() {
       window.removeEventListener("keydown", onKey, true);
       window.clearInterval(sweep);
     };
-  }, [who, drawer, closing, receipt, wedgeScan]);
+  }, [who, drawer, closing, receipt, wedgeScan, probeOn]);
 
   /* ------------------------------------------------------------- scanner --
      A USB barcode scanner is a keyboard as far as the tablet is concerned: it
@@ -1508,6 +1522,15 @@ export default function RegisterKiosk() {
             ) : null}
           </div>
         </Card>
+      ) : null}
+
+      {probeOn ? (
+        <div className="card card-pad mb-3">
+          <span className="t-label">Scanner probe</span>
+          <code className="mono t-xs" style={{ display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            {probe || "scan something"}
+          </code>
+        </div>
       ) : null}
 
       {pay === "NONE" ? (
