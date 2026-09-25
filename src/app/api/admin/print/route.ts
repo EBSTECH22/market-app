@@ -32,6 +32,8 @@ import {
   setReceiptColumns,
   getReceiptLogo,
   setReceiptLogo,
+  getLogoSize,
+  setLogoSize,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +65,7 @@ export async function GET() {
     const printMode = await getPrintMode();
     const receiptColumns = await getReceiptColumns();
     const receiptLogo = await getReceiptLogo();
+    const logoSize = await getLogoSize();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -137,7 +140,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "test") {
-      const id = await enqueue({ kind: "TEST", label: "Test print", body: testXml(who, new Date(), "America/Chicago", await getReceiptColumns()), createdBy: who });
+      const id = await enqueue({ kind: "TEST", label: "Test print", body: testXml(
+          who,
+          new Date(),
+          "America/Chicago",
+          await getReceiptColumns(),
+          /* The test page carries the logo when one is switched on, so the
+             size can be found without ringing sales. */
+          (await getReceiptLogo()) ? await getLogoSize() : 0
+        ), createdBy: who });
       return NextResponse.json({ ok: true, jobId: id });
     }
 
@@ -156,8 +167,8 @@ export async function POST(req: NextRequest) {
       });
       if (!sale) return NextResponse.json({ error: "That ticket is gone." }, { status: 404 });
 
-      const [header, footer, cols, logo] = await Promise.all([
-        getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(),
+      const [header, footer, cols, logo, logoSize] = await Promise.all([
+        getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
       ]);
       const id = await enqueue({
         kind: "REPRINT",
@@ -185,7 +196,7 @@ export async function POST(req: NextRequest) {
           },
           /* Marked, always. An unmarked second copy of a receipt is the thing
              a returned-goods scam is built on. */
-          { header, footer, cols, logo, reprint: true }
+          { header, footer, cols, logo, logoSize, reprint: true }
         ),
       });
       return NextResponse.json({ ok: true, jobId: id });
@@ -218,6 +229,7 @@ export async function PATCH(req: NextRequest) {
     if (body.printMode !== undefined) await setPrintMode(String(body.printMode));
     if (body.receiptColumns !== undefined) await setReceiptColumns(Number(body.receiptColumns));
     if (body.receiptLogo !== undefined) await setReceiptLogo(!!body.receiptLogo);
+    if (body.logoSize !== undefined) await setLogoSize(Number(body.logoSize));
     if (body.deviceId !== undefined) await setPrinterDeviceId(String(body.deviceId));
 
     const key = await getPrinterKey();
@@ -233,6 +245,7 @@ export async function PATCH(req: NextRequest) {
       printMode: await getPrintMode(),
       receiptColumns: await getReceiptColumns(),
       receiptLogo: await getReceiptLogo(),
+      logoSize: await getLogoSize(),
       deviceId: await getPrinterDeviceId(),
     });
   });

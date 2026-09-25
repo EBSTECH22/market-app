@@ -33,6 +33,7 @@ type PrintState = {
   printMode: "direct" | "collect";
   receiptColumns: number;
   receiptLogo: boolean;
+  logoSize: number;
   log: { at: string; what: string }[];
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
@@ -178,6 +179,18 @@ export default function TillHardware() {
       setPrinterKey(String(d.key || ""));
       toast.success("Address made", "Type it into the printer next.");
       await loadPrint();
+    } finally { setBusy(false); }
+  };
+
+  const setLogo = async (logoSize: number) => {
+    setBusy(true);
+    try {
+      await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logoSize, receiptLogo: true }),
+      });
+      await loadPrint();
+      toast.success(`Logo set to ${logoSize} dots`, "Send a test print to see if it takes.");
     } finally { setBusy(false); }
   };
 
@@ -592,6 +605,32 @@ export default function TillHardware() {
                   {print?.receiptLogo ? "Logo on the receipt" : "No logo"}
                 </Button>
               </div>
+
+              {/* The printer refuses a job whose image is too big and Epson
+                  don't publish the limit, so this is stepped down until a test
+                  print comes out rather than guessed at. */}
+              {print?.receiptLogo ? (
+                <div className="stack g-2">
+                  <span className="t-label">Logo size</span>
+                  <div className="row wrap g-2">
+                    {[128, 192, 256, 320, 384].map((n) => (
+                      <Button
+                        key={n}
+                        size="sm"
+                        variant={print.logoSize === n ? "primary" : "secondary"}
+                        disabled={busy}
+                        onClick={() => void setLogo(n)}
+                      >
+                        {n} dots
+                      </Button>
+                    ))}
+                  </div>
+                  <span className="t-xs t-muted">
+                    Roughly {Math.round((print.logoSize / 504) * 100)}% of the paper width. Pick one, then
+                    <b> Print a test</b> — the test page carries the logo. If nothing comes out, step down a size.
+                  </span>
+                </div>
+              ) : null}
 
               <Field
                 label="Top of the receipt"

@@ -282,3 +282,20 @@ export async function getReceiptLogo(): Promise<boolean> {
 export async function setReceiptLogo(on: boolean): Promise<void> {
   await put("receiptLogo", on ? "1" : "0");
 }
+
+/**
+ * How many dots across the logo prints.
+ *
+ * This printer refuses a job whose image is too large, and the limit is not
+ * published. So this is a setting the office can step down until a test print
+ * comes out, rather than something to be guessed at in code.
+ */
+export async function getLogoSize(): Promise<number> {
+  const n = Math.round(Number(await str("receiptLogoSize", "192")));
+  return [128, 192, 256, 320, 384].includes(n) ? n : 192;
+}
+
+export async function setLogoSize(v: number): Promise<void> {
+  const n = Math.round(Number(v));
+  await put("receiptLogoSize", String([128, 192, 256, 320, 384].includes(n) ? n : 192));
+}

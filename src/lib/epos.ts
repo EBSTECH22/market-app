@@ -12,7 +12,7 @@
  * monospace, and every line has to be padded to fit by hand.
  */
 
-import { RECEIPT_LOGO_B64, RECEIPT_LOGO_WIDTH, RECEIPT_LOGO_HEIGHT } from "@/lib/receiptlogo";
+import { RECEIPT_LOGOS, DEFAULT_LOGO_SIZE } from "@/lib/receiptlogo";
 
 export const EPOS_NS = "http://www.epson-pos.com/schemas/2011/03/epos-print";
 
@@ -127,10 +127,22 @@ export const cut = (): string => `<feed unit="60"/><cut type="feed"/>`;
  * Sent as raster dots rather than stored in the printer's own memory, so the
  * logo travels with the receipt and changing it needs no trip to the printer
  * with a Windows utility.
+ *
+ * The size is a setting because this printer has an undocumented ceiling on
+ * how much image it will accept in one job, and past it the whole receipt is
+ * refused with a schema error. Rather than guess at the limit, the office
+ * picks a size and prints a test.
+ *
+ * The attribute order below matters. This firmware accepts
+ * width/height/align/color/mode and rejects the same attributes in a
+ * different order, which is not how XML is supposed to work and is how it
+ * behaves. Leave it alone.
  */
-export const logoImage = (): string =>
-  `<image width="${RECEIPT_LOGO_WIDTH}" height="${RECEIPT_LOGO_HEIGHT}" align="center" color="color_1" mode="mono">` +
-  `${RECEIPT_LOGO_B64}</image>`;
+export const logoImage = (size: number = DEFAULT_LOGO_SIZE): string => {
+  const l = RECEIPT_LOGOS[size] || RECEIPT_LOGOS[DEFAULT_LOGO_SIZE];
+  if (!l) return "";
+  return `<image width="${l.width}" height="${l.height}" align="center" color="color_1" mode="mono">${l.data}</image>`;
+};
 
 /** Wrap finished children in the document element the printer expects. */
 export const eposDoc = (children: string): string =>
@@ -170,6 +182,8 @@ export type ReceiptOptions = {
   cols?: number;
   /** Print the market's logo above the address. */
   logo?: boolean;
+  /** How many dots across the logo prints. See logoImage. */
+  logoSize?: number;
   /** Shop name and address, from settings, so a rename doesn't need a deploy. */
   header?: string[];
   footer?: string[];
@@ -200,7 +214,7 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
   out.push(`<text align="center"/>`);
 
   if (opts.logo !== false) {
-    out.push(logoImage());
+    out.push(logoImage(opts.logoSize));
   } else {
     /* No logo: the shop's name in double-size characters instead, so the top
        of the receipt is still the top of the receipt. */
@@ -291,9 +305,18 @@ export const receiptWithDrawerXml = (sale: ReceiptSale, opts: ReceiptOptions = {
   eposDoc(drawerPulse() + receiptBody(sale, opts));
 
 /** Proof of life: prints, then pops the drawer, so one test covers both. */
-export function testXml(who: string, at: Date = new Date(), timeZone = "America/Chicago", cols = COLS): string {
+export function testXml(
+  who: string,
+  at: Date = new Date(),
+  timeZone = "America/Chicago",
+  cols = COLS,
+  logoSize = 0
+): string {
   const out: string[] = [];
   out.push(`<text align="center"/>`);
+  /* The logo goes on the test page when one is being tried, so finding the
+     size the printer accepts costs test prints rather than real sales. */
+  if (logoSize) out.push(logoImage(logoSize));
   out.push(`<text width="2" height="2">${esc("TEST")}&#10;</text>`);
   out.push(`<text width="1" height="1"/>`);
   out.push(t("Community Harvest"));
