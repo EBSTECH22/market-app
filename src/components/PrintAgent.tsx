@@ -87,6 +87,12 @@ export async function deliverJob(
 ): Promise<{ ok: boolean; trouble: string }> {
   let raw = "";
   let ok = false;
+  /* Why it failed and how long it took, in the browser's own words, for the
+     printer trace. "No reply" alone can't tell a refused connection from a
+     timeout from a certificate or permission problem, and each has a
+     different fix. */
+  let why = "";
+  const started = Date.now();
   const stop = new AbortController();
   const timer = setTimeout(() => stop.abort(), PRINTER_WAIT_MS);
   try {
@@ -98,16 +104,24 @@ export async function deliverJob(
     });
     raw = await res.text().catch(() => "");
     ok = /success\s*=\s*"(true|1)"/i.test(raw);
-  } catch {
+    if (!ok) why = `HTTP ${res.status}`;
+  } catch (err) {
     ok = false;
+    const e = err as { name?: string; message?: string };
+    why = stop.signal.aborted ? "timed out" : `${e?.name || "Error"}: ${e?.message || "no detail"}`;
   } finally {
     clearTimeout(timer);
   }
+  const ms = Date.now() - started;
+  const online = typeof navigator !== "undefined" ? navigator.onLine : true;
   try {
     await fetch("/api/admin/print/done", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId: job.id, ok, raw }),
+      body: JSON.stringify({
+        jobId: job.id, ok, raw,
+        why: `${why ? why + " " : ""}after ${ms}ms${online ? "" : " (tablet offline)"}${document.visibilityState === "hidden" ? " (tab hidden)" : ""}`,
+      }),
     });
   } catch {
     /* The sweep puts it back in a few seconds. */

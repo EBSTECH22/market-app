@@ -43,7 +43,10 @@ export async function POST(req: NextRequest) {
 
     const verdict = done?.ok ? "printed a job" : "couldn't print a job";
     await notePrinterEvent(`the till ${verdict}`).catch(() => {});
-    await logPrinter(`till ${verdict} :: ${raw.replace(/\s+/g, " ").slice(0, 200) || "(no reply from the printer)"}`).catch(() => {});
+    const why = String(body.why || "").slice(0, 120);
+    await logPrinter(
+      `till ${verdict}${why ? ` [${why}]` : ""} :: ${raw.replace(/\s+/g, " ").slice(0, 160) || "(no reply from the printer)"}`
+    ).catch(() => {});
 
     /* COULDN'T REACH IT IS NOT THE SAME AS REFUSED.
        
