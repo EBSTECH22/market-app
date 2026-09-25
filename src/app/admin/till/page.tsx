@@ -523,7 +523,7 @@ export default function TillHardware() {
               </Note>
             ) : null}
 
-            {!printerKey ? (
+            {!printerKey && print?.printMode !== "direct" ? (
               <div className="stack g-2">
                 <Note tone="info" title="The other way — only if direct printing can't be used">
                   The printer sits on the market&rsquo;s wifi where nothing on the internet can reach it, so it
@@ -538,6 +538,14 @@ export default function TillHardware() {
               </div>
             ) : (
               <>
+                {/* SERVER DIRECT PRINT, and only when it is the way receipts
+                    travel. This printer fetches a job and never prints it, so
+                    the whole mechanism is off in direct mode — showing its
+                    address, its interval and a warning that it hasn't checked
+                    in put three alarming and irrelevant things on the screen
+                    of a till that was printing perfectly well. */}
+                {print?.printMode !== "direct" ? (
+                  <>
                 <Field label="Type this into the printer" hint="Its own settings page — Server Direct Print, under Web Service Settings.">
                   {(p) => (
                     <div className="row g-2" style={{ alignItems: "center" }}>
@@ -553,6 +561,8 @@ export default function TillHardware() {
                   <b> Web Service Settings → Server Direct Print</b>. Switch it on, paste the address above
                   into the URL box, and set the interval to the smallest number it will take. Save and reboot it.
                 </Note>
+                  </>
+                ) : null}
 
                 <div className="row wrap g-2">
                   <Button variant="secondary" icon="print" disabled={busy} onClick={() => void send("test")}>
@@ -567,17 +577,22 @@ export default function TillHardware() {
                   <Button variant="ghost" icon="print" disabled={busy} onClick={() => void send("plain")}>
                     Plain test
                   </Button>
-                  <Button variant="ghost" icon="refresh" disabled={busy} onClick={() => void newKey()}>
-                    New address
-                  </Button>
+                  {print?.printMode !== "direct" ? (
+                    <Button variant="ghost" icon="refresh" disabled={busy} onClick={() => void newKey()}>
+                      New address
+                    </Button>
+                  ) : null}
                 </div>
 
                 {print ? (
                   <div className="stack g-2">
                     <div className="row wrap g-3" style={{ alignItems: "center" }}>
                       <span className="t-xs t-muted">
-                        {print.lastSeen ? `Last checked in ${relTime(print.lastSeen)}` : "Never checked in"}
-                        {print.queued ? ` · ${print.queued} waiting` : ""}
+                        {print.printMode === "direct"
+                          ? print.queued
+                            ? `${print.queued} waiting`
+                            : "Nothing waiting"
+                          : `${print.lastSeen ? `Last checked in ${relTime(print.lastSeen)}` : "Never checked in"}${print.queued ? ` · ${print.queued} waiting` : ""}`}
                       </span>
                       <Button size="sm" variant={print.autoPrint ? "primary" : "secondary"} disabled={busy} onClick={() => void toggleAuto()}>
                         {print.autoPrint ? "Printing every sale" : "Only when asked"}
@@ -600,7 +615,7 @@ export default function TillHardware() {
                     doesn't have makes it run nothing and say nothing. */}
                 <Field
                   label="Device ID"
-                  hint="On the printer: Device Admin \u2192 Printer. Almost always local_printer."
+                  hint="On the printer: Device Admin → Printer. Almost always local_printer."
                 >
                   {(p) => (
                     <div className="row g-2" style={{ alignItems: "center" }}>
@@ -623,7 +638,7 @@ export default function TillHardware() {
                     know the newer one ignores the job in silence rather than
                     complaining, so when the printer is plainly online and the
                     paper still isn't moving, this is the switch to try. */}
-                {print ? (
+                {print && print.printMode !== "direct" ? (
                   <div className="row wrap g-2" style={{ alignItems: "center" }}>
                     <span className="t-xs t-muted">Printer language</span>
                     <Button
@@ -643,7 +658,7 @@ export default function TillHardware() {
                   </div>
                 ) : null}
 
-                {print && !print.online && print.configured ? (
+                {print && print.printMode !== "direct" && !print.online && print.configured ? (
                   <Note tone="warn" title="The printer hasn't checked in">
                     It&rsquo;s either switched off, off the wifi, or Server Direct Print isn&rsquo;t on yet.
                     Anything rung meanwhile is kept and prints the moment it comes back.

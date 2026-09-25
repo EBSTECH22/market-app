@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { claim, complete, noteSeen, requeueStale, peek } from "@/lib/printqueue";
 import { printRequestXml } from "@/lib/epos";
-import { getPrinterKey, getSdpVersion, getSdpStyle, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
+import { getPrintMode, getPrinterKey, getSdpVersion, getSdpStyle, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 /* Nothing here waits on anything now, so this is only a ceiling against a
@@ -105,6 +105,24 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   /* ------------------------------------------------- anything to print? -- */
   await noteSeen().catch(() => {});
   await requeueStale().catch(() => {});
+
+  /* NOT WHILE THE TILL IS CARRYING RECEIPTS.
+     
+     This printer's Server Direct Print fetches a job and never hands it to
+     its own print engine — that was established the hard way. So if it is
+     still switched on at the printer while the app is in direct mode, it sits
+     there quietly taking receipts off the queue and swallowing them: the
+     paper never comes out, the job is marked as handed over, and the till
+     that could have printed it is told there is nothing to print. A receipt
+     vanishing while its reprint prints is exactly what that looks like.
+     
+     So in direct mode the printer is answered politely and given nothing.
+     Turning Server Direct Print off at the printer is still the right thing
+     to do, but forgetting to can no longer cost anybody a receipt. */
+  if ((await getPrintMode()) === "direct") {
+    await notePrinterEvent("asked for work while the till is printing direct — sent none").catch(() => {});
+    return xml("");
+  }
 
   const version = await getSdpVersion();
   const devid = await getPrinterDeviceId();
