@@ -23,6 +23,42 @@ import { soapEnvelope, directPrintUrl } from "@/lib/epos";
  * claimed by exactly one of them.
  */
 
+/**
+ * Only one tab on a device carries receipts, even though several mount this.
+ *
+ * The register and the till hardware page are both tills, so both run an
+ * agent, and on one tablet that means two of them posting to the printer
+ * within a second of each other. This printer takes one connection at a time
+ * and refuses the rest at the socket, which reads from here as "the printer
+ * isn't there" — a perfectly good receipt marked failed while the next one
+ * sails through.
+ *
+ * So the tabs take turns by leaving a note in the browser's own storage. A
+ * tab writes its name and the time; any other tab that sees a fresh note
+ * belonging to someone else simply skips its turn. If the holder is closed or
+ * put to sleep the note goes stale within a few seconds and the next tab
+ * picks it up, so nothing depends on a tab shutting down tidily.
+ */
+const LEASE_KEY = "marketPrintAgentLease";
+const LEASE_STALE_MS = 9_000;
+
+function holdsLease(me: string): boolean {
+  try {
+    const raw = window.localStorage.getItem(LEASE_KEY);
+    const held = raw ? (JSON.parse(raw) as { id?: string; at?: number }) : null;
+    const fresh = !!held?.at && Date.now() - held.at < LEASE_STALE_MS;
+    if (fresh && held?.id !== me) return false;
+    window.localStorage.setItem(LEASE_KEY, JSON.stringify({ id: me, at: Date.now() }));
+    return true;
+  } catch {
+    /* Private browsing, storage full, an odd tablet — all end up here, and
+       the right answer is to print. The server hands out one job at a time
+       regardless, so the worst case is the old behaviour, not a lost
+       receipt. */
+    return true;
+  }
+}
+
 export type PrintAgentStatus = {
   /** True while a job is actually being sent. */
   busy: boolean;
@@ -48,6 +84,9 @@ export function PrintAgent({
   const runningRef = useRef(false);
   const statusRef = useRef(onStatus);
   statusRef.current = onStatus;
+  /* This tab's name for the turn-taking note. Generated once, per tab. */
+  const meRef = useRef("");
+  if (!meRef.current) meRef.current = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
   const report = useCallback(async (jobId: string, ok: boolean, raw: string) => {
     try {
@@ -64,6 +103,7 @@ export function PrintAgent({
 
   const tick = useCallback(async () => {
     if (runningRef.current) return;
+    if (!holdsLease(meRef.current)) return;
     runningRef.current = true;
     try {
       const r = await fetch("/api/admin/print/next");
@@ -115,7 +155,29 @@ export function PrintAgent({
     if (!active) return;
     void tick();
     const t = window.setInterval(() => void tick(), Math.max(1, everySeconds) * 1000);
-    return () => window.clearInterval(t);
+
+    /* Android suspends timers in a tab that isn't on screen, so a receipt rung
+       just before the tablet was locked can sit waiting. Coming back to the
+       page goes and gets it immediately rather than waiting for the timer to
+       start ticking again. */
+    const wake = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", wake);
+
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", wake);
+      /* Hand the turn straight over rather than making the next tab wait for
+         the note to go stale. */
+      try {
+        const raw = window.localStorage.getItem(LEASE_KEY);
+        const held = raw ? (JSON.parse(raw) as { id?: string }) : null;
+        if (held?.id === meRef.current) window.localStorage.removeItem(LEASE_KEY);
+      } catch {
+        /* Nothing to do — the note expires by itself. */
+      }
+    };
   }, [active, everySeconds, tick]);
 
   useEffect(() => {

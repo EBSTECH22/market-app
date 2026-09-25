@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
+import { db } from "@/lib/db";
 import { claim, requeueStale } from "@/lib/printqueue";
 import { getPrinterHost, getPrinterDeviceId, getPrintMode } from "@/lib/settings";
 
@@ -31,9 +32,20 @@ export async function GET() {
        unfinished. Put it back before handing anything else out. */
     await requeueStale().catch(() => {});
 
-    /* One at a time. Receipts have to come out in the order they were rung,
-       and a till that walks away holding three of them is three receipts
-       nobody gets until the sweep puts them back. */
+    /* ONE JOB IN FLIGHT ANYWHERE, not one per till.
+       
+       This printer serves one request at a time. A receipt with a logo takes
+       it several seconds, and anything that arrives meanwhile is refused at
+       the socket — which looks from the till like "the printer isn't there"
+       and gets a perfectly good receipt marked as failed. Two tills open, or
+       one till and the settings page, made that near-certain.
+       
+       So nothing is handed out while something is still out. The queue drains
+       one receipt at a time, in order, and a busy printer simply means the
+       next one waits a couple of seconds. */
+    const inFlight = await db.printJob.count({ where: { status: "SENT" } });
+    if (inFlight > 0) return NextResponse.json({ mode, host, jobs: [] });
+
     const jobs = await claim(1);
 
     return NextResponse.json({

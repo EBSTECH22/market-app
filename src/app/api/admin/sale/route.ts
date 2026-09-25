@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
-import { getTaxRates, getCardAdjustPercent, getAutoPrint, getReceiptHeader, getReceiptFooter, getReceiptColumns, getReceiptLogo, getLogoSize } from "@/lib/settings";
+import { getTaxRates, getCardAdjustPercent, getAutoPrint, getReceiptHeader, getReceiptFooter, getReceiptColumns, getReceiptLogo, getLogoSize, getLogoSource, getLogoKeys } from "@/lib/settings";
 import { unpackTicket } from "@/lib/ticket";
 import { enqueue } from "@/lib/printqueue";
 import { receiptXml, receiptWithDrawerXml } from "@/lib/epos";
@@ -459,8 +459,9 @@ export async function POST(req: NextRequest) {
      a drawer that opens on every sale is a drawer that stops being counted. */
   try {
     if (await getAutoPrint()) {
-      const [header, footer, cols, logo, logoSize] = await Promise.all([
+      const [header, footer, cols, logo, logoSize, logoSource, keys] = await Promise.all([
         getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
+        getLogoSource(), getLogoKeys(),
       ]);
       const forPrint = {
         number: sale.number,
@@ -490,7 +491,7 @@ export async function POST(req: NextRequest) {
         paymentMethod,
         cardName: sale.cardName,
       };
-      const opts = { header, footer, cols, logo, logoSize };
+      const opts = { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2 };
       await enqueue({
         kind: "RECEIPT",
         label: `Receipt #${sale.number}`,

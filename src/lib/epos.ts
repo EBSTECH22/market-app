@@ -138,6 +138,19 @@ export const cut = (): string => `<feed unit="60"/><cut type="feed"/>`;
  * different order, which is not how XML is supposed to work and is how it
  * behaves. Leave it alone.
  */
+/**
+ * A logo already sitting in the printer's memory.
+ *
+ * Epson's utility loads the artwork into the printer once and gives it two key
+ * codes; the receipt then just names them. Nothing about the size of the
+ * picture affects the size of the job, which is what makes this the right way
+ * to put a logo on a receipt and the thing to reach for the moment an image
+ * starts bumping into limits.
+ */
+export const storedLogo = (key1 = 32, key2 = 32): string =>
+  `<logo key1="${Math.max(0, Math.min(255, Math.round(key1)))}" ` +
+  `key2="${Math.max(0, Math.min(255, Math.round(key2)))}" align="center"/>`;
+
 export const logoImage = (size: number = DEFAULT_LOGO_SIZE): string => {
   const l = RECEIPT_LOGOS[size] || RECEIPT_LOGOS[DEFAULT_LOGO_SIZE];
   if (!l) return "";
@@ -190,8 +203,22 @@ export type ReceiptOptions = {
   barcode?: boolean;
   /** Print the market's logo above the address. */
   logo?: boolean;
-  /** How many dots across the logo prints. See logoImage. */
+  /** How many dots across the logo prints. Image mode only. */
   logoSize?: number;
+  /**
+   * Where the logo comes from.
+   *
+   * "image" sends the picture with every receipt — simple, needs no setup, and
+   * limited by how much image this printer will accept in one job.
+   * "printer" prints one already stored in the printer's own memory: two key
+   * codes instead of thousands of characters, at any size, with no size limit
+   * to run into. It has to be loaded into the printer once with Epson's
+   * utility first.
+   */
+  logoSource?: "image" | "printer";
+  /** The key codes the utility gave the stored logo. Printer mode only. */
+  logoKey1?: number;
+  logoKey2?: number;
   /** Shop name and address, from settings, so a rename doesn't need a deploy. */
   header?: string[];
   footer?: string[];
@@ -221,7 +248,11 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
   const out: string[] = [];
   out.push(`<text align="center"/>`);
 
-  if (opts.logo !== false) {
+  if (opts.logo !== false && opts.logoSource === "printer") {
+    /* A stored logo costs about forty characters however big it is, which is
+       the whole reason for using one. */
+    out.push(storedLogo(opts.logoKey1, opts.logoKey2));
+  } else if (opts.logo !== false) {
     out.push(logoImage(opts.logoSize));
   } else {
     /* No logo: the shop's name in double-size characters instead, so the top
@@ -340,13 +371,15 @@ export function testXml(
   at: Date = new Date(),
   timeZone = "America/Chicago",
   cols = COLS,
-  logoSize = 0
+  logoSize = 0,
+  stored?: { key1: number; key2: number }
 ): string {
   const out: string[] = [];
   out.push(`<text align="center"/>`);
-  /* The logo goes on the test page when one is being tried, so finding the
-     size the printer accepts costs test prints rather than real sales. */
-  if (logoSize) out.push(logoImage(logoSize));
+  /* The logo goes on the test page when one is being tried, so finding what
+     the printer accepts costs test prints rather than real sales. */
+  if (stored) out.push(storedLogo(stored.key1, stored.key2));
+  else if (logoSize) out.push(logoImage(logoSize));
   out.push(`<text width="2" height="2">${esc("TEST")}&#10;</text>`);
   out.push(`<text width="1" height="1"/>`);
   out.push(t("Community Harvest"));

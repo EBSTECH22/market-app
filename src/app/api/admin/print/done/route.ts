@@ -33,19 +33,34 @@ export async function POST(req: NextRequest) {
       ? raw
       : `<response success="false" code="${body.ok ? "" : "EX_BADPORT"}"/>`;
 
-    const done = await complete(body.ok && raw.includes("<response") ? raw : report).catch(() => null);
+    /* jobId is passed through: the till carried this exact receipt and knows
+       which one it is, which beats matching the report to whatever was
+       outstanding. */
+    const done = await complete(
+      body.ok && raw.includes("<response") ? raw : report,
+      jobId
+    ).catch(() => null);
 
     const verdict = done?.ok ? "printed a job" : "couldn't print a job";
     await notePrinterEvent(`the till ${verdict}`).catch(() => {});
     await logPrinter(`till ${verdict} :: ${raw.replace(/\s+/g, " ").slice(0, 200) || "(no reply from the printer)"}`).catch(() => {});
 
-    /* A job that failed because the till couldn't reach the printer is worth
-       counting: several in a row means the printer is off, not that one
-       receipt went wrong. */
-    if (!done?.ok) {
+    /* COULDN'T REACH IT IS NOT THE SAME AS REFUSED.
+       
+       A receipt the printer never received hasn't failed — it hasn't been
+       tried. Usually the printer was mid-job, which it answers by refusing
+       the connection. So the attempt is given back and the job goes to the
+       front of the queue rather than counting towards the handful of tries
+       after which it is abandoned. Anything the printer actually answered —
+       out of paper, cover open — keeps its attempt and its error. */
+    if (!done?.ok && !raw.includes("<response")) {
       await db.printJob.updateMany({
-        where: { id: jobId, status: "QUEUED", error: "" },
-        data: { error: "The till couldn't reach the printer." },
+        where: { id: jobId, status: { in: ["QUEUED", "FAILED"] } },
+        data: {
+          status: "QUEUED",
+          attempts: { decrement: 1 },
+          error: "",
+        },
       });
     }
 

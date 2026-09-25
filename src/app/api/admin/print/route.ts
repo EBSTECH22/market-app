@@ -34,6 +34,10 @@ import {
   setReceiptLogo,
   getLogoSize,
   setLogoSize,
+  getLogoSource,
+  setLogoSource,
+  getLogoKeys,
+  setLogoKeys,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +70,8 @@ export async function GET() {
     const receiptColumns = await getReceiptColumns();
     const receiptLogo = await getReceiptLogo();
     const logoSize = await getLogoSize();
+    const logoSource = await getLogoSource();
+    const logoKeys = await getLogoKeys();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -96,6 +102,8 @@ export async function GET() {
       receiptColumns,
       receiptLogo,
       logoSize,
+      logoSource,
+      logoKeys,
       /* Set up enough to print: an address in direct mode, a poll key in
          collect mode. */
       configured: printMode === "direct" ? !!printerHost : !!(await getPrinterKey()),
@@ -153,7 +161,8 @@ export async function POST(req: NextRequest) {
           await getReceiptColumns(),
           /* The test page carries the logo when one is switched on, so the
              size can be found without ringing sales. */
-          (await getReceiptLogo()) ? await getLogoSize() : 0
+          (await getReceiptLogo()) ? await getLogoSize() : 0,
+          (await getReceiptLogo()) && (await getLogoSource()) === "printer" ? await getLogoKeys() : undefined
         ), createdBy: who });
       return NextResponse.json({ ok: true, jobId: id });
     }
@@ -190,8 +199,9 @@ export async function POST(req: NextRequest) {
         vendors.map((v) => [v.id, v] as [string, { id: string; businessName: string; code: string }])
       );
 
-      const [header, footer, cols, logo, logoSize] = await Promise.all([
+      const [header, footer, cols, logo, logoSize, logoSource, keys] = await Promise.all([
         getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
+        getLogoSource(), getLogoKeys(),
       ]);
       const id = await enqueue({
         kind: "REPRINT",
@@ -223,7 +233,7 @@ export async function POST(req: NextRequest) {
           },
           /* Marked, always. An unmarked second copy of a receipt is the thing
              a returned-goods scam is built on. */
-          { header, footer, cols, logo, logoSize, reprint: true }
+          { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2, reprint: true }
         ),
       });
       return NextResponse.json({ ok: true, jobId: id });
@@ -257,6 +267,14 @@ export async function PATCH(req: NextRequest) {
     if (body.receiptColumns !== undefined) await setReceiptColumns(Number(body.receiptColumns));
     if (body.receiptLogo !== undefined) await setReceiptLogo(!!body.receiptLogo);
     if (body.logoSize !== undefined) await setLogoSize(Number(body.logoSize));
+    if (body.logoSource !== undefined) await setLogoSource(String(body.logoSource));
+    if (body.logoKey1 !== undefined || body.logoKey2 !== undefined) {
+      const now = await getLogoKeys();
+      await setLogoKeys(
+        body.logoKey1 !== undefined ? Number(body.logoKey1) : now.key1,
+        body.logoKey2 !== undefined ? Number(body.logoKey2) : now.key2
+      );
+    }
     if (body.deviceId !== undefined) await setPrinterDeviceId(String(body.deviceId));
 
     const key = await getPrinterKey();
@@ -273,6 +291,8 @@ export async function PATCH(req: NextRequest) {
       receiptColumns: await getReceiptColumns(),
       receiptLogo: await getReceiptLogo(),
       logoSize: await getLogoSize(),
+      logoSource: await getLogoSource(),
+      logoKeys: await getLogoKeys(),
       deviceId: await getPrinterDeviceId(),
     });
   });

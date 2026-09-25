@@ -299,3 +299,38 @@ export async function setLogoSize(v: number): Promise<void> {
   const n = Math.round(Number(v));
   await put("receiptLogoSize", String([128, 192, 256, 320, 384].includes(n) ? n : 192));
 }
+
+/**
+ * Where the receipt's logo comes from.
+ *
+ * "image" sends the picture with every receipt. "printer" prints one loaded
+ * into the printer's own memory with Epson's utility — two key codes on the
+ * wire instead of thousands of characters, which removes the size ceiling
+ * that an image keeps running into.
+ */
+export async function getLogoSource(): Promise<"image" | "printer"> {
+  return (await str("logoSource", "image")) === "printer" ? "printer" : "image";
+}
+
+export async function setLogoSource(v: string): Promise<void> {
+  await put("logoSource", v === "printer" ? "printer" : "image");
+}
+
+/** The two key codes Epson's utility gave the stored logo. */
+export async function getLogoKeys(): Promise<{ key1: number; key2: number }> {
+  const clamp = (raw: string, fallback: number) => {
+    const n = Math.round(Number(raw));
+    return Number.isFinite(n) && n >= 0 && n <= 255 ? n : fallback;
+  };
+  return {
+    key1: clamp(await str("logoKey1", "32"), 32),
+    key2: clamp(await str("logoKey2", "32"), 32),
+  };
+}
+
+export async function setLogoKeys(key1: number, key2: number): Promise<void> {
+  const ok = (n: number, fallback: number) =>
+    Number.isFinite(n) && n >= 0 && n <= 255 ? Math.round(n) : fallback;
+  await put("logoKey1", String(ok(key1, 32)));
+  await put("logoKey2", String(ok(key2, 32)));
+}

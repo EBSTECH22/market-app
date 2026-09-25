@@ -17,8 +17,16 @@ import { readPrintResponse } from "@/lib/epos";
  * receipt printing late rather than never.
  */
 
-/** How long a handed-over job is given to report back before it's re-queued. */
-const SENT_GRACE_MS = 90_000;
+/**
+ * How long a handed-over job is given to report back before it's re-queued.
+ *
+ * Nothing else prints while a job is out (see api/admin/print/next), so this
+ * doubles as how long a stuck job blocks the queue. Long enough for the
+ * slowest receipt this printer produces — a full-width logo takes it several
+ * seconds — and short enough that a till carried out of range doesn't hold
+ * the next customer's receipt hostage.
+ */
+const SENT_GRACE_MS = 25_000;
 
 /** Give up after this many goes, so one poisoned job can't block the roll. */
 const MAX_ATTEMPTS = 5;
@@ -112,7 +120,10 @@ export async function claim(limit = 3): Promise<{ id: string; body: string; labe
  * oldest job still outstanding. That is correct as long as jobs go out in
  * order and one at a time, which is exactly how they are handed over.
  */
-export async function complete(responseXml: string): Promise<{ jobId: string; ok: boolean } | null> {
+export async function complete(
+  responseXml: string,
+  carriedBy = ""
+): Promise<{ jobId: string; ok: boolean } | null> {
   const { jobId: reportedId, ok, code, reported } = readPrintResponse(responseXml);
 
   /* AN EMPTY REPORT IS NOT A VERDICT. The printer sends one of these after a
@@ -122,13 +133,28 @@ export async function complete(responseXml: string): Promise<{ jobId: string; ok
      gets printed again. A report that mentions no job changes no job. */
   if (!reported) return null;
 
+  /* WHICH JOB THIS REPORT IS ABOUT, in order of how sure we are.
+
+     1. The printer named it (protocol 2.00). Unambiguous.
+     2. The till named it. The till carried this exact job to the printer and
+        is telling us how it went, so it knows better than any guess we could
+        make here.
+     3. Nobody named it, so it belongs to the oldest job still out.
+
+     Step 2 is not a nicety. Without it, a report always landed on the oldest
+     outstanding job — so with two receipts in flight, the second one's
+     "printed fine" marked the FIRST one done. The first never came out of the
+     printer and the queue said it had. That is exactly the shape of one
+     receipt vanishing while its reprint prints. */
   const job = reportedId
     ? await db.printJob.findUnique({ where: { id: reportedId }, select: { id: true, attempts: true } })
-    : await db.printJob.findFirst({
-        where: { status: "SENT" },
-        orderBy: { sentAt: "asc" },
-        select: { id: true, attempts: true },
-      });
+    : carriedBy
+      ? await db.printJob.findUnique({ where: { id: carriedBy }, select: { id: true, attempts: true } })
+      : await db.printJob.findFirst({
+          where: { status: "SENT" },
+          orderBy: { sentAt: "asc" },
+          select: { id: true, attempts: true },
+        });
   if (!job) return null;
   const jobId = job.id;
 

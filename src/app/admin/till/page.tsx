@@ -34,6 +34,8 @@ type PrintState = {
   receiptColumns: number;
   receiptLogo: boolean;
   logoSize: number;
+  logoSource: "image" | "printer";
+  logoKeys: { key1: number; key2: number };
   log: { at: string; what: string }[];
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
@@ -57,6 +59,8 @@ export default function TillHardware() {
   const [deviceId, setDeviceId] = useState("local_printer");
   const [host, setHost] = useState("");
   const [cols, setCols] = useState("42");
+  const [k1, setK1] = useState("32");
+  const [k2, setK2] = useState("32");
   const [footer, setFooter] = useState("");
 
   const loadReaders = useCallback(async () => {
@@ -87,6 +91,7 @@ export default function TillHardware() {
     setDeviceId(String(d.deviceId || "local_printer"));
     setHost(String(d.printerHost || ""));
     setCols(String(d.receiptColumns || 42));
+    if (d.logoKeys) { setK1(String(d.logoKeys.key1)); setK2(String(d.logoKeys.key2)); }
     setHeader(String(d.header || ""));
     setFooter(String(d.footer || ""));
   }, []);
@@ -179,6 +184,33 @@ export default function TillHardware() {
       setPrinterKey(String(d.key || ""));
       toast.success("Address made", "Type it into the printer next.");
       await loadPrint();
+    } finally { setBusy(false); }
+  };
+
+  const saveLogoSource = async (logoSource: "image" | "printer") => {
+    setBusy(true);
+    try {
+      await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logoSource, receiptLogo: true }),
+      });
+      await loadPrint();
+      toast.success(
+        logoSource === "printer" ? "Using the logo stored in the printer" : "Sending the logo with each receipt",
+        "Print a test."
+      );
+    } finally { setBusy(false); }
+  };
+
+  const saveKeys = async () => {
+    setBusy(true);
+    try {
+      await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logoKey1: Number(k1), logoKey2: Number(k2) }),
+      });
+      await loadPrint();
+      toast.success("Key codes saved", "Print a test.");
     } finally { setBusy(false); }
   };
 
@@ -619,10 +651,49 @@ export default function TillHardware() {
                 </Button>
               </div>
 
+              {print?.receiptLogo ? (
+                <div className="stack g-3">
+                  <div className="stack g-2">
+                    <span className="t-label">Where the logo comes from</span>
+                    <div className="row wrap g-2">
+                      <Button size="sm" variant={print.logoSource === "image" ? "primary" : "secondary"}
+                        disabled={busy} onClick={() => void saveLogoSource("image")}>
+                        Sent with each receipt
+                      </Button>
+                      <Button size="sm" variant={print.logoSource === "printer" ? "primary" : "secondary"}
+                        disabled={busy} onClick={() => void saveLogoSource("printer")}>
+                        Stored in the printer
+                      </Button>
+                    </div>
+                    <span className="t-xs t-muted">
+                      Stored in the printer has no size limit and can&rsquo;t make a receipt too big to print —
+                      but the logo has to be loaded into the printer once with Epson&rsquo;s utility first.
+                    </span>
+                  </div>
+
+                  {print.logoSource === "printer" ? (
+                    <div className="stack g-2">
+                      <span className="t-label">Key codes from the utility</span>
+                      <div className="row wrap g-2" style={{ alignItems: "center" }}>
+                        <Input className="mono" value={k1} style={{ width: 90 }} onChange={(e) => setK1(e.target.value)} />
+                        <Input className="mono" value={k2} style={{ width: 90 }} onChange={(e) => setK2(e.target.value)} />
+                        <Button size="sm" variant="secondary" icon="check" disabled={busy} onClick={() => void saveKeys()}>
+                          Save
+                        </Button>
+                      </div>
+                      <span className="t-xs t-muted">
+                        The two numbers Epson&rsquo;s utility showed when it stored the logo. Usually 32 and 32.
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {/* The printer refuses a job whose image is too big and Epson
                   don't publish the limit, so this is stepped down until a test
-                  print comes out rather than guessed at. */}
-              {print?.receiptLogo ? (
+                  print comes out rather than guessed at. Only relevant when the
+                  picture travels with the receipt. */}
+              {print?.receiptLogo && print.logoSource === "image" ? (
                 <div className="stack g-2">
                   <span className="t-label">Logo size</span>
                   <div className="row wrap g-2">
