@@ -90,6 +90,12 @@ export async function GET() {
       sdpStyle,
       printerHost,
       printMode,
+      /* The receipt's own settings. These were being worked out above and then
+         left out of the reply, so the page could never show the real state of
+         the logo switch — it read as off however many times it was pressed. */
+      receiptColumns,
+      receiptLogo,
+      logoSize,
       /* Set up enough to print: an address in direct mode, a poll key in
          collect mode. */
       configured: printMode === "direct" ? !!printerHost : !!(await getPrinterKey()),

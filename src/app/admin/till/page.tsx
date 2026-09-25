@@ -417,9 +417,18 @@ export default function TillHardware() {
           subtitle="The drawer opens through the printer, so both of these are really one machine."
           actions={
             print ? (
-              <Badge tone={print.online ? "success" : print.configured ? "warn" : "neutral"} dot>
-                {print.online ? "Printer online" : print.configured ? "Not checking in" : "Not set up"}
-              </Badge>
+              print.printMode === "direct" ? (
+                /* In direct mode the printer never checks in — the till goes to
+                   it. Saying "not checking in" here was alarming and meant
+                   nothing. */
+                <Badge tone={print.printerHost ? "success" : "neutral"} dot>
+                  {print.printerHost ? "Printing direct" : "Not set up"}
+                </Badge>
+              ) : (
+                <Badge tone={print.online ? "success" : print.configured ? "warn" : "neutral"} dot>
+                  {print.online ? "Printer online" : print.configured ? "Not checking in" : "Not set up"}
+                </Badge>
+              )
             ) : null
           }
         >
@@ -606,7 +615,7 @@ export default function TillHardware() {
                 </Field>
                 <Button size="sm" variant={print?.receiptLogo ? "primary" : "secondary"} icon="image"
                   disabled={busy} onClick={() => void toggleLogo()}>
-                  {print?.receiptLogo ? "Logo on the receipt" : "No logo"}
+                  {print?.receiptLogo ? "Logo is on — turn it off" : "Logo is off — turn it on"}
                 </Button>
               </div>
 
