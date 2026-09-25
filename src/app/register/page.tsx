@@ -448,7 +448,7 @@ export default function RegisterKiosk() {
      looks itself up without anybody pressing anything. */
 
   /** Quiet after the last character before a scan is taken as complete. */
-  const SCAN_IDLE_MS = 140;
+  const SCAN_IDLE_MS = 180;
 
   const burstRef = useRef(new ScanBurst());
   const scanTimerRef = useRef<number | null>(null);
