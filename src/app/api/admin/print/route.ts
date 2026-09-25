@@ -242,6 +242,14 @@ export async function DELETE(req: NextRequest) {
       const { count } = await db.printJob.deleteMany({ where: { status: "FAILED" } });
       return NextResponse.json({ ok: true, cleared: count });
     }
+    /* Everything not yet printed, whatever state it got stuck in. A job that
+       is handed over and never confirmed sits at SENT indefinitely, which is
+       right — it might still print — but it left no way to call a halt. This
+       is that way. */
+    if (id === "waiting") {
+      const { count } = await db.printJob.deleteMany({ where: { status: { in: ["QUEUED", "SENT", "FAILED"] } } });
+      return NextResponse.json({ ok: true, cleared: count });
+    }
     if (!id) return NextResponse.json({ error: "Which job?" }, { status: 400 });
     await db.printJob.deleteMany({ where: { id } });
     return NextResponse.json({ ok: true, cleared: 1 });

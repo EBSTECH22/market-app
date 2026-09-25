@@ -239,12 +239,21 @@ export default function TillHardware() {
     } finally { setBusy(false); }
   };
 
-  const clearFailed = async () => {
+  const clearJobs = async (which: "failed" | "waiting") => {
     setBusy(true);
     try {
-      await fetch("/api/admin/print?id=failed", { method: "DELETE" });
+      const r = await fetch(`/api/admin/print?id=${which}`, { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
       await loadPrint();
-      toast.success("Cleared");
+      toast.success(d.cleared ? `Cleared ${d.cleared}` : "Nothing to clear");
+    } finally { setBusy(false); }
+  };
+
+  const clearOne = async (id: string) => {
+    setBusy(true);
+    try {
+      await fetch(`/api/admin/print?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadPrint();
     } finally { setBusy(false); }
   };
 
@@ -495,11 +504,13 @@ export default function TillHardware() {
       {print && print.recent.length > 0 ? (
         <Card
           title="Last few print jobs"
-          actions={print.failed ? (
-            <Button size="sm" variant="ghost" icon="trash" disabled={busy} onClick={() => void clearFailed()}>
-              Clear {print.failed} failed
-            </Button>
-          ) : null}
+          actions={
+            print.failed || print.queued ? (
+              <Button size="sm" variant="ghost" icon="trash" disabled={busy} onClick={() => void clearJobs("waiting")}>
+                Clear {print.failed + print.queued} not printed
+              </Button>
+            ) : null
+          }
         >
           <div className="stack g-2">
             {print.recent.map((j) => (
@@ -512,7 +523,14 @@ export default function TillHardware() {
                   </span>
                   {j.error ? <span className="t-xs" style={{ color: "var(--danger)" }}>{j.error}</span> : null}
                 </span>
-                <span className="t-xs t-muted">{relTime(j.createdAt)}</span>
+                <span className="row g-2" style={{ alignItems: "center" }}>
+                  <span className="t-xs t-muted">{relTime(j.createdAt)}</span>
+                  {j.status === "DONE" ? null : (
+                    <Button size="sm" variant="ghost" icon="close" disabled={busy} onClick={() => void clearOne(j.id)}>
+                      Remove
+                    </Button>
+                  )}
+                </span>
               </div>
             ))}
           </div>
