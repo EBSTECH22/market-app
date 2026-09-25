@@ -169,9 +169,26 @@ export async function POST(req: NextRequest) {
       const saleId = String(body.saleId || "");
       const sale = await db.sale.findUnique({
         where: { id: saleId },
-        include: { lines: { select: { name: true, quantity: true, priceCents: true, basePriceCents: true } } },
+        include: {
+          lines: {
+            select: { name: true, quantity: true, priceCents: true, basePriceCents: true, vendorId: true },
+          },
+        },
       });
       if (!sale) return NextResponse.json({ error: "That ticket is gone." }, { status: 404 });
+
+      /* A ticket line keeps the vendor's id, not their name — names change and
+         a receipt from March should still say what it said in March. So the
+         names are looked up now, for the copy being printed now. */
+      const vendors = await db.vendor.findMany({
+        where: { id: { in: [...new Set(sale.lines.map((l) => l.vendorId).filter(Boolean))] } },
+        select: { id: true, businessName: true, code: true },
+      });
+      /* Spelled out on purpose: new Map(arr.map(...)) infers {} for the value
+         and the build fails on the next line. It has done so twice. */
+      const vendorOf = new Map<string, { id: string; businessName: string; code: string }>(
+        vendors.map((v) => [v.id, v] as [string, { id: string; businessName: string; code: string }])
+      );
 
       const [header, footer, cols, logo, logoSize] = await Promise.all([
         getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
@@ -186,7 +203,11 @@ export async function POST(req: NextRequest) {
             number: sale.number,
             createdAt: sale.createdAt,
             employee: sale.employee,
-            lines: sale.lines,
+            lines: sale.lines.map((l) => ({
+              ...l,
+              vendorName: vendorOf.get(l.vendorId)?.businessName || "",
+              vendorCode: vendorOf.get(l.vendorId)?.code || "",
+            })),
             subtotalCents: sale.subtotalCents,
             saleSavingsCents: sale.saleSavingsCents,
             cardAdjustCents: sale.cardAdjustCents,

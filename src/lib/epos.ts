@@ -155,6 +155,12 @@ export type ReceiptLine = {
   quantity: number;
   priceCents: number;
   basePriceCents?: number;
+  /* Who it belongs to. On a consignment floor this is the point of the
+     receipt: a customer with a question about a jar of jam needs to know
+     whose jam it was, and the market needs to be able to answer months
+     later from a piece of paper in somebody's handbag. */
+  vendorName?: string;
+  vendorCode?: string;
 };
 
 export type ReceiptSale = {
@@ -180,6 +186,8 @@ export type ReceiptSale = {
 export type ReceiptOptions = {
   /** Characters across. Defaults to this printer's 42. */
   cols?: number;
+  /** Print the ticket number as a scannable barcode at the foot. */
+  barcode?: boolean;
   /** Print the market's logo above the address. */
   logo?: boolean;
   /** How many dots across the logo prints. See logoImage. */
@@ -240,18 +248,32 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
   );
   out.push(t(rule("-", cols)));
 
+  let itemCount = 0;
   for (const l of sale.lines) {
     const qty = Math.max(1, Math.round(l.quantity));
+    itemCount += qty;
     const unit = l.basePriceCents || l.priceCents;
     for (const row of wrapLine(`${qty}x ${l.name}`, money(unit * qty), cols)) out.push(t(row));
+
     /* A discounted item shows what it normally is, indented under itself —
-       people want to see the saving on the paper, not just in the total. */
+       people want to see the saving on the paper, not just in the total. It
+       goes directly under the price it corrects, before the vendor line, so
+       the two money figures sit together. */
     if (l.basePriceCents && l.priceCents !== l.basePriceCents) {
       out.push(line(`   sale price`, money(l.priceCents * qty)));
+    }
+
+    /* Whose stall it came from. The code is what the market files everything
+       by, so it goes on the paper next to the name — a customer asking about a
+       jar of jam in six weeks is holding the only record either of you has. */
+    if (l.vendorName || l.vendorCode) {
+      const who = [l.vendorName, l.vendorCode ? `(${l.vendorCode})` : ""].filter(Boolean).join(" ");
+      out.push(t(`   ${who}`.slice(0, cols)));
     }
   }
 
   out.push(t(rule("-", cols)));
+  out.push(line(`ITEMS SOLD`, String(itemCount)));
   out.push(line("SUBTOTAL", money(sale.subtotalCents + (sale.saleSavingsCents || 0))));
   if (sale.saleSavingsCents) out.push(line("SALE SAVINGS", `-${money(sale.saleSavingsCents)}`));
   if (sale.cardAdjustCents) out.push(line("NON-CASH ADJ", money(sale.cardAdjustCents)));
@@ -288,6 +310,14 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
   out.push(t(""));
   out.push(`<text align="center"/>`);
   for (const f of footer) out.push(t(f));
+
+  /* The ticket number, scannable. Costs almost nothing to print — a barcode
+     is an instruction, not a picture — and turns "I bought it a few weeks
+     ago" into a scan at the counter. */
+  if (opts.barcode !== false && sale.number > 0) {
+    out.push(t(""));
+    out.push(`<barcode type="code39" hri="below" font="font_b" width="2" height="48">${esc(String(sale.number))}</barcode>`);
+  }
 
   out.push(cut());
   return out.join("");

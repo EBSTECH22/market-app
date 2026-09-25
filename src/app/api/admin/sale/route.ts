@@ -466,12 +466,17 @@ export async function POST(req: NextRequest) {
         number: sale.number,
         createdAt: sale.createdAt,
         employee: sale.employee,
-        lines: saleLines.map((l) => ({
-          name: l.name,
-          quantity: l.quantity,
-          priceCents: l.priceCents,
-          basePriceCents: l.basePriceCents,
-        })),
+        lines: saleLines.map((l) => {
+          const v = items.find((i) => i.vendorId === l.vendorId)?.vendor;
+          return {
+            name: l.name,
+            quantity: l.quantity,
+            priceCents: l.priceCents,
+            basePriceCents: l.basePriceCents,
+            vendorName: v?.businessName || "",
+            vendorCode: v?.code || "",
+          };
+        }),
         subtotalCents: subtotal,
         saleSavingsCents,
         cardAdjustCents,
