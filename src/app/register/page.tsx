@@ -7,7 +7,7 @@ import {
 } from "@/components/ui";
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
 import { ScanBurst, looksLikeProductBarcode } from "@/lib/scanner";
-import { WedgeBuffer, isTerminator, isBarcodeChar } from "@/lib/wedge";
+import { WedgeTiming, isTerminator, readCode } from "@/lib/wedge";
 import { PrintAgent } from "@/components/PrintAgent";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
@@ -447,16 +447,23 @@ export default function RegisterKiosk() {
      Whatever field caught the characters gets cleared afterwards, because they
      went in there too — that is why a scan used to leave its code sitting in
      the search box. */
-  const wedgeRef = useRef(new WedgeBuffer());
+  const wedgeRef = useRef(new WedgeTiming());
   /* doScan is rebuilt every render and reads the current cart and floor. The
      listener below is installed once, so it must reach the CURRENT one — a
      captured copy would ring up against the cart as it was when the till
      opened. */
   const doScanRef = useRef<(raw?: string) => Promise<void>>(async () => {});
 
-  const wedgeScan = useCallback((code: string) => {
-    /* The characters leaked into whichever box had the cursor. Tidy both, put
-       the cursor back where it belongs, and ring the item up. */
+  const wedgeScan = useCallback(() => {
+    /* Read the code out of whichever box caught it, rather than rebuilding it
+       from keystrokes — on this tablet some characters arrive with no
+       character attached at all. See lib/wedge. */
+    const code = readCode(document.activeElement, scanRef.current);
+    wedgeRef.current.reset();
+    if (!code) return;
+
+    /* The characters went into a real field, so clear both candidates, put the
+       cursor back where it belongs, and ring it up. */
     setScan("");
     setSearch("");
     burstRef.current.reset();
@@ -471,30 +478,25 @@ export default function RegisterKiosk() {
     if (!who || !drawer || closing || receipt) return;
 
     const onKey = (e: KeyboardEvent) => {
-      if (isTerminator(e.key)) {
-        const code = wedgeRef.current.terminate();
-        if (code) {
-          /* Swallow the key. An unswallowed Tab is what moved the cursor into
-             the search box in the first place. */
-          e.preventDefault();
-          e.stopPropagation();
-          wedgeScan(code);
-        }
+      if (isTerminator(e.key) && wedgeRef.current.looksMachine()) {
+        /* Swallow it. An arrow key that reaches Android moves the cursor to
+           the next field, which is what sent every scan after the first one
+           into the search box. */
+        e.preventDefault();
+        e.stopPropagation();
+        wedgeScan();
         return;
       }
-      if (!isBarcodeChar(e.key, e.ctrlKey, e.metaKey, e.altKey)) return;
-      wedgeRef.current.push(e.key, Date.now());
+      /* Every keystroke counts towards the timing, named or not. */
+      wedgeRef.current.tick(Date.now());
     };
 
-    /* Capture phase, so the code is caught before any field gets to react to
-       it — including the browser's own tab-to-next-field behaviour. */
     window.addEventListener("keydown", onKey, true);
 
-    /* For scanners set to send no finishing key: sweep for a burst that has
-       simply stopped growing. */
+    /* For a scanner sending no finishing key: the code is complete once the
+       keystrokes stop. */
     const sweep = window.setInterval(() => {
-      const code = wedgeRef.current.settle(Date.now(), 160);
-      if (code) wedgeScan(code);
+      if (wedgeRef.current.settled(Date.now(), 170)) wedgeScan();
     }, 80);
 
     return () => {

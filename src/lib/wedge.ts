@@ -1,110 +1,128 @@
 /**
- * Catching a barcode wherever it lands.
+ * Catching a barcode on an Android tablet, where none of the obvious things work.
  *
- * A USB scanner is a keyboard, and a keyboard types into whatever happens to
- * have the cursor. Worse, most scanners finish with Tab or Enter, and Tab
- * moves the cursor to the NEXT field — so the code goes into the scan box and
- * the cursor leaves, and the following scan lands in the search box, or the
- * cash box, or nowhere at all.
+ * What a real scan looks like, captured from the market's own scanner on the
+ * market's own tablet:
  *
- * Watching one input can't solve that, because by the time the second scan
- * arrives the input isn't watching. So this watches the whole page instead: it
- * collects keystrokes as they happen, anywhere, and decides afterwards whether
- * what just arrived was a person typing or a machine.
+ *     Shift        ShiftLeft      16   0ms    (uppercase coming)
+ *     Unidentified                229  10ms   <- the "V"
+ *     0            Digit0         48   16ms
+ *     1            Digit1         49   44ms
+ *     Unidentified                229  14ms   <- the "-"
+ *     0            Digit0         48   5ms
+ *     0            Digit0         48   5ms
+ *     0            Digit0         48   10ms
+ *     1            Digit1         49   6ms
+ *     ArrowDown    ArrowDown      40   27ms   <- the finishing key
  *
- * The test is speed, and it is not close. A scanner puts characters in a few
- * milliseconds apart; the quickest hands at a counter are twenty times slower.
- * Anything that fails the test is left alone entirely, so typing a cash amount
- * or a customer's email still behaves exactly as it always did.
+ * Two lessons, both of which cost a working till a day:
+ *
+ * ONE: THE CODE CANNOT BE READ FROM THE KEYSTROKES. Android puts some
+ * characters through its input layer, which reports them as "Unidentified"
+ * with keyCode 229 and no character at all. The scan above is V01-0001 and the
+ * readable keys spell 010001. So the code is taken from the FIELD'S VALUE,
+ * which is always right, and the keystrokes are used only for their timing.
+ *
+ * TWO: THE FINISHING KEY IS AN ARROW. Not Enter, not Tab — this scanner sends
+ * a down arrow, and Android moves the cursor to the next field when it sees
+ * one. That is why the first scan worked and every scan after it landed in the
+ * search box: the cursor had been pushed out and nothing put it back.
+ *
+ * So: watch the timing of keystrokes to know a machine is typing, swallow the
+ * finishing key so the cursor stays put, and read the code out of the field.
  */
 
 export type WedgeOptions = {
-  /** Average ms per character below which no human is doing the typing. */
+  /** Average ms between keystrokes below which no human is doing the typing. */
   gapMs?: number;
-  /** Shorter than this isn't a barcode. */
-  minLength?: number;
-  /** A character arriving later than this starts a new code. */
+  /** Fewer keystrokes than this isn't a barcode. */
+  minKeys?: number;
+  /** A keystroke later than this begins a new code. */
   breakMs?: number;
 };
 
-export class WedgeBuffer {
-  private chars: string[] = [];
+export class WedgeTiming {
+  private count = 0;
   private startAt = 0;
   private lastAt = 0;
   private readonly gapMs: number;
-  private readonly minLength: number;
+  private readonly minKeys: number;
   private readonly breakMs: number;
 
   constructor(opts: WedgeOptions = {}) {
     this.gapMs = opts.gapMs ?? 60;
-    this.minLength = opts.minLength ?? 4;
+    this.minKeys = opts.minKeys ?? 4;
     this.breakMs = opts.breakMs ?? 300;
   }
 
   reset(): void {
-    this.chars = [];
+    this.count = 0;
     this.startAt = 0;
     this.lastAt = 0;
   }
 
-  /** One printable character, as it was typed. */
-  push(ch: string, now: number): void {
-    /* A long silence means whatever came before was a different code, or
-       somebody's hands. Either way it is not part of this one. */
-    if (this.chars.length && now - this.lastAt > this.breakMs) this.reset();
-    if (this.chars.length === 0) this.startAt = now;
-    this.chars.push(ch);
+  /**
+   * One keystroke, whatever it was.
+   *
+   * Deliberately NOT filtered by key name: the whole point is that some of a
+   * scan's keystrokes have no usable name. What matters is that something
+   * arrived, and when.
+   */
+  tick(now: number): void {
+    if (this.count && now - this.lastAt > this.breakMs) this.reset();
+    if (this.count === 0) this.startAt = now;
+    this.count += 1;
     this.lastAt = now;
-    /* A barcode is not a novel. Anything this long is a stuck key or somebody
-       leaning on the counter. */
-    if (this.chars.length > 64) this.reset();
   }
 
-  /** What's buffered, if it reads like a machine put it there. */
-  private qualified(): string | null {
-    const code = this.chars.join("").trim();
-    if (code.length < this.minLength) return null;
-    const per = this.chars.length > 1 ? (this.lastAt - this.startAt) / (this.chars.length - 1) : 0;
-    return per <= this.gapMs ? code : null;
+  /** Does the run so far look like a machine rather than hands? */
+  looksMachine(): boolean {
+    if (this.count < this.minKeys) return false;
+    const per = (this.lastAt - this.startAt) / (this.count - 1);
+    return per <= this.gapMs;
   }
 
-  /**
-   * The scanner pressed its finishing key — Enter or Tab.
-   *
-   * Returns the code when the burst qualifies, and nothing when a person just
-   * pressed Enter, which must go on behaving like Enter.
-   */
-  terminate(): string | null {
-    const code = this.qualified();
-    this.reset();
-    return code;
+  /** Has a machine-speed run finished and gone quiet? */
+  settled(now: number, idleMs = 160): boolean {
+    return this.looksMachine() && this.count > 0 && now - this.lastAt >= idleMs;
   }
 
-  /**
-   * Nothing has arrived for a while.
-   *
-   * For scanners set to send no finishing key at all: the code is simply
-   * complete once it stops growing.
-   */
-  settle(now: number, idleMs = 140): string | null {
-    if (!this.chars.length || now - this.lastAt < idleMs) return null;
-    return this.terminate();
-  }
-
-  get length(): number {
-    return this.chars.length;
+  get keys(): number {
+    return this.count;
   }
 }
 
-/** Keys that mean "that's the whole code" on one scanner or another. */
+/**
+ * Keys a scanner might send to say "that's the whole code".
+ *
+ * The arrows are here because this market's scanner sends one, and because on
+ * Android an arrow moves the cursor to the next field — which is the specific
+ * thing that has to be stopped. They only ever count as a finishing key when a
+ * machine-speed run is already in progress, so arrow keys still work normally
+ * for anybody using the tablet by hand.
+ */
 export const isTerminator = (key: string): boolean =>
-  key === "Enter" || key === "Tab" || key === "NumpadEnter";
+  key === "Enter" ||
+  key === "Tab" ||
+  key === "NumpadEnter" ||
+  key === "ArrowDown" ||
+  key === "ArrowUp" ||
+  key === "ArrowRight";
 
 /**
- * Is this keystroke one character of a barcode?
+ * The code, taken from wherever the characters actually landed.
  *
- * Modifier combinations are somebody using the tablet, not a scanner, and a
- * named key like "Shift" or "ArrowLeft" is never part of a code.
+ * The cursor may have been pushed into another field by a previous scan, so
+ * the field holding the code is whichever one has it — the active one if it is
+ * a text box with something in it, and the scan box otherwise.
  */
-export const isBarcodeChar = (key: string, ctrl: boolean, meta: boolean, alt: boolean): boolean =>
-  key.length === 1 && !ctrl && !meta && !alt;
+export function readCode(active: Element | null, fallback: HTMLInputElement | null): string {
+  const el = active as HTMLInputElement | null;
+  const isText =
+    !!el &&
+    (el.tagName === "INPUT" || el.tagName === "TEXTAREA") &&
+    typeof el.value === "string";
+  const fromActive = isText ? el.value.trim() : "";
+  if (fromActive) return fromActive;
+  return (fallback?.value || "").trim();
+}
