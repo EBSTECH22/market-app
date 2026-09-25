@@ -27,7 +27,8 @@ export type AuditAction =
   | "NONPAYMENT_NOTICE"
   | "NONPAYMENT_TEXT"
   | "SPACE_RELEASED"
-  | "SPACE_REHELD";
+  | "SPACE_REHELD"
+  | "NO_SALE";
 
 export const AUDIT_LABEL: Record<AuditAction, string> = {
   SALE_VOID: "Ticket voided",
@@ -48,6 +49,7 @@ export const AUDIT_LABEL: Record<AuditAction, string> = {
   NONPAYMENT_TEXT: "Non-payment text opened",
   SPACE_RELEASED: "Booth opened back up",
   SPACE_REHELD: "Booth held again",
+  NO_SALE: "Drawer opened, no sale",
 };
 
 /** Actions where money left the market, for the "money out" filter. */

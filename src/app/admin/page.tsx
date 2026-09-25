@@ -1227,6 +1227,7 @@ const NAV: { group: string; items: { id: string; label: string; icon: IconName; 
     group: "Setup",
     items: [
       { id: "links", label: "Links & QR", icon: "link" },
+      { id: "till", label: "Till hardware", icon: "print", href: "/admin/till", cap: "config" as Capability },
       { id: "settings", label: "Settings", icon: "settings" },
     ],
   },

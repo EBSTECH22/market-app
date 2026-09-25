@@ -49,3 +49,79 @@ export async function getCardAdjustPercent(): Promise<number> {
   const v = row ? Number(row.value) : 0;
   return Number.isFinite(v) && v >= 0 && v <= 4 ? v : 0;
 }
+
+/* ------------------------------------------------------ till hardware -- */
+
+const str = async (key: string, fallback = ""): Promise<string> => {
+  const row = await db.setting.findUnique({ where: { key } });
+  return row ? row.value : fallback;
+};
+
+const put = async (key: string, value: string): Promise<void> => {
+  await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
+};
+
+/**
+ * The secret in the printer's poll address.
+ *
+ * The printer can't sign in — it has no cookies and no idea who anybody is. So
+ * the URL itself is the credential: a long random word in the path, typed into
+ * the printer once. Anyone who knows it can print on the market's paper and
+ * pop the drawer, which is why it is generated rather than chosen, and why
+ * changing it is one button.
+ */
+export async function getPrinterKey(): Promise<string> {
+  return str("printerKey");
+}
+
+export async function setPrinterKey(v: string): Promise<void> {
+  await put("printerKey", v);
+}
+
+/** Lines across the top of every receipt. Blank means the built-in default. */
+export async function getReceiptHeader(): Promise<string[]> {
+  return (await str("receiptHeader")).split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 6);
+}
+
+export async function setReceiptHeader(lines: string[]): Promise<void> {
+  await put("receiptHeader", lines.slice(0, 6).join("\n"));
+}
+
+export async function getReceiptFooter(): Promise<string[]> {
+  return (await str("receiptFooter")).split("\n").map((s) => s.trim()).slice(0, 8);
+}
+
+export async function setReceiptFooter(lines: string[]): Promise<void> {
+  await put("receiptFooter", lines.slice(0, 8).join("\n"));
+}
+
+/** Which card reader the till sends charges to. */
+export async function getTerminalReaderId(): Promise<string> {
+  return str("terminalReaderId");
+}
+
+export async function setTerminalReaderId(v: string): Promise<void> {
+  await put("terminalReaderId", v.trim());
+}
+
+export async function getTerminalLocationId(): Promise<string> {
+  return str("terminalLocationId");
+}
+
+export async function setTerminalLocationId(v: string): Promise<void> {
+  await put("terminalLocationId", v.trim());
+}
+
+/**
+ * Print a receipt for every sale without being asked.
+ *
+ * On by default: a till that prints when you tell it to is a till where
+ * somebody eventually forgets, and the customer is already out of the door.
+ */
+export async function getAutoPrint(): Promise<boolean> {
+  return (await str("autoPrintReceipts", "1")) !== "0";
+}
+
+export async function setAutoPrint(on: boolean): Promise<void> {
+  await put("autoPrintReceipts", on ? "1" : "0");
+}

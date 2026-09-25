@@ -907,3 +907,69 @@ model FloorSpace {
   @@index([planId])
   @@index([vendorId])
 }
+
+// A receipt waiting to be printed, or a drawer waiting to be kicked.
+//
+// The printer is on the market's own wifi behind the router; this app is on
+// the internet. Nothing out here can dial in to it. So the traffic runs the
+// other way: the printer asks this app for work every few seconds (Epson call
+// it Server Direct Print), and this table is the pile of work it asks about.
+//
+// That also means printing survives everything a shop day throws at it. The
+// tablet can lock, the browser can be closed, the till can be carried to the
+// other end of the building — the receipt still comes out, because the job
+// lives here and the printer is the one doing the fetching.
+model PrintJob {
+  id        String   @id @default(cuid())
+  // RECEIPT | DRAWER | TEST | REPRINT. Only for reading the log; the XML is
+  // what actually prints.
+  kind      String   @default("RECEIPT")
+  // What it is, in words, for the job list: "Receipt #1043".
+  label     String   @default("")
+  // The ePOS-Print XML body, already built. Built once, at queue time, from
+  // the sale as it was booked — so a reprint is the same paper as the original
+  // even if a price has changed since.
+  body      String
+  // QUEUED | SENT | DONE | FAILED. SENT means handed to the printer and not
+  // yet confirmed; a SENT job that goes quiet is put back (see printqueue.ts).
+  status    String   @default("QUEUED")
+  attempts  Int      @default(0)
+  error     String   @default("")
+  saleId    String   @default("")
+  createdBy String   @default("")
+  createdAt DateTime @default(now())
+  sentAt    DateTime?
+  doneAt    DateTime?
+
+  @@index([status, createdAt])
+  @@index([saleId])
+}
+
+// What a card reader was told to charge, and for which ticket.
+//
+// The money is taken BEFORE the sale is booked, which is the only safe order —
+// booking first would leave a ticket for a payment that was declined. So the
+// prices are worked out here, at the moment of charging, and kept. When the
+// payment comes back good, the sale is written from THIS row rather than
+// priced again: the ticket and the card slip then cannot disagree, however
+// long the customer stood at the reader or whatever anybody edited meanwhile.
+model TerminalCharge {
+  id              String   @id @default(cuid())
+  paymentIntentId String   @unique
+  readerId        String   @default("")
+  amountCents     Int
+  // The priced ticket, as JSON: lines with their unit prices, the tax split
+  // and the non-cash adjustment. Written once, read once.
+  snapshot        String
+  // PENDING | SUCCEEDED | CANCELED | FAILED | BOOKED
+  status          String   @default("PENDING")
+  failureMessage  String   @default("")
+  // Set when the sale is written, so the same payment can never book twice.
+  saleId          String   @default("")
+  employee        String   @default("")
+  drawerId        String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+}

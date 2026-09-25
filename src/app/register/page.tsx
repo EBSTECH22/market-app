@@ -6,6 +6,7 @@ import {
   EmptyState, Skeleton, useToast,
 } from "@/components/ui";
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
+import { ScanBurst, looksLikeProductBarcode } from "@/lib/scanner";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
 import { CashTender } from "@/components/register/CashTender";
@@ -54,6 +55,24 @@ type Receipt = {
   cashTenderedCents?: number; changeCents?: number; paymentMethod: string;
   /** Rung with no connection: it has no ticket number until it syncs. */
   offline?: boolean;
+  /** "VISA 4242" when the card was taken on the reader. */
+  cardName?: string;
+};
+
+/**
+ * A card sitting on the reader, waiting for the customer.
+ *
+ * The money is taken before the sale is booked, so between these two moments
+ * there is a payment with no ticket behind it. This is that moment, held in
+ * one place so the screen can always say which of the two things is happening
+ * and the cashier is never guessing.
+ */
+type Charge = {
+  paymentIntentId: string;
+  amountCents: number;
+  state: "sending" | "waiting" | "succeeded" | "failed" | "booking";
+  message: string;
+  cardLabel: string;
 };
 type VendorTicket = {
   cartId: string; code: string; vendorName: string; vendorCode: string;
@@ -95,6 +114,12 @@ export default function RegisterKiosk() {
 
   const [pay, setPay] = useState<"NONE" | "CASH" | "CARD">("NONE");
   const [cardRef, setCardRef] = useState("");
+  /* What the till has to work with. Both default to false so a register that
+     can't reach the settings offers the manual path rather than a button that
+     talks to hardware that isn't there. */
+  const [readerReady, setReaderReady] = useState(false);
+  const [printerReady, setPrinterReady] = useState(false);
+  const [charge, setCharge] = useState<Charge | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
 
   /* A ticket a vendor rang up at their own booth and sent here for cash. It
@@ -221,6 +246,8 @@ export default function RegisterKiosk() {
     if (typeof d.taxRatePercent === "number") setTaxRate(d.taxRatePercent);
     if (typeof d.foodTaxRatePercent === "number") setFoodTaxRate(d.foodTaxRatePercent);
     if (typeof d.cardAdjustPercent === "number") setCardAdjustPercent(d.cardAdjustPercent);
+    setReaderReady(!!d.cardReaderReady);
+    setPrinterReady(!!d.printerReady);
   }, []);
 
   /* Only ever the ready ones. A cashier has no use for an order the vendor
@@ -399,6 +426,44 @@ export default function RegisterKiosk() {
     if (who && drawer && !closing && !receipt && pay === "NONE") scanRef.current?.focus();
   }, [who, drawer, closing, receipt, pay, cart.length]);
 
+  /* ------------------------------------------------------------- scanner --
+     A USB barcode scanner is a keyboard as far as the tablet is concerned: it
+     types the code and, USUALLY, presses something afterwards to say it's
+     finished. Which something depends on how the scanner was programmed at the
+     factory — Enter on most, Tab on plenty, and nothing at all on some.
+     Waiting only for Enter means a scanner set to Tab, or set to no suffix,
+     types the code into the box and sits there.
+
+     So the code is taken three ways. Enter, Tab, and — for a scanner that
+     sends no suffix at all — the fact that it typed far faster than hands can.
+     A scan arrives in a few milliseconds a character; the fastest person at
+     the counter is an order of magnitude slower. When a run of characters
+     comes in at machine speed and then stops, that's a finished scan, and it
+     looks itself up without anybody pressing anything. */
+
+  /** Quiet after the last character before a scan is taken as complete. */
+  const SCAN_IDLE_MS = 140;
+
+  const burstRef = useRef(new ScanBurst());
+  const scanTimerRef = useRef<number | null>(null);
+
+  const onScanChange = (value: string) => {
+    setScan(value);
+    if (scanTimerRef.current) { window.clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
+    if (burstRef.current.see(value, Date.now())) {
+      const snapshot = value;
+      scanTimerRef.current = window.setTimeout(() => {
+        scanTimerRef.current = null;
+        void doScan(snapshot);
+      }, SCAN_IDLE_MS);
+    }
+  };
+
+  /* A pending scan must not fire into a screen that has moved on. */
+  useEffect(() => {
+    return () => { if (scanTimerRef.current) window.clearTimeout(scanTimerRef.current); };
+  }, []);
+
   /* ---------------------------------------------------------------- cart -- */
 
   const addItem = (i: { id: string; sku: string; name: string; priceCents: number; basePriceCents: number; vendorName: string; taxClass?: string }) => {
@@ -413,8 +478,13 @@ export default function RegisterKiosk() {
   const setQty = (sku: string, q: number) =>
     setCart((c) => (q <= 0 ? c.filter((l) => l.sku !== sku) : c.map((l) => (l.sku === sku ? { ...l, quantity: q } : l))));
 
-  const doScan = async () => {
-    const code = scan.trim().toUpperCase();
+  const doScan = async (raw?: string) => {
+    /* The value is passed in when a scanner triggered this, because the timer
+       that fires it was created a keystroke ago and the state it captured is
+       already stale. Typed entry has no such problem and passes nothing. */
+    const code = (raw ?? scan).trim().toUpperCase();
+    if (scanTimerRef.current) { window.clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
+    burstRef.current.reset();
     setScan("");
     if (!code) return;
     /* Checked before anything else. A collection code can't collide with a SKU
@@ -428,7 +498,17 @@ export default function RegisterKiosk() {
     try {
       const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(code)}`);
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setScanErr(String(data.error || `Nothing found for ${code}.`)); return; }
+      if (!res.ok) {
+        /* A plain run of digits is almost always the manufacturer's own
+           barcode off the packaging rather than a code from this market, and
+           saying so turns "nothing found" into something fixable. */
+        const looksLikeUpc = looksLikeProductBarcode(code);
+        setScanErr(
+          String(data.error || `Nothing found for ${code}.`) +
+            (looksLikeUpc ? ` That's the maker's own barcode — to scan these, set the item's code to ${code}.` : "")
+        );
+        return;
+      }
       addItem({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass });
     } catch {
       // Raw fetch in the original register threw into nothing on a dropped
@@ -601,7 +681,11 @@ export default function RegisterKiosk() {
     }
   };
 
-  const book = async (method: "CASH" | "CARD", tenderedCents = 0) => {
+  const book = async (
+    method: "CASH" | "CARD",
+    tenderedCents = 0,
+    terminal?: { paymentIntentId: string; cardLabel: string }
+  ) => {
     if (!cart.length) return;
 
     /* One key per ticket, minted BEFORE anything is sent and reused if this
@@ -616,31 +700,167 @@ export default function RegisterKiosk() {
     setBusy(true);
     try {
       /* Known to be offline: don't spend the customer's time on a fetch that
-         will time out. Straight to the queue. */
-      if (!online) { await bookOffline(method, tenderedCents, key); return; }
+         will time out. Straight to the queue.
+
+         A card already taken on the reader never goes down this path. That
+         money exists on the server whatever this tablet thinks, and a queued
+         copy would be priced again on the way in — the one case where the
+         ticket could end up disagreeing with what was charged. */
+      if (!online && !terminal) { await bookOffline(method, tenderedCents, key); return; }
 
       const r = await fetch("/api/admin/sale", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           paymentMethod: method,
-          cardName: method === "CARD" ? cardRef : "",
+          cardName: method === "CARD" ? (terminal?.cardLabel || cardRef) : "",
           cashTenderedCents: method === "CASH" ? tenderedCents : 0,
           lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
           idemKey: key,
+          ...(terminal ? { terminalPaymentIntentId: terminal.paymentIntentId } : {}),
         }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setScanErr(String(d.error || "Sale failed.")); setPay("NONE"); return; }
-      setReceipt({ ...(d.sale as Receipt), paymentMethod: method });
-      setCart([]); setPay("NONE"); setCardRef("");
+      if (!r.ok) {
+        /* The card went through and the ticket didn't. Say so plainly and
+           leave the charge on screen: pressing Finish again books it, because
+           the payment is what the server matches on. Clearing it here is what
+           would lose the sale. */
+        if (terminal) {
+          setCharge((c) => (c ? { ...c, state: "succeeded", message: String(d.error || "The sale didn't save — press Finish to try again.") } : c));
+          return;
+        }
+        setScanErr(String(d.error || "Sale failed.")); setPay("NONE"); return;
+      }
+      setReceipt({ ...(d.sale as Receipt), paymentMethod: method, cardName: terminal?.cardLabel || "" });
+      setCart([]); setPay("NONE"); setCardRef(""); setCharge(null);
+      chargeKeyRef.current = "";
       void loadDrawer(); void loadFloor();
     } catch {
+      if (terminal) {
+        setCharge((c) => (c ? { ...c, state: "succeeded", message: "Couldn't reach the server. The card WAS charged — press Finish to save the ticket." } : c));
+        return;
+      }
       /* The fetch failed. It may never have reached the server, or it may have
          been booked and the reply lost — there is no way to tell from here. The
          sale is queued either way, carrying the key it was sent with, and the
          server sorts it out: a sale that did commit is returned as-is instead
          of being rung twice. */
       await bookOffline(method, tenderedCents, key);
+    } finally { setBusy(false); }
+  };
+
+  /* --------------------------------------------------------- the reader -- */
+
+  /**
+   * Put the total on the card reader and wait for the customer.
+   *
+   * Written as one straight-through function rather than a state machine
+   * driven by effects, because that is how it reads at the counter: send it,
+   * watch it, book it. The cashier can cancel at any point and the flag below
+   * is what stops the watching.
+   */
+  const chargeKeyRef = useRef("");
+  const abandonRef = useRef(false);
+
+  const watchCharge = async (paymentIntentId: string) => {
+    /* Three minutes is longer than any customer takes and shorter than a
+       reader left showing a total nobody is paying. */
+    const until = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 1200));
+      if (abandonRef.current) return;
+      let d: { state?: string; message?: string; cardLabel?: string; error?: string } = {};
+      try {
+        const r = await fetch(`/api/admin/terminal/charge?pi=${encodeURIComponent(paymentIntentId)}`);
+        d = await r.json().catch(() => ({}));
+      } catch {
+        /* A dropped poll is not a dropped payment — the reader is talking to
+           Stripe, not to this tablet. Keep asking. */
+        continue;
+      }
+      if (abandonRef.current) return;
+
+      if (d.state === "succeeded") {
+        setCharge((c) => (c ? { ...c, state: "booking", cardLabel: d.cardLabel || "", message: "Approved — saving the ticket." } : c));
+        await book("CARD", 0, { paymentIntentId, cardLabel: d.cardLabel || "" });
+        return;
+      }
+      if (d.state === "failed") {
+        setCharge((c) => (c ? { ...c, state: "failed", message: d.message || "The card was declined." } : c));
+        return;
+      }
+      if (d.state === "canceled") { setCharge(null); return; }
+      if (d.message) setCharge((c) => (c ? { ...c, message: d.message as string } : c));
+    }
+    setCharge((c) => (c ? { ...c, state: "failed", message: "The reader didn't answer. Cancel and try again." } : c));
+  };
+
+  const startCharge = async () => {
+    if (!cart.length) return;
+    abandonRef.current = false;
+    /* One key per attempt, so a tablet that loses its answer and retries asks
+       the reader for the SAME payment rather than a second one. */
+    if (!chargeKeyRef.current) chargeKeyRef.current = newSaleKey();
+    setCharge({ paymentIntentId: "", amountCents: cardTotal, state: "sending", message: "Sending it to the reader…", cardLabel: "" });
+    try {
+      const r = await fetch("/api/admin/terminal/charge", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+          idemKey: chargeKeyRef.current,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setCharge({ paymentIntentId: "", amountCents: cardTotal, state: "failed", message: String(d.error || "Couldn't start that payment."), cardLabel: "" }); return; }
+      setCharge({ paymentIntentId: d.paymentIntentId, amountCents: d.amountCents ?? cardTotal, state: "waiting", message: "Ask them to tap, insert or swipe.", cardLabel: "" });
+      await watchCharge(d.paymentIntentId);
+    } catch {
+      setCharge({ paymentIntentId: "", amountCents: cardTotal, state: "failed", message: "No connection — the card was NOT charged.", cardLabel: "" });
+    }
+  };
+
+  const cancelCharge = async () => {
+    abandonRef.current = true;
+    const pi = charge?.paymentIntentId;
+    setCharge(null);
+    chargeKeyRef.current = "";
+    if (pi) {
+      /* Clear the reader's screen too. A reader still showing a total is the
+         next customer's confusion. */
+      try { await fetch(`/api/admin/terminal/charge?pi=${encodeURIComponent(pi)}`, { method: "DELETE" }); } catch {}
+    }
+  };
+
+  /* ----------------------------------------------------- paper and drawer -- */
+
+  /** Open the till without a sale. Always written down, never blocked. */
+  const popDrawer = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/print", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "drawer" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      setScanErr(r.ok ? "" : String(d.error || "Couldn't open the drawer."));
+    } catch {
+      setScanErr("No connection — the drawer stays shut.");
+    } finally { setBusy(false); }
+  };
+
+  /** Another copy of a receipt, marked as a copy. */
+  const printAgain = async (saleId: string) => {
+    if (!printerReady) { await printReceipt(saleId); return; }
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/print", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reprint", saleId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setScanErr(String(d.error || "Couldn't send that to the printer."));
+    } catch {
+      setScanErr("No connection — couldn't send that to the printer.");
     } finally { setBusy(false); }
   };
 
@@ -790,6 +1010,14 @@ export default function RegisterKiosk() {
         ) : null}
       </div>
       <div className="row wrap g-2">
+        {/* No sale. It pops the till without ringing anything, which is what
+            you need for change and a miskey — and it goes in the log with a
+            name on it every single time. */}
+        {drawer && !closing && printerReady ? (
+          <Button size="sm" variant="ghost" icon="cash" disabled={busy} onClick={() => void popDrawer()}>
+            No sale
+          </Button>
+        ) : null}
         {drawer && !closing ? (
           <Button size="sm" variant="secondary" icon="lock" onClick={() => setClosing(true)}>
             Close drawer
@@ -966,11 +1194,20 @@ export default function RegisterKiosk() {
                   exist yet for an offline ticket. Rather than print something
                   that can't be looked up later, say so. */}
               {receipt.offline ? null : (
-                <Button variant="secondary" size="xl" icon="print" onClick={() => void printReceipt(receipt.id)}>
+                <Button variant="secondary" size="xl" icon="print" disabled={busy} onClick={() => void printAgain(receipt.id)}>
                   Print again
                 </Button>
               )}
             </div>
+            {receipt.cardName ? (
+              <span className="t-xs t-muted">Paid by card — {receipt.cardName}</span>
+            ) : null}
+            {printerReady && !receipt.offline ? (
+              /* The receipt is already on its way out; this line is here so a
+                 cashier waiting a second for paper knows it's coming rather
+                 than pressing print and getting two. */
+              <span className="t-xs t-muted">The receipt is printing itself.</span>
+            ) : null}
             {receipt.offline ? (
               <Note tone="warn">
                 No ticket number and no printed receipt until this syncs. If the customer needs paper, write the
@@ -1217,7 +1454,7 @@ export default function RegisterKiosk() {
       {pay === "NONE" ? (
         <Card title="Ring up" subtitle="Scan, search, or tap a vendor's line.">
           <div className="stack g-4">
-            <Field label="Scan or type a code, then Enter" error={scanErr || undefined}>
+            <Field label="Scan a barcode, or type a code and press Enter" error={scanErr || undefined}>
               {(p) => (
                 <Input
                   {...p}
@@ -1227,8 +1464,17 @@ export default function RegisterKiosk() {
                   autoComplete="off"
                   placeholder="V01-0001"
                   style={{ height: 64, fontSize: "var(--fs-xl)", letterSpacing: "0.04em" }}
-                  onChange={(e) => setScan(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void doScan(); }}
+                  onChange={(e) => onScanChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    /* Enter and Tab both mean "that's the whole code" — which
+                       one you get depends on how the scanner was programmed.
+                       Tab would otherwise move the cursor out of the box and
+                       the next scan would go nowhere, so it is swallowed. */
+                    if (e.key === "Enter" || e.key === "Tab") {
+                      e.preventDefault();
+                      void doScan();
+                    }
+                  }}
                 />
               )}
             </Field>
@@ -1360,18 +1606,72 @@ export default function RegisterKiosk() {
               </span>
             ) : null}
           </div>
-          <Field label="Approval code or last 4" hint="Optional, but it's the only thing tying this ticket to the terminal.">
-            {(p) => (
-              <Input {...p} className="mono" value={cardRef} placeholder="APPR 004571 · 4242" autoComplete="off" onChange={(e) => setCardRef(e.target.value)} />
-            )}
-          </Field>
-          <Note tone="info">Run the card on the terminal first. Nothing is recorded here until you book it.</Note>
-          <div className="row wrap g-2">
-            <Button variant="primary" size="xl" className="grow" icon="check" loading={busy} disabled={busy} onClick={() => void book("CARD")}>
-              Book the sale
-            </Button>
-            <Button variant="ghost" size="xl" disabled={busy} onClick={() => setPay("NONE")}>Cancel</Button>
-          </div>
+          {readerReady ? (
+            charge ? (
+              <>
+                {charge.state === "failed" ? (
+                  <Note tone="error" title="Not paid">{charge.message}</Note>
+                ) : (
+                  <Note tone={charge.state === "booking" ? "success" : "info"} title={
+                    charge.state === "sending" ? "Sending…"
+                      : charge.state === "booking" ? "Approved"
+                      : "On the reader now"
+                  }>
+                    {charge.message}
+                    {charge.cardLabel ? ` (${charge.cardLabel})` : ""}
+                  </Note>
+                )}
+                <div className="row wrap g-2">
+                  {charge.state === "failed" ? (
+                    <>
+                      <Button variant="primary" size="xl" className="grow" icon="card" disabled={busy} onClick={() => void startCharge()}>
+                        Try the card again
+                      </Button>
+                      <Button variant="ghost" size="xl" disabled={busy} onClick={() => { void cancelCharge(); setPay("NONE"); }}>
+                        Cancel
+                      </Button>
+                    </>
+                  ) : charge.state === "succeeded" ? (
+                    /* Paid, but the ticket didn't save. The only button that
+                       matters is the one that tries again. */
+                    <Button variant="primary" size="xl" className="grow" icon="check" loading={busy} disabled={busy}
+                      onClick={() => void book("CARD", 0, { paymentIntentId: charge.paymentIntentId, cardLabel: charge.cardLabel })}>
+                      Finish the sale
+                    </Button>
+                  ) : (
+                    <Button variant="ghost" size="xl" className="grow" disabled={charge.state === "booking"} onClick={() => { void cancelCharge(); setPay("NONE"); }}>
+                      Cancel the payment
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <Note tone="info">The reader will ask for the card. Nothing is charged until they tap.</Note>
+                <div className="row wrap g-2">
+                  <Button variant="primary" size="xl" className="grow" icon="card" loading={busy} disabled={busy} onClick={() => void startCharge()}>
+                    Send {money(cardTotal)} to the reader
+                  </Button>
+                  <Button variant="ghost" size="xl" disabled={busy} onClick={() => setPay("NONE")}>Cancel</Button>
+                </div>
+              </>
+            )
+          ) : (
+            <>
+              <Field label="Approval code or last 4" hint="Optional, but it's the only thing tying this ticket to the terminal.">
+                {(p) => (
+                  <Input {...p} className="mono" value={cardRef} placeholder="APPR 004571 · 4242" autoComplete="off" onChange={(e) => setCardRef(e.target.value)} />
+                )}
+              </Field>
+              <Note tone="info">Run the card on the terminal first. Nothing is recorded here until you book it.</Note>
+              <div className="row wrap g-2">
+                <Button variant="primary" size="xl" className="grow" icon="check" loading={busy} disabled={busy} onClick={() => void book("CARD")}>
+                  Book the sale
+                </Button>
+                <Button variant="ghost" size="xl" disabled={busy} onClick={() => setPay("NONE")}>Cancel</Button>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
     </>

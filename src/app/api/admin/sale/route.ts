@@ -3,7 +3,10 @@ import { db } from "@/lib/db";
 
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
-import { getTaxRates, getCardAdjustPercent } from "@/lib/settings";
+import { getTaxRates, getCardAdjustPercent, getAutoPrint, getReceiptHeader, getReceiptFooter } from "@/lib/settings";
+import { unpackTicket } from "@/lib/ticket";
+import { enqueue } from "@/lib/printqueue";
+import { receiptXml, receiptWithDrawerXml } from "@/lib/epos";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -16,10 +19,12 @@ export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
 
-  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName } = (await req.json()) as {
+  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName, terminalPaymentIntentId } = (await req.json()) as {
     lines: { itemId: string; quantity: number; priceCents?: number }[];
     paymentMethod: string;
     cardName?: string;
+    /** Set when the card was taken on the reader — see the block below. */
+    terminalPaymentIntentId?: string;
     customerContact?: string;
     redeem?: boolean;
     /** What the customer physically handed over. Cash sales only. */
@@ -93,11 +98,50 @@ export async function POST(req: NextRequest) {
     drawer?.employee ||
     String(employeeName || "").trim().slice(0, 60) ||
     "Offline sale";
-  if (!Array.isArray(lines) || !lines.length) return NextResponse.json({ error: "Nothing on the ticket." }, { status: 400 });
   if (!["CASH", "CARD"].includes(paymentMethod)) return NextResponse.json({ error: "Pick a payment method." }, { status: 400 });
 
+  /* ------------------------------------------------- paid on the reader --
+     The card was already taken. The money is gone from the customer's account
+     and the reader has printed nothing — this request is what turns that
+     payment into a ticket.
+
+     Two things are true here that aren't true of any other sale. First, the
+     prices are NOT worked out again: they were worked out when the reader was
+     told what to charge, and re-pricing now could book a ticket for a figure
+     different from the one on the card slip. They come out of the snapshot
+     instead. Second, this must never run twice for the same payment — the
+     BOOKED stamp below is what makes a double-tap harmless. */
+  const terminalPi = String(terminalPaymentIntentId || "").trim();
+  const charge = terminalPi
+    ? await db.terminalCharge.findUnique({ where: { paymentIntentId: terminalPi } })
+    : null;
+
+  if (terminalPi) {
+    if (!charge) return NextResponse.json({ error: "That card payment isn't one of ours." }, { status: 400 });
+    if (charge.saleId) {
+      const won = await db.sale.findUnique({
+        where: { id: charge.saleId },
+        select: { id: true, number: true, employee: true, totalCents: true, createdAt: true },
+      });
+      if (won) return NextResponse.json({ sale: won, duplicate: true });
+    }
+    if (charge.status !== "SUCCEEDED") {
+      return NextResponse.json({ error: "That card payment hasn't gone through — don't book it yet." }, { status: 400 });
+    }
+  }
+
+  const snap = charge ? unpackTicket(charge.snapshot) : null;
+  if (terminalPi && !snap) {
+    return NextResponse.json({ error: "The card went through but the ticket behind it is unreadable. Ring it by hand and refund one of them." }, { status: 500 });
+  }
+
+  /* What is actually being sold: the snapshot when there is one, because that
+     is what was charged for, and whatever the till sent otherwise. */
+  const effLines = snap ? snap.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })) : lines;
+  if (!Array.isArray(effLines) || !effLines.length) return NextResponse.json({ error: "Nothing on the ticket." }, { status: 400 });
+
   const items = await db.item.findMany({
-    where: { id: { in: lines.map((l) => l.itemId) } },
+    where: { id: { in: effLines.map((l) => l.itemId) } },
     include: { vendor: true },
   });
 
@@ -109,7 +153,7 @@ export async function POST(req: NextRequest) {
   }[] = [];
 
   let saleSavingsCents = 0;
-  for (const l of lines) {
+  for (const l of snap ? [] : lines) {
     const item = items.find((i) => i.id === l.itemId);
     if (!item) return NextResponse.json({ error: "An item on the ticket no longer exists." }, { status: 400 });
     const q = Math.max(1, Math.round(l.quantity));
@@ -149,17 +193,31 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  /* The snapshot is the ticket, already priced, already taxed, already paid
+     for. Copying it across rather than recomputing is the whole point of it. */
+  if (snap) {
+    saleLines.push(...snap.lines);
+    subtotal = snap.subtotalCents;
+    saleSavingsCents = snap.saleSavingsCents;
+  }
+
   // dual pricing: posted prices are card prices; cash skips the non-cash adjustment
   const adjustPercent = await getCardAdjustPercent();
-  const cardAdjustCents = paymentMethod === "CARD" && adjustPercent > 0 ? Math.round((subtotal * adjustPercent) / 100) : 0;
+  const cardAdjustCents = snap
+    ? snap.cardAdjustCents
+    : paymentMethod === "CARD" && adjustPercent > 0
+      ? Math.round((subtotal * adjustPercent) / 100)
+      : 0;
 
   /* Food and standard are taxed at different rates, so the card adjustment has
      to be spread across both rather than dumped on one — see lib/tax.ts. */
-  const taxSplit = taxFor(
-    saleLines.map((sl) => ({ amountCents: sl.priceCents * sl.quantity, taxClass: normalizeTaxClass(sl.taxClass) })),
-    rates,
-    cardAdjustCents
-  );
+  const taxSplit = snap
+    ? { taxCents: snap.taxCents, foodTaxCents: snap.foodTaxCents, standardTaxCents: snap.standardTaxCents }
+    : taxFor(
+        saleLines.map((sl) => ({ amountCents: sl.priceCents * sl.quantity, taxClass: normalizeTaxClass(sl.taxClass) })),
+        rates,
+        cardAdjustCents
+      );
   const taxCents = taxSplit.taxCents;
 
   // rewards: find the customer up front so redemption can discount this sale.
@@ -167,12 +225,16 @@ export async function POST(req: NextRequest) {
   // decrement both happen inside the transaction below.
   const customer = customerContact ? await findOrCreateCustomer(customerContact) : null;
   let discountCents = 0;
-  if (redeem) {
+  if (snap) {
+    /* Already decided, already charged. Checking the points again here could
+       only produce a ticket that disagrees with the card slip. */
+    discountCents = snap.discountCents;
+  } else if (redeem) {
     if (!customer) return NextResponse.json({ error: "Enter the customer's email or phone to redeem." }, { status: 400 });
     if (customer.points < REDEEM_POINTS) return NextResponse.json({ error: `Only ${customer.points} points — ${REDEEM_POINTS} needed for $5 off.` }, { status: 400 });
     discountCents = Math.min(REDEEM_CENTS, subtotal + taxCents);
   }
-  const totalCents = subtotal + cardAdjustCents + taxCents - discountCents;
+  const totalCents = snap ? snap.totalCents : subtotal + cardAdjustCents + taxCents - discountCents;
 
   /* Cash tendered, if the register sent it.
      Zero means "not recorded" rather than "they paid nothing" — sales booked
@@ -241,8 +303,13 @@ export async function POST(req: NextRequest) {
       /* Offline sales never fail on stock. The goods left the building hours
          ago; refusing the ticket now would lose the money to keep a count
          tidy. The count is floored at zero instead, and the shortfall shows up
-         as a stock figure to correct rather than a sale that doesn't exist. */
-      if (offline) {
+         as a stock figure to correct rather than a sale that doesn't exist.
+
+         A card already taken on the reader is the same situation for the same
+         reason. If the last jar sold at the other till while the customer was
+         tapping, refusing here would leave a charge with no ticket behind it —
+         a stock count off by one is the smaller problem by a mile. */
+      if (offline || snap) {
         const row = await tx.item.findUnique({ where: { id: itemId }, select: { quantity: true } });
         const left = Math.max(0, (row?.quantity ?? 0) - qty);
         await tx.item.update({ where: { id: itemId }, data: { quantity: left } });
@@ -272,9 +339,13 @@ export async function POST(req: NextRequest) {
         where: { id: customer.id, points: { gte: REDEEM_POINTS } },
         data: { points: { decrement: REDEEM_POINTS } },
       });
-      if (spent.count === 0) {
+      if (spent.count === 0 && !snap) {
         throw new HttpError(400, `Those points were just used — ${REDEEM_POINTS} points aren't available anymore. Ring it up without the reward.`);
       }
+      /* When the card has already been charged the discounted amount, points
+         that vanished in the last few seconds are not a reason to refuse the
+         ticket. The customer paid less; the points went somewhere; the sale
+         stands and the balance is the customer's to query. */
     }
 
     /* Ticket number. Reading the max and adding one is racy — two registers
@@ -365,6 +436,67 @@ export async function POST(req: NextRequest) {
     } else {
       throw err;
     }
+  }
+
+  /* The payment and the ticket are now one thing. Stamped after the sale
+     commits, so a crash mid-transaction leaves a charge that can still be
+     booked rather than one marked done with nothing to show for it. */
+  if (charge) {
+    await db.terminalCharge
+      .update({ where: { id: charge.id }, data: { status: "BOOKED", saleId: sale.id } })
+      .catch(() => null);
+  }
+
+  /* ------------------------------------------------------------- paper --
+     Queued, not printed. Nothing here waits for the printer: the printer
+     collects its own work a moment later (see api/print), which is what lets
+     a receipt survive the tablet locking, the browser closing, or the till
+     being carried across the room between the sale and the paper.
+
+     A cash sale carries the drawer kick in the same job as the receipt, so
+     the drawer opens as the paper starts rather than a beat before or after.
+     Card sales don't open the drawer at all — there is no change to give, and
+     a drawer that opens on every sale is a drawer that stops being counted. */
+  try {
+    if (await getAutoPrint()) {
+      const [header, footer] = await Promise.all([getReceiptHeader(), getReceiptFooter()]);
+      const forPrint = {
+        number: sale.number,
+        createdAt: sale.createdAt,
+        employee: sale.employee,
+        lines: saleLines.map((l) => ({
+          name: l.name,
+          quantity: l.quantity,
+          priceCents: l.priceCents,
+          basePriceCents: l.basePriceCents,
+        })),
+        subtotalCents: subtotal,
+        saleSavingsCents,
+        cardAdjustCents,
+        taxCents,
+        foodTaxCents: taxSplit.foodTaxCents,
+        standardTaxCents: taxSplit.standardTaxCents,
+        discountCents,
+        totalCents,
+        cashTenderedCents: sale.cashTenderedCents,
+        changeCents: sale.changeCents,
+        paymentMethod,
+        cardName: sale.cardName,
+      };
+      const opts = { header, footer };
+      await enqueue({
+        kind: "RECEIPT",
+        label: `Receipt #${sale.number}`,
+        saleId: sale.id,
+        createdBy: clerk,
+        body: paymentMethod === "CASH" ? receiptWithDrawerXml(forPrint, opts) : receiptXml(forPrint, opts),
+      });
+    }
+  } catch (err) {
+    /* A receipt that couldn't be queued must never lose the sale. The money is
+       in the drawer and the ticket is in the books; the paper is the least
+       important thing that just happened. */
+    console.error("receipt queue failed", err);
   }
 
   // one email per vendor involved, after commit

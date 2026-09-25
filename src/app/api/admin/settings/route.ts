@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { denyUnless } from "@/lib/perm";
-import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent } from "@/lib/settings";
+import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey } from "@/lib/settings";
 import { getApprovalThresholdCents, setApprovalThresholdCents, recordAudit } from "@/lib/audit";
 import { getPayoutFee, setPayoutFee } from "@/lib/payouts";
 import { db } from "@/lib/db";
@@ -21,7 +21,12 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 export async function GET() {
   // The register and the kiosk read the tax rates from here on every load.
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee() });
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee(),
+    /* What hardware the till can count on. The register asks on every load so
+       it can offer "put it on the reader" or fall back to typing an approval
+       code, without a second round trip to find out which. */
+    cardReaderReady: !!(await getTerminalReaderId()),
+    printerReady: !!(await getPrinterKey()) });
 }
 
 /** Every change to a market-wide setting goes in the log, with what it was. */
