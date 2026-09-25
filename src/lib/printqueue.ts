@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { readPrintResponse } from "@/lib/epos";
+import { readPrintResponse, troubleText, isFixableByHand } from "@/lib/epos";
 
 /**
  * The pile of paper waiting to come out of the printer.
@@ -163,21 +163,20 @@ export async function complete(
     return { jobId, ok: true };
   }
 
-  /* A failure with a reason usually means paper, cover or drawer — all things
-     somebody fixes in ten seconds. Put it back and let it print when they do,
-     rather than making them find a reprint button. */
-  const dead = job.attempts >= MAX_ATTEMPTS;
+  /* A failure with a reason usually means paper or the cover — things
+     somebody fixes in ten seconds. Those go back on the pile WITHOUT using up
+     one of the tries: before, five quick retries burned through in about
+     fifteen seconds of an empty roll, and the receipt was marked failed and
+     never printed once the paper was changed. Anything else counts. */
+  const fixable = isFixableByHand(code);
+  const dead = !fixable && job.attempts >= MAX_ATTEMPTS;
   await db.printJob.update({
     where: { id: jobId },
     data: {
       status: dead ? "FAILED" : "QUEUED",
       sentAt: null,
-      /* An empty report is not a refusal, it is the printer saying it had
-         nothing to run — which means the device name it was given is not one
-         it has. Saying that plainly saves an afternoon. */
-      error: reported
-        ? describe(code)
-        : "The printer didn't recognise the device name. Check the Device ID on its own Device Admin \u2192 Printer page and set it below.",
+      error: describe(code),
+      ...(fixable && job.attempts > 0 ? { attempts: { decrement: 1 } } : {}),
     },
   });
   return { jobId, ok: false };
@@ -192,22 +191,7 @@ export async function complete(
  * is indexed by.
  */
 export function describe(code: string): string {
-  const c = String(code || "").trim();
-  const known: Record<string, string> = {
-    EPTR_COVER_OPEN: "The printer cover is open — close it and it'll print.",
-    EPTR_REC_EMPTY: "The printer is out of paper.",
-    EPTR_AUTOMATICAL: "The printer stopped with an error — switch it off and on.",
-    EPTR_UNRECOVERABLE: "The printer needs switching off and on.",
-    EPTR_CUTTER: "The cutter is jammed — clear it and switch off and on.",
-    EPTR_MECHANICAL: "The printer is jammed.",
-    SchemaError: "The receipt itself was malformed — this one's on us, not the printer.",
-    DeviceNotFound: "The printer couldn't find itself — check its settings.",
-    PrintSystemError: "The printer reported a system error.",
-    EX_BADPORT: "The printer couldn't reach its own port.",
-    EX_TIMEOUT: "The printer timed out mid-job.",
-  };
-  if (known[c]) return known[c];
-  return c ? `The printer refused the job (${c}).` : "The printer refused the job.";
+  return troubleText(code);
 }
 
 /** Last time the printer asked for work — the "is it on?" answer. */
@@ -234,4 +218,36 @@ export async function peek(): Promise<{ id: string; body: string; label: string 
     select: { id: true, body: true, label: true },
   });
   return j || null;
+}
+
+/** A job handed straight back to the till that asked, to carry to the printer now. */
+export type PrintNow = { job: { id: string; body: string }; host: string; devid: string } | null;
+
+/**
+ * Hand one freshly queued job to the till that is standing in front of the
+ * printer, instead of making it wait for its next poll.
+ *
+ * Only when that till ASKED (printHere) — the kiosk register does, the admin
+ * register tab and the offline sync don't. Before, every sale was marked
+ * handed-over whoever rang it, so a sale from the admin screen or a synced
+ * offline sale sat "in flight" with nobody carrying it, and blocked every
+ * receipt behind it for 25 seconds.
+ *
+ * And only when nothing else is out: the printer takes one job at a time, and
+ * jumping the queue would refuse this one at the socket anyway.
+ */
+export async function handOff(
+  jobId: string,
+  body: string,
+  cfg: { printMode: string; printerHost: string; printerDeviceId: string }
+): Promise<PrintNow> {
+  if (cfg.printMode !== "direct" || !cfg.printerHost) return null;
+  const busy = await db.printJob.count({ where: { status: "SENT" } });
+  if (busy > 0) return null;
+  const got = await db.printJob.updateMany({
+    where: { id: jobId, status: "QUEUED" },
+    data: { status: "SENT", sentAt: new Date(), attempts: 1 },
+  });
+  if (got.count !== 1) return null;
+  return { job: { id: jobId, body }, host: cfg.printerHost, devid: cfg.printerDeviceId };
 }

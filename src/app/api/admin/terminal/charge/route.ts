@@ -31,6 +31,22 @@ export const dynamic = "force-dynamic";
  * reader directly; the till only ever learns "yes", "no", or "still waiting".
  */
 
+/** Put an existing payment back on the reader. Returns a problem to show, or "". */
+async function putOnReader(readerId: string, paymentIntentId: string): Promise<string> {
+  try {
+    await sendToReader(readerId, paymentIntentId);
+    return "";
+  } catch (err) {
+    /* Already showing a payment — this one, since the till only ever has one
+       out. Nothing to do. */
+    if (String((err as { code?: string })?.code || "") === "terminal_reader_busy") return "";
+    const msg = String((err as { message?: string })?.message || "");
+    return /offline|not.*online|unreachable/i.test(msg)
+      ? "The card reader isn't answering. Check it's on and on the market's wifi."
+      : msg || "Couldn't put that on the reader.";
+  }
+}
+
 /** POST { lines, idemKey } — put it on the reader's screen. */
 export async function POST(req: NextRequest) {
   return runRoute("admin/terminal/charge POST", async () => {
@@ -59,19 +75,52 @@ export async function POST(req: NextRequest) {
     }
 
     /* Already asked for, and the till is asking again — a tablet that lost its
-       answer, not a customer buying twice. Hand back the charge that exists. */
+       answer, or "Try the card again" after a decline. Same ticket, same
+       payment: hand back the charge that exists.
+
+       A declined (FAILED) or never-delivered (PENDING) payment is put back on
+       the reader. Before, a retry after a decline asked Stripe for the same
+       payment again, Stripe handed back the one that already existed, and
+       saving it a second time crashed — the retry button could never work.
+       And a payment whose first trip to the reader failed stayed PENDING with
+       nothing on the reader's screen. */
     if (idemKey) {
       const already = await db.terminalCharge.findFirst({
-        where: { snapshot: { contains: `"idemKey":"${idemKey}"` }, status: { in: ["PENDING", "SUCCEEDED"] } },
+        where: { snapshot: { contains: `"idemKey":"${idemKey}"` }, status: { in: ["PENDING", "SUCCEEDED", "FAILED"] } },
         orderBy: { createdAt: "desc" },
       });
       if (already) {
-        return NextResponse.json({
-          ok: true,
-          resumed: true,
-          paymentIntentId: already.paymentIntentId,
-          amountCents: already.amountCents,
-        });
+        let live = already.status === "SUCCEEDED";
+        if (!live) {
+          const pi = await intentState(already.paymentIntentId).catch(() => null);
+          if (pi?.status === "succeeded") {
+            await db.terminalCharge.update({ where: { id: already.id }, data: { status: "SUCCEEDED" } });
+            live = true;
+          } else if (pi && pi.status !== "canceled") {
+            const problem = await putOnReader(already.readerId || readerId, already.paymentIntentId);
+            if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+            if (already.status !== "PENDING") {
+              await db.terminalCharge.update({ where: { id: already.id }, data: { status: "PENDING", failureMessage: "" } });
+            }
+            live = true;
+          } else if (pi) {
+            /* Cancelled at Stripe — that payment can't be used again. Start a
+               fresh one below. */
+            await db.terminalCharge.update({ where: { id: already.id }, data: { status: "CANCELED" } });
+          } else {
+            /* Couldn't reach Stripe to check. Hand back what exists; the
+               till's polling sorts out where it stands. */
+            live = true;
+          }
+        }
+        if (live) {
+          return NextResponse.json({
+            ok: true,
+            resumed: true,
+            paymentIntentId: already.paymentIntentId,
+            amountCents: already.amountCents,
+          });
+        }
       }
     }
 
@@ -130,7 +179,13 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const pi = await createCardPresentIntent(priced.totalCents, idemKey, {
+      /* Stripe remembers an idempotency key for a day and hands back the
+         original payment for it. If an earlier payment on this ticket was
+         cancelled, a fresh one needs a fresh key or Stripe returns the dead one. */
+      const earlier = idemKey
+        ? await db.terminalCharge.count({ where: { snapshot: { contains: `"idemKey":"${idemKey}"` } } })
+        : 0;
+      const pi = await createCardPresentIntent(priced.totalCents, earlier ? `${idemKey}_${earlier}` : idemKey, {
         source: "register",
         employee: who?.name || drawer.employee || "",
         drawerId: drawer.id,
@@ -180,6 +235,45 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   return runRoute("admin/terminal/charge GET", async () => {
     { const denied = await denyUnless("ops"); if (denied) return denied; }
+    /* ?unbooked=1 — cards that were charged but never got a ticket.
+       The tablet was closed, the wifi dropped, or the page was refreshed
+       between "Approved" and the ticket saving. The money is taken either way,
+       and nothing used to bring it back to anybody's attention. The till asks
+       for these and offers a one-tap "Save the ticket". */
+    if (req.nextUrl.searchParams.get("unbooked") === "1") {
+      const rows = await db.terminalCharge.findMany({
+        where: {
+          status: { in: ["SUCCEEDED", "PENDING"] },
+          saleId: "",
+          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        },
+        orderBy: { createdAt: "asc" },
+        take: 10,
+      });
+      const out: { paymentIntentId: string; amountCents: number; employee: string; createdAt: Date; cardLabel: string }[] = [];
+      for (const r of rows) {
+        const age = Date.now() - r.createdAt.getTime();
+        /* Still on the reader, most likely — the till that sent it owns it. */
+        if (r.status === "PENDING" && age < 3 * 60 * 1000) continue;
+        const pi = await intentState(r.paymentIntentId).catch(() => null);
+        if (!pi) continue;
+        if (pi.status === "succeeded") {
+          if (r.status !== "SUCCEEDED") {
+            await db.terminalCharge.update({ where: { id: r.id }, data: { status: "SUCCEEDED" } });
+          }
+          out.push({ paymentIntentId: r.paymentIntentId, amountCents: r.amountCents, employee: r.employee, createdAt: r.createdAt, cardLabel: pi.cardLabel });
+        } else if (pi.status === "canceled") {
+          await db.terminalCharge.update({ where: { id: r.id }, data: { status: "CANCELED" } });
+        } else if (age > 10 * 60 * 1000) {
+          /* Sent, never paid, and long abandoned. Cancel it so it can't be
+             paid by surprise later and stops being checked. */
+          await cancelIntent(r.paymentIntentId);
+          await db.terminalCharge.update({ where: { id: r.id }, data: { status: "CANCELED" } });
+        }
+      }
+      return NextResponse.json({ unbooked: out });
+    }
+
     const piId = req.nextUrl.searchParams.get("pi") || "";
     if (!piId) return NextResponse.json({ error: "Which payment?" }, { status: 400 });
 
@@ -251,12 +345,38 @@ export async function DELETE(req: NextRequest) {
 
     /* Never cancel a payment that went through — that is a refund, and a
        refund is a different button with a different conversation attached. */
-    if (row.status === "SUCCEEDED" || row.status === "BOOKED") {
+    if (row.status === "BOOKED") {
       return NextResponse.json({ error: "That payment already went through — refund it instead." }, { status: 400 });
+    }
+    /* Paid but not booked yet: the till must save the ticket, not cancel. */
+    if (row.status === "SUCCEEDED") {
+      const pi = await intentState(piId).catch(() => null);
+      return NextResponse.json(
+        { error: "That card already went through. Save the ticket.", state: "succeeded", paymentIntentId: piId, cardLabel: pi?.cardLabel || "" },
+        { status: 409 }
+      );
     }
 
     if (row.readerId) await cancelReader(row.readerId);
     await cancelIntent(piId);
+
+    /* THE CUSTOMER MAY HAVE TAPPED AT THE SAME MOMENT. Cancelling a payment
+       that is already approved silently does nothing, and this used to mark
+       it cancelled anyway — the card was charged, the till cleared, and no
+       ticket was ever written. So Stripe is asked where it actually ended up. */
+    const after = await intentState(piId).catch(() => null);
+    if (after?.status === "succeeded") {
+      await db.terminalCharge.update({ where: { id: row.id }, data: { status: "SUCCEEDED" } });
+      return NextResponse.json(
+        {
+          error: "The card went through before the cancel reached the reader. Save the ticket.",
+          state: "succeeded",
+          paymentIntentId: piId,
+          cardLabel: after.cardLabel,
+        },
+        { status: 409 }
+      );
+    }
     await db.terminalCharge.update({ where: { id: row.id }, data: { status: "CANCELED" } });
     return NextResponse.json({ ok: true });
   });

@@ -88,7 +88,15 @@ export async function setReceiptHeader(lines: string[]): Promise<void> {
 }
 
 export async function getReceiptFooter(): Promise<string[]> {
-  return (await str("receiptFooter")).split("\n").map((s) => s.trim()).slice(0, 8);
+  return footerLines(await str("receiptFooter"));
+}
+
+/* Blank lines inside a footer are kept (they're spacing). A footer that is
+   ALL blank — never set — comes back empty, so the receipt prints the default
+   footer ("ALL SALES FINAL") instead of one empty line. */
+function footerLines(raw: string): string[] {
+  const f = raw.split("\n").map((s) => s.trim()).slice(0, 8);
+  return f.some(Boolean) ? f : [];
 }
 
 export async function setReceiptFooter(lines: string[]): Promise<void> {
@@ -333,4 +341,73 @@ export async function setLogoKeys(key1: number, key2: number): Promise<void> {
     Number.isFinite(n) && n >= 0 && n <= 255 ? Math.round(n) : fallback;
   await put("logoKey1", String(ok(key1, 32)));
   await put("logoKey2", String(ok(key2, 32)));
+}
+
+/* ------------------------------------------- everything a sale needs, once --
+   Ringing a sale used to read about fifteen settings one at a time, each its
+   own trip to the database, on the path the cashier is waiting on. This reads
+   them in ONE query. The rules for each value (defaults, ranges) are the same
+   as the single getters above, so the two can't disagree. */
+
+export type TillSettings = {
+  taxRates: { standardPercent: number; foodPercent: number };
+  cardAdjustPercent: number;
+  autoPrint: boolean;
+  header: string[];
+  footer: string[];
+  cols: number;
+  logo: boolean;
+  logoSize: number;
+  logoSource: "image" | "printer";
+  logoKey1: number;
+  logoKey2: number;
+  printMode: "direct" | "collect";
+  printerHost: string;
+  printerDeviceId: string;
+  printerKey: string;
+};
+
+const TILL_KEYS = [
+  "taxRatePercent", "foodTaxRatePercent", "cardAdjustPercent", "autoPrintReceipts",
+  "receiptHeader", "receiptFooter", "receiptColumns", "receiptLogo", "receiptLogoSize",
+  "logoSource", "logoKey1", "logoKey2", "printMode", "printerHost", "printerDeviceId", "printerKey",
+];
+
+export async function getTillSettings(): Promise<TillSettings> {
+  const rows = await db.setting.findMany({ where: { key: { in: TILL_KEYS } } });
+  const m = new Map<string, string>(rows.map((r) => [r.key, r.value] as [string, string]));
+  const s = (k: string, fallback = "") => (m.has(k) ? (m.get(k) as string) : fallback);
+
+  const std = Number(s("taxRatePercent", "NaN"));
+  const standardPercent = Number.isFinite(std) ? std : 9.0;
+  const foodRaw = m.has("foodTaxRatePercent") ? Number(s("foodTaxRatePercent")) : NaN;
+  const foodPercent = Number.isFinite(foodRaw) && foodRaw >= 0 ? foodRaw : standardPercent;
+
+  const adj = m.has("cardAdjustPercent") ? Number(s("cardAdjustPercent")) : 0;
+  const cardAdjustPercent = Number.isFinite(adj) && adj >= 0 && adj <= 4 ? adj : 0;
+
+  const colsN = Math.round(Number(s("receiptColumns", "42")));
+  const sizeN = Math.round(Number(s("receiptLogoSize", "192")));
+  const key = (k: string) => {
+    const n = Math.round(Number(s(k, "32")));
+    return Number.isFinite(n) && n >= 0 && n <= 255 ? n : 32;
+  };
+
+  return {
+    taxRates: { standardPercent, foodPercent },
+    cardAdjustPercent,
+    autoPrint: s("autoPrintReceipts", "1") !== "0",
+    header: s("receiptHeader").split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 6),
+    footer: footerLines(s("receiptFooter")),
+    cols: Number.isFinite(colsN) && colsN >= 24 && colsN <= 96 ? colsN : 42,
+    logo: s("receiptLogo", "1") !== "0",
+    logoSize: [128, 192, 256, 320, 384].includes(sizeN) ? sizeN : 192,
+    logoSource: s("logoSource", "image") === "printer" ? "printer" : "image",
+    logoKey1: key("logoKey1"),
+    logoKey2: key("logoKey2"),
+    printMode: s("printMode", "direct") === "collect" ? "collect" : "direct",
+    printerHost: s("printerHost"),
+    printerDeviceId: s("printerDeviceId", "local_printer") || "local_printer",
+    printerKey: s("printerKey"),
+  };
 }

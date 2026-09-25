@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { soapEnvelope, directPrintUrl } from "@/lib/epos";
+import { soapEnvelope, directPrintUrl, readPrintResponse, troubleText } from "@/lib/epos";
 
 /**
  * The till, carrying receipts the last few feet to the printer.
@@ -73,23 +73,35 @@ function holdsLease(me: string): boolean {
  * The job is still in the queue the whole time. If this fails, the report
  * says so and it prints on the next poll exactly as it always did.
  */
+/* How long to wait for the printer before calling it unreachable. The job
+   itself tells the printer to give up after 10 seconds, so a healthy printer
+   always answers inside this. Without a limit, a printer that went quiet
+   mid-request left the fetch hanging for a minute or more, and this tab
+   printed nothing else the whole time. */
+const PRINTER_WAIT_MS = 15_000;
+
 export async function deliverJob(
   job: { id: string; body: string },
   host: string,
   devid?: string
-): Promise<boolean> {
+): Promise<{ ok: boolean; trouble: string }> {
   let raw = "";
   let ok = false;
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), PRINTER_WAIT_MS);
   try {
     const res = await fetch(directPrintUrl(host, devid), {
       method: "POST",
       headers: { "Content-Type": "text/xml; charset=utf-8" },
       body: soapEnvelope(job.body),
+      signal: stop.signal,
     });
     raw = await res.text().catch(() => "");
     ok = /success\s*=\s*"(true|1)"/i.test(raw);
   } catch {
     ok = false;
+  } finally {
+    clearTimeout(timer);
   }
   try {
     await fetch("/api/admin/print/done", {
@@ -100,7 +112,14 @@ export async function deliverJob(
   } catch {
     /* The sweep puts it back in a few seconds. */
   }
-  return ok;
+  /* The printer's own reason when it gave one (paper out, cover open), so the
+     badge on the till says what to fix instead of a guess. */
+  const trouble = ok
+    ? ""
+    : raw.includes("<response")
+      ? troubleText(readPrintResponse(raw).code)
+      : troubleText("EX_BADPORT");
+  return { ok, trouble };
 }
 
 export type PrintAgentStatus = {
@@ -148,8 +167,8 @@ export function PrintAgent({
       if (d.mode !== "direct" || !d.host || !d.jobs?.length) return;
 
       for (const job of d.jobs) {
-        const ok = await deliverJob(job, d.host, d.devid);
-        setTrouble(ok ? "" : "The printer didn't take a receipt — check paper, the cover, and that it's on.");
+        const { ok, trouble } = await deliverJob(job, d.host, d.devid);
+        setTrouble(trouble);
         if (ok) setPrinted((n) => n + 1);
       }
     } catch {

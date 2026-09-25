@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
-import { enqueue, lastSeen, requeueStale } from "@/lib/printqueue";
+import { enqueue, lastSeen, requeueStale, handOff } from "@/lib/printqueue";
 import { drawerXml, testXml, plainTestXml, receiptXml, nvLogoJobs, nvLogoProofXml } from "@/lib/epos";
 import { drawerForRequest } from "@/lib/drawer";
 import {
@@ -38,6 +38,7 @@ import {
   setLogoSource,
   getLogoKeys,
   setLogoKeys,
+  getTillSettings,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -126,7 +127,15 @@ export async function POST(req: NextRequest) {
     const actor = await currentAuditActor();
     const who = actor.actorName || "";
 
-    if (!(await getPrinterKey())) {
+    /* Set up enough to print. This used to check only the Server Direct Print
+       key, which direct printing doesn't use — so No sale, Print again and the
+       test page could refuse on a printer that was printing sales fine. */
+    const cfg = await getTillSettings();
+    const configured = cfg.printMode === "direct" ? !!cfg.printerHost : !!cfg.printerKey;
+    /* The till that pressed the button is in front of the printer: hand the
+       job straight back so the drawer pops now, not on the next poll. */
+    const printHere = body.printHere === true;
+    if (!configured) {
       return NextResponse.json(
         { error: "The printer hasn't been set up yet — do that in Settings first." },
         { status: 400 }
@@ -139,7 +148,8 @@ export async function POST(req: NextRequest) {
          not blocked — making change and fixing a miskey are real — but nobody
          gets to do it anonymously. */
       const { drawer } = await drawerForRequest();
-      const id = await enqueue({ kind: "DRAWER", label: "No sale — drawer opened", body: drawerXml(), createdBy: who });
+      const kick = drawerXml();
+      const id = await enqueue({ kind: "DRAWER", label: "No sale — drawer opened", body: kick, createdBy: who });
       await recordAudit(
         {
           action: "NO_SALE",
@@ -150,7 +160,7 @@ export async function POST(req: NextRequest) {
         },
         req
       );
-      return NextResponse.json({ ok: true, jobId: id });
+      return NextResponse.json({ ok: true, jobId: id, printNow: printHere ? await handOff(id, kick, cfg) : null });
     }
 
     if (action === "test") {
@@ -248,12 +258,7 @@ export async function POST(req: NextRequest) {
         getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
         getLogoSource(), getLogoKeys(),
       ]);
-      const id = await enqueue({
-        kind: "REPRINT",
-        label: `Reprint #${sale.number}`,
-        saleId: sale.id,
-        createdBy: who,
-        body: receiptXml(
+      const copy = receiptXml(
           {
             number: sale.number,
             createdAt: sale.createdAt,
@@ -279,9 +284,15 @@ export async function POST(req: NextRequest) {
           /* Marked, always. An unmarked second copy of a receipt is the thing
              a returned-goods scam is built on. */
           { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2, reprint: true }
-        ),
+        );
+      const id = await enqueue({
+        kind: "REPRINT",
+        label: `Reprint #${sale.number}`,
+        saleId: sale.id,
+        createdBy: who,
+        body: copy,
       });
-      return NextResponse.json({ ok: true, jobId: id });
+      return NextResponse.json({ ok: true, jobId: id, printNow: printHere ? await handOff(id, copy, cfg) : null });
     }
 
     return NextResponse.json({ error: "Don't know how to do that." }, { status: 400 });

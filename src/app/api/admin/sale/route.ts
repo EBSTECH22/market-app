@@ -3,10 +3,11 @@ import { db } from "@/lib/db";
 
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
-import { getPrintMode, getPrinterHost, getPrinterDeviceId, getTaxRates, getCardAdjustPercent, getAutoPrint, getReceiptHeader, getReceiptFooter, getReceiptColumns, getReceiptLogo, getLogoSize, getLogoSource, getLogoKeys } from "@/lib/settings";
+import { getTillSettings } from "@/lib/settings";
 import { unpackTicket } from "@/lib/ticket";
-import { enqueue } from "@/lib/printqueue";
-import { receiptXml, receiptWithDrawerXml } from "@/lib/epos";
+import type { PrintNow } from "@/lib/printqueue";
+import { printForSale } from "@/lib/receiptjob";
+import { afterResponse } from "@/lib/after";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
 
-  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName, terminalPaymentIntentId } = (await req.json()) as {
+  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName, terminalPaymentIntentId, printHere } = (await req.json()) as {
     lines: { itemId: string; quantity: number; priceCents?: number }[];
     paymentMethod: string;
     cardName?: string;
@@ -35,6 +36,8 @@ export async function POST(req: NextRequest) {
     offline?: boolean;
     soldAtIso?: string;
     employeeName?: string;
+    /** Set by the kiosk register: "I'm in front of the printer, hand me the receipt." */
+    printHere?: boolean;
   };
 
   /* ------------------------------------------- idempotency and offline --
@@ -145,7 +148,9 @@ export async function POST(req: NextRequest) {
     include: { vendor: true },
   });
 
-  const rates = await getTaxRates();
+  /* Every setting this sale needs, in one query rather than fifteen. */
+  const cfg = await getTillSettings();
+  const rates = cfg.taxRates;
   let subtotal = 0;
   const saleLines: {
     itemId: string; vendorId: string; name: string; basePriceCents: number; priceCents: number; quantity: number;
@@ -202,7 +207,7 @@ export async function POST(req: NextRequest) {
   }
 
   // dual pricing: posted prices are card prices; cash skips the non-cash adjustment
-  const adjustPercent = await getCardAdjustPercent();
+  const adjustPercent = cfg.cardAdjustPercent;
   const cardAdjustCents = snap
     ? snap.cardAdjustCents
     : paymentMethod === "CARD" && adjustPercent > 0
@@ -376,21 +381,33 @@ export async function POST(req: NextRequest) {
         changeCents: tendered > 0 ? Math.max(0, tendered - totalCents) : 0,
         foodTaxCents: taxSplit.foodTaxCents,
         standardTaxCents: taxSplit.standardTaxCents,
-        lines: { create: saleLines },
       },
     });
-    for (const sl of saleLines) {
-      // Stock was already claimed at the top of this transaction — decrementing
-      // again here would double-count it.
-      await tx.ledgerEntry.create({
-        data: {
-          vendorId: sl.vendorId,
-          type: "SALE",
-          amountCents: sl.vendorNetCents,
-          note: `${sl.quantity}× ${sl.name}`,
-        },
-      });
-    }
+    /* Lines and vendor ledger entries in one insert each, not one per line —
+       a ten-line ticket was twenty round trips to the database here. Stock was
+       already claimed at the top of this transaction; nothing here touches it. */
+    await tx.saleLine.createMany({
+      data: saleLines.map((sl) => ({
+        saleId: created.id,
+        itemId: sl.itemId,
+        vendorId: sl.vendorId,
+        name: sl.name,
+        basePriceCents: sl.basePriceCents,
+        priceCents: sl.priceCents,
+        quantity: sl.quantity,
+        commissionCents: sl.commissionCents,
+        vendorNetCents: sl.vendorNetCents,
+        taxClass: sl.taxClass,
+      })),
+    });
+    await tx.ledgerEntry.createMany({
+      data: saleLines.map((sl) => ({
+        vendorId: sl.vendorId,
+        type: "SALE",
+        amountCents: sl.vendorNetCents,
+        note: `${sl.quantity}× ${sl.name}`,
+      })),
+    });
     /* The old code clamped negative quantities here, which quietly hid an
        oversell after the fact. The conditional claim above makes a negative
        count unreachable, so there is nothing left to paper over. */
@@ -448,103 +465,43 @@ export async function POST(req: NextRequest) {
   }
 
   /* ------------------------------------------------------------- paper --
-     Queued, not printed. Nothing here waits for the printer: the printer
-     collects its own work a moment later (see api/print), which is what lets
-     a receipt survive the tablet locking, the browser closing, or the till
-     being carried across the room between the sale and the paper.
+     Queued in the database first, so a receipt survives the tablet locking or
+     the till being carried off. When the kiosk asked (printHere) the job comes
+     straight back in this reply and the till puts it on the printer at once.
 
-     A cash sale carries the drawer kick in the same job as the receipt, so
-     the drawer opens as the paper starts rather than a beat before or after.
-     Card sales don't open the drawer at all — there is no change to give, and
-     a drawer that opens on every sale is a drawer that stops being counted. */
-  /* Filled in below when the till that rang this sale can print it itself.
-     Travels back with the sale so the paper starts moving straight away. */
-  let printNow: { job: { id: string; body: string }; host: string; devid: string } | null = null;
-
-  try {
-    if (await getAutoPrint()) {
-      const [header, footer, cols, logo, logoSize, logoSource, keys, printMode, printerHost, devid] =
-        await Promise.all([
-          getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
-          getLogoSource(), getLogoKeys(),
-          /* Fetched here with the rest rather than after the receipt is built:
-             each of these is a round trip to the database, and on the hot path
-             of a sale they are worth having for free. */
-          getPrintMode(), getPrinterHost(), getPrinterDeviceId(),
-        ]);
-      const forPrint = {
-        number: sale.number,
-        createdAt: sale.createdAt,
-        employee: sale.employee,
-        lines: saleLines.map((l) => {
-          const v = items.find((i) => i.vendorId === l.vendorId)?.vendor;
-          return {
-            name: l.name,
-            quantity: l.quantity,
-            priceCents: l.priceCents,
-            basePriceCents: l.basePriceCents,
-            vendorName: v?.businessName || "",
-            vendorCode: v?.code || "",
-          };
-        }),
-        subtotalCents: subtotal,
-        saleSavingsCents,
-        cardAdjustCents,
-        taxCents,
-        foodTaxCents: taxSplit.foodTaxCents,
-        standardTaxCents: taxSplit.standardTaxCents,
-        discountCents,
-        totalCents,
-        cashTenderedCents: sale.cashTenderedCents,
-        changeCents: sale.changeCents,
-        paymentMethod,
-        cardName: sale.cardName,
-      };
-      const opts = { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2 };
-      const receiptBodyXml =
-        paymentMethod === "CASH" ? receiptWithDrawerXml(forPrint, opts) : receiptXml(forPrint, opts);
-      const jobId = await enqueue({
-        kind: "RECEIPT",
-        label: `Receipt #${sale.number}`,
-        saleId: sale.id,
-        createdBy: clerk,
-        body: receiptBodyXml,
-      });
-
-      /* HAND THE RECEIPT BACK WITH THE SALE.
-         
-         The queue works, but it costs four or five seconds: the till has to
-         wait for its next poll, ask the server for work, and only then send
-         anything to the printer. On a cash sale that is four or five seconds
-         of the cashier standing in front of a closed drawer with the
-         customer's note in their hand, which is not a till.
-         
-         So the receipt goes back in the same reply as the sale and the till
-         puts it on the printer immediately. It is marked as handed over
-         first, exactly as the poll would have marked it, so nothing else
-         picks it up in the meantime — and if the till can't reach the
-         printer, its report puts the job back and the poll prints it late,
-         which is the behaviour this has always had. */
-      if (printMode === "direct" && printerHost) {
-        const claimed = await db.printJob.updateMany({
-          where: { id: jobId, status: "QUEUED" },
-          data: { status: "SENT", sentAt: new Date(), attempts: 1 },
-        });
-        if (claimed.count === 1) {
-          printNow = {
-            job: { id: jobId, body: receiptBodyXml },
-            host: printerHost,
-            devid,
-          };
-        }
-      }
-    }
-  } catch (err) {
-    /* A receipt that couldn't be queued must never lose the sale. The money is
-       in the drawer and the ticket is in the books; the paper is the least
-       important thing that just happened. */
-    console.error("receipt queue failed", err);
-  }
+     An offline sale being synced never asks: the customer left long ago, and
+     the receipt just joins the queue in order. See lib/receiptjob. */
+  const printNow: PrintNow = await printForSale(
+    {
+      number: sale.number,
+      createdAt: sale.createdAt,
+      employee: sale.employee,
+      lines: saleLines.map((l) => {
+        const v = items.find((i) => i.vendorId === l.vendorId)?.vendor;
+        return {
+          name: l.name,
+          quantity: l.quantity,
+          priceCents: l.priceCents,
+          basePriceCents: l.basePriceCents,
+          vendorName: v?.businessName || "",
+          vendorCode: v?.code || "",
+        };
+      }),
+      subtotalCents: subtotal,
+      saleSavingsCents,
+      cardAdjustCents,
+      taxCents,
+      foodTaxCents: taxSplit.foodTaxCents,
+      standardTaxCents: taxSplit.standardTaxCents,
+      discountCents,
+      totalCents,
+      cashTenderedCents: sale.cashTenderedCents,
+      changeCents: sale.changeCents,
+      paymentMethod,
+      cardName: sale.cardName,
+    },
+    { saleId: sale.id, clerk, printHere: printHere === true && !offline, cfg }
+  );
 
   /* NOTHING THAT ISN'T THE SALE HOLDS UP THE REPLY.
 
@@ -593,14 +550,9 @@ export async function POST(req: NextRequest) {
       ).catch(() => {})
     );
   }
-  /* A moment, not a minute: long enough that a quick push is done before the
-     function is torn down, short enough that nobody at the counter notices. */
-  if (tellPeople.length) {
-    await Promise.race([
-      Promise.allSettled(tellPeople),
-      new Promise((r) => setTimeout(r, 1200)),
-    ]);
-  }
+  /* The reply goes back now; the pushes and the email finish on their own.
+     (Before, the till waited up to 1.2 seconds for them on every sale.) */
+  if (tellPeople.length) await afterResponse(Promise.allSettled(tellPeople));
 
   return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate: rates.standardPercent, foodTaxCents: taxSplit.foodTaxCents, standardTaxCents: taxSplit.standardTaxCents, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" }, printNow });
   });

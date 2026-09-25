@@ -7,6 +7,9 @@ import { pushToVendor } from "@/lib/push";
 import type { CartLine } from "@/lib/selfcheckout";
 import { normalizeTaxClass } from "@/lib/tax";
 import { denyUnless } from "@/lib/perm";
+import { getTillSettings } from "@/lib/settings";
+import { printForSale } from "@/lib/receiptjob";
+import { afterResponse } from "@/lib/after";
 
 export const dynamic = "force-dynamic";
 
@@ -182,11 +185,41 @@ export async function POST(req: NextRequest) {
     if (shortOf) return NextResponse.json({ error: shortOf }, { status: 409 });
     if (number === 0) return NextResponse.json({ error: "That ticket has already been rung." }, { status: 409 });
 
-    try {
-      await pushToVendor(vendor.id, "Your booth sale went through", `#${number} — ${(cart.totalCents / 100).toFixed(2)} cash at the register`);
-    } catch { /* the sale stands whether or not the alert lands */ }
+    /* Receipt and drawer. A booth ticket is a cash sale like any other, and it
+       used to print nothing and leave the drawer shut — the cashier had to
+       press No sale to make change, which also logged a no-sale that wasn't. */
+    const changeCents = tendered > 0 ? Math.max(0, tendered - cart.totalCents) : 0;
+    const printNow = await printForSale(
+      {
+        number,
+        createdAt: new Date(),
+        employee: `VENDOR: ${vendor.businessName}`,
+        lines: lines.map((l) => ({
+          name: l.name,
+          quantity: l.quantity,
+          priceCents: l.priceCents,
+          vendorName: vendor.businessName,
+          vendorCode: vendor.code,
+        })),
+        subtotalCents: cart.subtotalCents,
+        taxCents: cart.taxCents,
+        foodTaxCents: cart.foodTaxCents,
+        standardTaxCents: cart.standardTaxCents,
+        totalCents: cart.totalCents,
+        cashTenderedCents: tendered,
+        changeCents,
+        paymentMethod: "CASH",
+      },
+      { saleId, clerk: `VENDOR: ${vendor.businessName}`, printHere: body.printHere === true, cfg: await getTillSettings() }
+    );
+
+    /* The vendor's alert finishes after the reply rather than before it. */
+    await afterResponse(
+      pushToVendor(vendor.id, "Your booth sale went through", `#${number} — ${(cart.totalCents / 100).toFixed(2)} cash at the register`)
+    );
 
     return NextResponse.json({
+      printNow,
       ok: true,
       sale: {
         id: saleId, number,

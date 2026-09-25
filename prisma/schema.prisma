@@ -189,6 +189,7 @@ model Sale {
 
   @@index([soldByVendorId])
   @@index([idemKey])
+  @@index([createdAt])
 }
 
 model Employee {

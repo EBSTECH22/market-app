@@ -666,3 +666,36 @@ export const soapEnvelope = (eposPrintDoc: string): string =>
 export const directPrintUrl = (host: string, devid = "local_printer"): string =>
   `https://${String(host).trim().replace(/^https?:\/\//, "").replace(/\/+$/, "")}` +
   `/cgi-bin/epos/service.cgi?devid=${encodeURIComponent(devid || "local_printer")}&timeout=10000`;
+
+/**
+ * The printer's error code, in words a person at the till can act on.
+ *
+ * Lives here rather than in the queue because the till needs it too, to put
+ * the actual reason on the "Printer" badge instead of a generic guess.
+ */
+export function troubleText(code: string): string {
+  const c = String(code || "").trim();
+  const known: Record<string, string> = {
+    EPTR_COVER_OPEN: "The printer cover is open — close it and it'll print.",
+    EPTR_REC_EMPTY: "The printer is out of paper — load a roll and it'll print.",
+    EPTR_AUTOMATICAL: "The printer stopped with an error — switch it off and on.",
+    EPTR_UNRECOVERABLE: "The printer needs switching off and on.",
+    EPTR_CUTTER: "The cutter is jammed — clear it and switch off and on.",
+    EPTR_MECHANICAL: "The printer is jammed.",
+    SchemaError: "The receipt itself was malformed — this one's on us, not the printer.",
+    DeviceNotFound: "The printer couldn't find itself — check its settings.",
+    PrintSystemError: "The printer reported a system error.",
+    EX_BADPORT: "Can't reach the printer — check it's on and the tablet is on the shop wifi.",
+    EX_TIMEOUT: "The printer timed out mid-job.",
+  };
+  if (known[c]) return known[c];
+  return c ? `The printer refused the job (${c}).` : "The printer refused the job.";
+}
+
+/**
+ * Errors a person fixes in ten seconds. A job refused for one of these is
+ * retried until it prints rather than counted towards giving up — a roll
+ * change must never be the reason a receipt is lost.
+ */
+export const isFixableByHand = (code: string): boolean =>
+  ["EPTR_COVER_OPEN", "EPTR_REC_EMPTY"].includes(String(code || "").trim());
