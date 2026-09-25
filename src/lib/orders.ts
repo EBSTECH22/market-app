@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { getTaxRates } from "@/lib/settings";
+import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { tagCents, cashCents } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 
@@ -38,6 +39,9 @@ export type PricedLine = {
   quantity: number;
   taxClass: string;
   shipCents: number;
+  /** The vendor's own price for one — what commission and their share are
+      worked out on. `priceCents` is the tag price the customer pays. */
+  vendorCents: number;
 };
 
 export type PricedCart = {
@@ -86,6 +90,13 @@ export async function priceCart(
   });
 
   const lines: PricedLine[] = [];
+  /* Online is always card, so the customer pays the TAG price (vendor's price
+     plus the card percentage, per item) — the same number as the shelf label.
+     The vendor is still paid on their own price. */
+  const cardPercent = await getCardAdjustPercent();
+  /* ...on top of the cash price, which is the vendor's price plus the market
+     service fee. */
+  const feePercent = await getMarketFeePercent();
   for (const w of wanted) {
     const item = items.find((i) => i.id === w.itemId);
     if (!item) return { ok: false, error: "Something in your basket isn't available online any more." };
@@ -110,7 +121,8 @@ export async function priceCart(
       itemId: item.id,
       name: item.name,
       unitLabel: item.unitLabel,
-      priceCents: effectivePriceCents(item),
+      priceCents: tagCents(cashCents(effectivePriceCents(item), feePercent), cardPercent),
+      vendorCents: effectivePriceCents(item),
       quantity: qty,
       taxClass: normalizeTaxClass(item.taxClass),
       shipCents: Math.max(0, item.shipCents || 0),
@@ -133,7 +145,10 @@ export async function priceCart(
     rates
   );
 
-  const commissionCents = Math.round((subtotalCents * (vendor.commissionPercent || 0)) / 100);
+  /* Commission and the vendor's share come off the VENDOR'S price. The card
+     percentage on top stays with the market to cover the card fees. */
+  const vendorSubtotalCents = lines.reduce((n, l) => n + l.vendorCents * l.quantity, 0);
+  const commissionCents = Math.round((vendorSubtotalCents * (vendor.commissionPercent || 0)) / 100);
 
   return {
     ok: true,
@@ -150,7 +165,7 @@ export async function priceCart(
       totalCents: subtotalCents + shippingCents + split.taxCents,
       commissionCents,
       // Postage passes through untouched; commission comes off the goods only.
-      vendorNetCents: subtotalCents - commissionCents + shippingCents,
+      vendorNetCents: vendorSubtotalCents - commissionCents + shippingCents,
     },
   };
 }

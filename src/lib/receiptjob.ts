@@ -32,6 +32,7 @@ export async function printForSale(
       const opts = {
         header: cfg.header, footer: cfg.footer, cols: cfg.cols, logo: cfg.logo, logoSize: cfg.logoSize,
         logoSource: cfg.logoSource, logoKey1: cfg.logoKey1, logoKey2: cfg.logoKey2,
+        cardPercent: cfg.cardAdjustPercent,
       };
       body = cash ? receiptWithDrawerXml(sale, opts) : receiptXml(sale, opts);
     } else if (cash) {

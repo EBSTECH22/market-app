@@ -1513,6 +1513,7 @@ export default function AdminPage() {
   const [rentPerSqft, setRentPerSqft] = useState(6);
   const [scPaused, setScPaused] = useState(false);
   const [cardAdj, setCardAdj] = useState("0");
+  const [marketFee, setMarketFee] = useState("0");
   /* Dollars as typed, not cents — the field is a text input and rounding it on
      every keystroke fights the person using it. */
   const [approvalDollars, setApprovalDollars] = useState("50");
@@ -1649,7 +1650,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); if (sd.payoutFee) { setFeePercentInput(String(sd.payoutFee.percent)); setFeeFixedInput((sd.payoutFee.fixedCents / 100).toFixed(2)); } }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (sd.marketFeePercent !== undefined) setMarketFee(String(sd.marketFeePercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); if (sd.payoutFee) { setFeePercentInput(String(sd.payoutFee.percent)); setFeeFixedInput((sd.payoutFee.fixedCents / 100).toFixed(2)); } }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -10077,13 +10078,63 @@ export default function AdminPage() {
 
               <Card
                 className="mb-4"
-                title="Card adjustment"
-                subtitle="Dual pricing — posted prices are card prices, cash customers pay less."
+                title="Market service fee"
+                subtitle="Built into every customer price instead of charging vendors commission."
               >
                 <div className="stack g-3">
                   <Field
-                    label="Non-cash adjustment (%)"
-                    hint="Added automatically at the register when a sale is paid by card. 0 turns it off, and the card networks cap it at 4%."
+                    label="Service fee (%)"
+                    hint="Added to every vendor's price to make the customer's cash price — on labels, the register, self-checkout and the online shop. Vendors are paid their full price (less any commission still set on them). The card percentage below goes on top of this. Changing it means vendors must reprint their labels."
+                  >
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number"
+                        min="0"
+                        max="25"
+                        step="0.5"
+                        inputMode="decimal"
+                        value={marketFee}
+                        onChange={(e) => setMarketFee(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Note tone="info">
+                    Example: a vendor&rsquo;s $10.00 item is ${(Math.round(1000 * (1 + (Number(marketFee) || 0) / 100)) / 100).toFixed(2)} cash
+                    {Number(cardAdj) > 0 ? ` and $${(Math.round(Math.round(1000 * (1 + (Number(marketFee) || 0) / 100)) * (1 + Number(cardAdj) / 100)) / 100).toFixed(2)} on card (the tag)` : ""}. The vendor gets $10.00.
+                  </Note>
+                  <div className="row wrap g-2">
+                    <Button
+                      icon="check"
+                      loading={pending === "marketfee"}
+                      onClick={async () => {
+                        setPending("marketfee");
+                        try {
+                          const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ marketFeePercent: Number(marketFee) }) });
+                          if (!r.ok) {
+                            const d = await r.json().catch(() => ({}));
+                            toast.error("Couldn't save the service fee", String(d.error || ""));
+                            return;
+                          }
+                          toast.success("Service fee saved", `Customer prices are now vendor price + ${Number(marketFee) || 0}%. Vendors need to reprint labels.`);
+                        } finally { setPending(""); }
+                      }}
+                    >
+                      Save service fee
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+
+              <Card
+                className="mb-4"
+                title="Card price (cash discount)"
+                subtitle="Tag prices are the cash price plus this percentage. Card pays the tag; cash gets it back."
+              >
+                <div className="stack g-3">
+                  <Field
+                    label="Card price percentage (%)"
+                    hint="Added to every cash price (vendor price + service fee) on labels, the register and the online shop, per item. Cash sales take it off at the register. Vendors are paid on their own price. 0 turns it off. Changing it means vendors must reprint their labels."
                   >
                     {(p) => (
                       <Input
@@ -10114,7 +10165,7 @@ export default function AdminPage() {
                           toast.success(
                             "Card adjustment saved",
                             Number(cardAdj) > 0
-                              ? `Card sales add ${cardAdj}% at the register.`
+                              ? `Tags are now cash price + ${cardAdj}%. Cash gets ${cardAdj}% off. Vendors need to reprint labels.`
                               : "Card and cash prices are the same again."
                           );
                         } finally { setPending(""); }

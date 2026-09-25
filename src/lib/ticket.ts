@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
-import { getTaxRates, getCardAdjustPercent } from "@/lib/settings";
+import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
+import { cardUpliftCents, cashCents, lineShares } from "@/lib/cardprice";
 
 /**
  * What a ticket costs, worked out once and written down.
@@ -72,31 +73,37 @@ export async function priceTicket(
   const priced: PricedLine[] = [];
   let subtotalCents = 0;
   let saleSavingsCents = 0;
+  /* Customer cash price = vendor price + market service fee; see lib/cardprice. */
+  const fee = await getMarketFeePercent();
 
   for (const l of lines) {
     const item = items.find((i) => i.id === l.itemId);
     if (!item) throw new TicketError("An item on the ticket no longer exists.");
     const quantity = Math.max(1, Math.round(l.quantity));
-    const unit = effectivePriceCents(item);
-    saleSavingsCents += Math.max(0, item.priceCents - unit) * quantity;
+    const vendorUnit = effectivePriceCents(item);
+    const unit = cashCents(vendorUnit, fee);
+    const cashBase = cashCents(item.priceCents, fee);
+    saleSavingsCents += Math.max(0, cashBase - unit) * quantity;
     const gross = unit * quantity;
-    const commissionCents = Math.round((gross * item.vendor.commissionPercent) / 100);
+    const shares = lineShares(vendorUnit, unit, quantity, item.vendor.commissionPercent);
     subtotalCents += gross;
     priced.push({
       itemId: item.id,
       vendorId: item.vendorId,
       name: item.name,
-      basePriceCents: item.priceCents,
+      basePriceCents: cashBase,
       priceCents: unit,
       quantity,
-      commissionCents,
-      vendorNetCents: gross - commissionCents,
+      commissionCents: shares.commissionCents,
+      vendorNetCents: shares.vendorNetCents,
       taxClass: normalizeTaxClass(item.taxClass),
     });
   }
 
   const adjustPercent = await getCardAdjustPercent();
-  const cardAdjustCents = opts.card && adjustPercent > 0 ? Math.round((subtotalCents * adjustPercent) / 100) : 0;
+  /* Card pays the tag prices: each item's price plus the card percentage,
+     rounded per item (lib/cardprice), so the charge equals the tags. */
+  const cardAdjustCents = opts.card ? cardUpliftCents(priced, adjustPercent) : 0;
 
   const split = taxFor(
     priced.map((p) => ({ amountCents: p.priceCents * p.quantity, taxClass: normalizeTaxClass(p.taxClass) })),

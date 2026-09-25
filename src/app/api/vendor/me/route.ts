@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { centralMonthStart } from "@/lib/time";
 import { payBlockFor } from "@/lib/spacehold";
+import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -35,5 +36,9 @@ export async function GET() {
       }
     : null;
 
-  return NextResponse.json({ vendor, items, ledger, balance, monthSales, monthNet, hold });
+  /* The card percentage, so labels and the portal can show the TAG price
+     (the vendor's price plus this) next to the price the vendor set. */
+  const cardPercent = await getCardAdjustPercent();
+  const feePercent = await getMarketFeePercent();
+  return NextResponse.json({ vendor, items, ledger, balance, monthSales, monthNet, hold, cardPercent, feePercent });
 }

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
+import { tagCents, cashCents } from "@/lib/cardprice";
+import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
@@ -35,10 +37,12 @@ export async function GET() {
     const code = idToCode.get(lg.vendorId);
     if (code) logoByCode[code] = lg.id;
   }
+  const pct = await getCardAdjustPercent();
+  const fee = await getMarketFeePercent();
   return NextResponse.json({
     vendors: vendors.map((v) => ({
       ...v,
-      items: items.filter((i) => i.vendor.code === v.code).map((i) => ({ name: i.name, quantity: i.quantity, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)) })),
+      items: items.filter((i) => i.vendor.code === v.code).map((i) => ({ name: i.name, quantity: i.quantity, priceCents: tagCents(cashCents(effectivePriceCents(i), fee), pct), basePriceCents: tagCents(cashCents(i.priceCents, fee), pct), salePercent: Math.max(0, Math.min(90, i.salePercent || 0)) })),
       rating: ratings[v.code] || null,
       logoId: logoByCode[v.code] || null,
     })),

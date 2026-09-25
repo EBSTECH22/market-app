@@ -1,3 +1,4 @@
+import { vendorGrossCents } from "@/lib/cardprice";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
@@ -41,10 +42,11 @@ export async function GET() {
 
     /* Lines joined to their sale so voided tickets can be excluded, and so the
        timestamp is the sale's rather than the line's. */
+    const commissionPct = (await db.vendor.findUnique({ where: { id: vendorId }, select: { commissionPercent: true } }))?.commissionPercent || 0;
     const lines = await db.saleLine.findMany({
       where: { vendorId, sale: { status: { not: "VOIDED" } } },
       select: {
-        id: true, saleId: true, itemId: true, quantity: true, priceCents: true,
+        id: true, saleId: true, itemId: true, quantity: true, priceCents: true, vendorNetCents: true,
         sale: { select: { createdAt: true } },
       },
     });
@@ -84,7 +86,9 @@ export async function GET() {
       // Net of anything that came back on this exact line.
       const units = Math.max(0, l.quantity - (refundedByLine.get(l.id) || 0));
       if (units === 0) continue;
-      const revenue = l.priceCents * units;
+      /* At the vendor's own price, not the customer's (which includes the
+         market service fee): vendorNet grossed back up by their rate. */
+      const revenue = l.quantity > 0 ? Math.round((vendorGrossCents(l.vendorNetCents, commissionPct) / l.quantity) * units) : 0;
 
       const agg = byItem.get(l.itemId) ?? { units: 0, revenue: 0, last: null };
       agg.units += units;

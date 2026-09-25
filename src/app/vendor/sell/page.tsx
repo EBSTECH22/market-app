@@ -8,6 +8,7 @@ import {
 } from "@/components/ui";
 import { money, plural } from "@/lib/format";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
+import { tagCents, cardUpliftCents } from "@/lib/cardprice";
 
 /**
  * A vendor ringing up their own goods, on their own phone, at their own booth.
@@ -51,12 +52,18 @@ export default function VendorSellPage() {
   const [paid, setPaid] = useState(false);
 
 
+  /* Items arrive at the vendor's own (cash) price. The TAG price is that plus
+     the card percentage, per item — what the label says and what card pays. */
+  const [cardPercent, setCardPercent] = useState(0);
+  const tag = (c: number) => tagCents(c, cardPercent);
   const subtotal = lines.reduce((n, l) => n + l.item.priceCents * l.qty, 0);
+  const cardAdjust = cardUpliftCents(lines.map((l) => ({ priceCents: l.item.priceCents, quantity: l.qty })), cardPercent);
   const taxRates = { standardPercent: taxRate, foodPercent: foodTaxRate };
   const taxLines = lines.map((l) => ({ amountCents: l.item.priceCents * l.qty, taxClass: normalizeTaxClass(l.item.taxClass) }));
   const taxCents = taxFor(taxLines, taxRates).taxCents;
   const shownTaxRate = displayRate(taxLines, taxRates);
   const total = subtotal + taxCents;
+  const cardTotal = subtotal + cardAdjust + taxFor(taxLines, taxRates, cardAdjust).taxCents;
   const count = lines.reduce((n, l) => n + l.qty, 0);
 
   const load = useCallback(async () => {
@@ -69,6 +76,7 @@ export default function VendorSellPage() {
       setTaxRate(Number(d.taxRatePercent) || 0);
       setFoodTaxRate(typeof d.foodTaxRatePercent === "number" ? d.foodTaxRatePercent : (Number(d.taxRatePercent) || 0));
       setCardReady(!!d.cardReady);
+      setCardPercent(Number(d.cardPercent) || 0);
       setVendorName(String(d.vendor?.businessName || ""));
       setErr("");
     } catch {
@@ -305,7 +313,7 @@ export default function VendorSellPage() {
                     {i.salePercent > 0 ? <Badge tone="danger">−{i.salePercent}%</Badge> : null}
                     {out ? <Badge tone="warn">Sold out</Badge> : null}
                     {inCart ? <Badge tone="solid">{inCart}</Badge> : null}
-                    <span className="num">{money(i.priceCents)}</span>
+                    <span className="num">{money(tag(i.priceCents))}</span>
                   </Button>
                 );
               })}
@@ -329,17 +337,20 @@ export default function VendorSellPage() {
                   <span className="num" style={{ minWidth: 26, textAlign: "center" }}>{l.qty}</span>
                   <Button size="sm" variant="secondary" aria-label={`One more ${l.item.name}`} onClick={() => setQty(l.item.id, l.qty + 1)}>+</Button>
                 </div>
-                <span className="num" style={{ minWidth: 68, textAlign: "right" }}>{money(l.item.priceCents * l.qty)}</span>
+                <span className="num" style={{ minWidth: 68, textAlign: "right" }}>{money(tag(l.item.priceCents) * l.qty)}</span>
               </div>
             ))}
 
             <div className="stack g-1" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--sp-3)" }}>
-              <div className="t-body">Subtotal <b className="num">{money(subtotal)}</b></div>
-              <div className="t-body">Tax{shownTaxRate === null ? " (mixed)" : ` (${shownTaxRate}%)`} <b className="num">{money(taxCents)}</b></div>
+              <div className="t-body">Subtotal <b className="num">{money(subtotal + cardAdjust)}</b></div>
+              <div className="t-body">Tax{shownTaxRate === null ? " (mixed)" : ` (${shownTaxRate}%)`} <b className="num">{money(taxFor(taxLines, taxRates, cardAdjust).taxCents)}</b></div>
               <div className="row g-3 mt-1" style={{ alignItems: "baseline" }}>
-                <span className="t-label">Total</span>
-                <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>
+                <span className="t-label">Card total</span>
+                <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(cardTotal)}</span>
               </div>
+              {cardAdjust > 0 ? (
+                <div className="t-body">Cash total ({cardPercent}% off) <b className="num">{money(total)}</b></div>
+              ) : null}
             </div>
 
             <Field label="Email them a receipt" hint="Optional.">
@@ -354,14 +365,14 @@ export default function VendorSellPage() {
                 loading={busy} disabled={busy || !cardReady}
                 onClick={() => void start("CARD")}
               >
-                Card — show them a QR
+                Card {money(cardTotal)} — show them a QR
               </Button>
               <Button
                 variant="dark" size="xl" block icon="cash"
                 loading={busy} disabled={busy}
                 onClick={() => void start("CASH")}
               >
-                Cash — get a register code
+                Cash {money(total)} — get a register code
               </Button>
               {!cardReady ? (
                 <Note tone="warn">Card payments aren&rsquo;t switched on right now — use the cash code.</Note>

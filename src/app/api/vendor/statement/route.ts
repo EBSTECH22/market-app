@@ -1,3 +1,4 @@
+import { vendorGrossCents } from "@/lib/cardprice";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
@@ -92,14 +93,17 @@ export async function GET(req: NextRequest) {
     // Commission is the difference between shelf price and what was credited.
     const lines = await db.saleLine.findMany({
       where: { vendorId, sale: { status: { not: "VOIDED" }, createdAt: { gte: from, lte: to } } },
-      select: { commissionCents: true, quantity: true, priceCents: true, sale: { select: { createdAt: true } } },
+      select: { commissionCents: true, quantity: true, priceCents: true, vendorNetCents: true, sale: { select: { createdAt: true } } },
     });
     let grossShelfCents = 0;
     for (const l of lines) {
       if (!l.sale) continue;
       if (centralYearMonth(l.sale.createdAt).year !== year) continue;
-      commissionCents += l.commissionCents;
-      grossShelfCents += l.priceCents * l.quantity;
+      /* At the vendor's own prices: the market service fee is neither their
+         sales nor a charge to them. See vendorGrossCents. */
+      const g = vendorGrossCents(l.vendorNetCents, vendor.commissionPercent || 0);
+      commissionCents += g - l.vendorNetCents;
+      grossShelfCents += g;
     }
 
     const totals = {

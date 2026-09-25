@@ -44,6 +44,13 @@ export async function getTaxRates(): Promise<{ standardPercent: number; foodPerc
   return { standardPercent, foodPercent: food === null ? standardPercent : food };
 }
 
+/** The market service fee: added to every vendor price to make the customer's cash price. */
+export async function getMarketFeePercent(): Promise<number> {
+  const row = await db.setting.findUnique({ where: { key: "marketFeePercent" } });
+  const v = row ? Number(row.value) : 0;
+  return Number.isFinite(v) && v >= 0 && v <= 25 ? v : 0;
+}
+
 export async function getCardAdjustPercent(): Promise<number> {
   const row = await db.setting.findUnique({ where: { key: "cardAdjustPercent" } });
   const v = row ? Number(row.value) : 0;
@@ -352,6 +359,7 @@ export async function setLogoKeys(key1: number, key2: number): Promise<void> {
 export type TillSettings = {
   taxRates: { standardPercent: number; foodPercent: number };
   cardAdjustPercent: number;
+  marketFeePercent: number;
   autoPrint: boolean;
   header: string[];
   footer: string[];
@@ -368,7 +376,7 @@ export type TillSettings = {
 };
 
 const TILL_KEYS = [
-  "taxRatePercent", "foodTaxRatePercent", "cardAdjustPercent", "autoPrintReceipts",
+  "taxRatePercent", "foodTaxRatePercent", "cardAdjustPercent", "marketFeePercent", "autoPrintReceipts",
   "receiptHeader", "receiptFooter", "receiptColumns", "receiptLogo", "receiptLogoSize",
   "logoSource", "logoKey1", "logoKey2", "printMode", "printerHost", "printerDeviceId", "printerKey",
 ];
@@ -386,6 +394,9 @@ export async function getTillSettings(): Promise<TillSettings> {
   const adj = m.has("cardAdjustPercent") ? Number(s("cardAdjustPercent")) : 0;
   const cardAdjustPercent = Number.isFinite(adj) && adj >= 0 && adj <= 4 ? adj : 0;
 
+  const fee = m.has("marketFeePercent") ? Number(s("marketFeePercent")) : 0;
+  const marketFeePercent = Number.isFinite(fee) && fee >= 0 && fee <= 25 ? fee : 0;
+
   const colsN = Math.round(Number(s("receiptColumns", "42")));
   const sizeN = Math.round(Number(s("receiptLogoSize", "192")));
   const key = (k: string) => {
@@ -396,6 +407,7 @@ export async function getTillSettings(): Promise<TillSettings> {
   return {
     taxRates: { standardPercent, foodPercent },
     cardAdjustPercent,
+    marketFeePercent,
     autoPrint: s("autoPrintReceipts", "1") !== "0",
     header: s("receiptHeader").split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 6),
     footer: footerLines(s("receiptFooter")),

@@ -13,6 +13,7 @@
  */
 
 import { RECEIPT_LOGOS, DEFAULT_LOGO_SIZE } from "@/lib/receiptlogo";
+import { tagCents } from "@/lib/cardprice";
 
 export const EPOS_NS = "http://www.epson-pos.com/schemas/2011/03/epos-print";
 
@@ -354,6 +355,9 @@ export type ReceiptOptions = {
   /** Printed across the top so nobody hands a duplicate over as the original. */
   reprint?: boolean;
   timeZone?: string;
+  /** The card percentage: item lines print at TAG prices (lib/cardprice), and a
+      cash sale shows the difference as CASH DISCOUNT. 0 prints plain prices. */
+  cardPercent?: number;
 };
 
 const DEFAULT_HEADER = ["COMMUNITY HARVEST", "510 N Main St", "Noble, Oklahoma"];
@@ -408,24 +412,30 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
   );
   out.push(t(rule("-", cols)));
 
+  /* Every line prints at its TAG price — the number on the shelf label. A
+     cash sale then takes the card percentage back as CASH DISCOUNT; a card
+     sale pays the tags as they are. */
+  const pct = Math.max(0, Number(opts.cardPercent) || 0);
+  const tag = (c: number) => tagCents(c, pct);
   let itemCount = 0;
+  let tagBase = 0;
+  let tagPaid = 0;
   for (const l of sale.lines) {
     const qty = Math.max(1, Math.round(l.quantity));
     itemCount += qty;
-    const unit = l.basePriceCents || l.priceCents;
-    for (const row of wrapLine(`${qty}x ${l.name}`, money(unit * qty), cols)) out.push(t(row));
+    const base = l.basePriceCents || l.priceCents;
+    tagBase += tag(base) * qty;
+    tagPaid += tag(l.priceCents) * qty;
+    for (const row of wrapLine(`${qty}x ${l.name}`, money(tag(base) * qty), cols)) out.push(t(row));
 
     /* A discounted item shows what it normally is, indented under itself —
-       people want to see the saving on the paper, not just in the total. It
-       goes directly under the price it corrects, before the vendor line, so
-       the two money figures sit together. */
+       people want to see the saving on the paper, not just in the total. */
     if (l.basePriceCents && l.priceCents !== l.basePriceCents) {
-      out.push(line(`   sale price`, money(l.priceCents * qty)));
+      out.push(line(`   sale price`, money(tag(l.priceCents) * qty)));
     }
 
     /* Whose stall it came from. The code is what the market files everything
-       by, so it goes on the paper next to the name — a customer asking about a
-       jar of jam in six weeks is holding the only record either of you has. */
+       by, so it goes on the paper next to the name. */
     if (l.vendorName || l.vendorCode) {
       const who = [l.vendorName, l.vendorCode ? `(${l.vendorCode})` : ""].filter(Boolean).join(" ");
       out.push(t(`   ${who}`.slice(0, cols)));
@@ -434,9 +444,18 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
 
   out.push(t(rule("-", cols)));
   out.push(line(`ITEMS SOLD`, String(itemCount)));
-  out.push(line("SUBTOTAL", money(sale.subtotalCents + (sale.saleSavingsCents || 0))));
-  if (sale.saleSavingsCents) out.push(line("SALE SAVINGS", `-${money(sale.saleSavingsCents)}`));
-  if (sale.cardAdjustCents) out.push(line("NON-CASH ADJ", money(sale.cardAdjustCents)));
+  out.push(line("SUBTOTAL", money(tagBase)));
+  if (tagBase > tagPaid) out.push(line("SALE SAVINGS", `-${money(tagBase - tagPaid)}`));
+  if (sale.paymentMethod === "CASH") {
+    const cashOff = tagPaid - sale.subtotalCents;
+    if (cashOff > 0) out.push(line("CASH DISCOUNT", `-${money(cashOff)}`));
+  } else {
+    /* Card pays the tags. Anything left over is an older ticket, or one rung
+       at a different percentage, and is shown rather than hidden so the paper
+       still adds up. */
+    const rest = sale.subtotalCents + (sale.cardAdjustCents || 0) - tagPaid;
+    if (rest !== 0) out.push(line("NON-CASH ADJ", money(rest)));
+  }
 
   if (sale.foodTaxCents && sale.standardTaxCents) {
     out.push(line("TAX (GENERAL)", money(sale.standardTaxCents)));

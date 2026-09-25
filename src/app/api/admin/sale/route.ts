@@ -8,6 +8,7 @@ import { unpackTicket } from "@/lib/ticket";
 import type { PrintNow } from "@/lib/printqueue";
 import { printForSale } from "@/lib/receiptjob";
 import { afterResponse } from "@/lib/after";
+import { cardUpliftCents, tagCents, cashCents, lineShares } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -172,26 +173,36 @@ export async function POST(req: NextRequest) {
        for an amount nobody ever handed over, and the drawer would never
        reconcile. The sent price is used, sanity-bounded — a garbled figure gets
        today's price rather than being taken on faith. */
+    /* PRICES: the vendor's price is what they're paid on. The customer's CASH
+       price is that plus the market service fee (lib/cardprice); card adds the
+       card percentage on top of the cash price. Lines carry the cash price;
+       the fee is booked as the market's share of each line. */
+    const fee = cfg.marketFeePercent;
+    const vendorNow = effectivePriceCents(item);
+    const cashBase = cashCents(item.priceCents, fee);
     const sentPrice = Math.round(Number(l.priceCents));
     const useSent =
-      offline && Number.isFinite(sentPrice) && sentPrice >= 0 && sentPrice <= Math.max(100_00, item.priceCents * 3);
-    const unit = useSent ? sentPrice : effectivePriceCents(item);
+      offline && Number.isFinite(sentPrice) && sentPrice >= 0 && sentPrice <= Math.max(100_00, cashBase * 3);
+    const unit = useSent ? sentPrice : cashCents(vendorNow, fee);
+    /* An offline sale rung before a price change keeps the price it was rung
+       at; the vendor's share can't be more than the customer paid. */
+    const vendorUnit = Math.min(vendorNow, unit);
 
     // Never negative: an item whose price DROPPED after an offline sale would
     // otherwise book as "savings" of minus something.
-    saleSavingsCents += Math.max(0, item.priceCents - unit) * q;
+    saleSavingsCents += Math.max(0, cashBase - unit) * q;
     const gross = unit * q;
-    const commission = Math.round((gross * item.vendor.commissionPercent) / 100);
+    const shares = lineShares(vendorUnit, unit, q, item.vendor.commissionPercent);
     subtotal += gross;
     saleLines.push({
       itemId: item.id,
       vendorId: item.vendorId,
       name: item.name,
-      basePriceCents: item.priceCents,
+      basePriceCents: cashBase,
       priceCents: unit,
       quantity: q,
-      commissionCents: commission,
-      vendorNetCents: gross - commission,
+      commissionCents: shares.commissionCents,
+      vendorNetCents: shares.vendorNetCents,
       // Snapshotted here, not looked up at report time: reclassifying an item
       // next month must not change the tax on a ticket already filed.
       taxClass: normalizeTaxClass(item.taxClass),
@@ -206,12 +217,15 @@ export async function POST(req: NextRequest) {
     saleSavingsCents = snap.saleSavingsCents;
   }
 
-  // dual pricing: posted prices are card prices; cash skips the non-cash adjustment
+  /* Cash discount pricing: the TAG price is the vendor's price plus the card
+     percentage, rounded per item. Card pays the tags; cash pays the vendor's
+     price. Stored as the difference (cardAdjustCents) so the vendor's share,
+     commission and every report stay on the vendor's price. See lib/cardprice. */
   const adjustPercent = cfg.cardAdjustPercent;
   const cardAdjustCents = snap
     ? snap.cardAdjustCents
-    : paymentMethod === "CARD" && adjustPercent > 0
-      ? Math.round((subtotal * adjustPercent) / 100)
+    : paymentMethod === "CARD"
+      ? cardUpliftCents(saleLines, adjustPercent)
       : 0;
 
   /* Food and standard are taxed at different rates, so the card adjustment has
@@ -527,6 +541,9 @@ export async function POST(req: NextRequest) {
     customerPoints = fresh?.points ?? null;
   }
 
+  /* A unit price as this customer paid it: the tag on card, the vendor's price on cash. */
+  const paid = (cents: number) => (paymentMethod === "CARD" ? tagCents(cents, adjustPercent) : cents);
+
   const tellPeople: Promise<unknown>[] = [];
   for (const [vendorId, vLines] of byVendor) {
     const vendor = items.find((i) => i.vendorId === vendorId)?.vendor;
@@ -544,9 +561,16 @@ export async function POST(req: NextRequest) {
   }
   if (customer?.email) {
     tellPeople.push(
+      /* The email shows what was actually paid per item — the tag on card,
+         the vendor's price on cash — so its lines add up to its total. */
       sendCustomerReceiptEmail(customer.email, sale.number,
-        saleLines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.basePriceCents || l.priceCents })),
-        subtotal, taxCents, discountCents, totalCents, customerPoints ?? 0, saleSavingsCents
+        saleLines.map((l) => ({
+          name: l.name,
+          quantity: l.quantity,
+          priceCents: paid(l.basePriceCents || l.priceCents),
+        })),
+        subtotal + cardAdjustCents, taxCents, discountCents, totalCents, customerPoints ?? 0,
+        saleLines.reduce((n, l) => n + (paid(l.basePriceCents || l.priceCents) - paid(l.priceCents)) * l.quantity, 0)
       ).catch(() => {})
     );
   }

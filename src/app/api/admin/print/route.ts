@@ -283,7 +283,7 @@ export async function POST(req: NextRequest) {
           },
           /* Marked, always. An unmarked second copy of a receipt is the thing
              a returned-goods scam is built on. */
-          { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2, reprint: true }
+          { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2, reprint: true, cardPercent: cfg.cardAdjustPercent }
         );
       const id = await enqueue({
         kind: "REPRINT",

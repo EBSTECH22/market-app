@@ -5,8 +5,9 @@ import { stripe } from "@/lib/stripe";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute } from "@/lib/handler";
 import { randomBytes, randomInt } from "crypto";
-import type { CartLine } from "@/lib/selfcheckout";
-import { getTaxRates } from "@/lib/settings";
+import { priceCardCart, type CartLine } from "@/lib/selfcheckout";
+import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { cashCents } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
 export const dynamic = "force-dynamic";
@@ -86,16 +87,23 @@ export async function GET(req: NextRequest) {
       orderBy: { name: "asc" },
     });
     const rates = await getTaxRates();
+    /* Items go out at the customer's CASH price (vendor's price + the market
+       service fee); the page adds the card percentage for the tag. */
+    const fee = await getMarketFeePercent();
 
     return NextResponse.json({
       vendor: { businessName: vendor.businessName, code: vendor.code },
       taxRatePercent: rates.standardPercent,
       foodTaxRatePercent: rates.foodPercent,
+      /* Items come back at the vendor's own (cash) price; the page adds this
+         percentage per item to show the tag price and the card total. */
+      cardPercent: await getCardAdjustPercent(),
       cardReady: !!stripe,
       items: items.map((i) => ({
         id: i.id, sku: i.sku, name: i.name,
-        priceCents: effectivePriceCents(i),
-        basePriceCents: i.priceCents,
+        priceCents: cashCents(effectivePriceCents(i), fee),
+        basePriceCents: cashCents(i.priceCents, fee),
+        vendorPriceCents: effectivePriceCents(i),
         salePercent: Math.max(0, Math.min(90, i.salePercent || 0)),
         quantity: i.quantity,
         taxClass: normalizeTaxClass(i.taxClass),
@@ -127,6 +135,7 @@ export async function POST(req: NextRequest) {
     }
 
     const lines: CartLine[] = [];
+    const fee = await getMarketFeePercent();
     for (const rl of reqLines) {
       const qty = Math.max(1, Math.min(99, Math.round(Number(rl.qty) || 1)));
       const item = await db.item.findUnique({ where: { id: String(rl.itemId || "") } });
@@ -142,7 +151,7 @@ export async function POST(req: NextRequest) {
       }
       lines.push({
         itemId: item.id, sku: item.sku, name: item.name,
-        priceCents: effectivePriceCents(item), quantity: qty,
+        priceCents: cashCents(effectivePriceCents(item), fee), vendorCents: effectivePriceCents(item), quantity: qty,
         vendorId: item.vendorId, vendorName: vendor.businessName,
         taxClass: normalizeTaxClass(item.taxClass),
       });
@@ -179,12 +188,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Card payments aren't set up — take cash at the register instead." }, { status: 500 });
     }
 
+    /* Card pays the tag prices (vendor's price + the card percentage, per
+       item). The cart keeps the vendor's prices; see priceCardCart. */
+    const card = priceCardCart(lines, rates, await getCardAdjustPercent());
     const token = randomBytes(16).toString("hex");
     const cart = await db.selfCart.create({
       data: {
-        token, linesJson: JSON.stringify(lines), subtotalCents, taxCents, totalCents, email,
+        token, linesJson: JSON.stringify(lines),
+        subtotalCents, taxCents: card.split.taxCents, totalCents: card.totalCents, email,
         soldByVendorId: vendorId,
-        foodTaxCents: split.foodTaxCents, standardTaxCents: split.standardTaxCents,
+        foodTaxCents: card.split.foodTaxCents, standardTaxCents: card.split.standardTaxCents,
       },
     });
 
@@ -192,12 +205,9 @@ export async function POST(req: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [
-        ...lines.map((l) => ({
-          price_data: { currency: "usd", product_data: { name: `${l.name} — ${l.vendorName}`.slice(0, 120) }, unit_amount: l.priceCents },
-          quantity: l.quantity,
-        })),
-        ...(taxCents > 0
-          ? [{ price_data: { currency: "usd", product_data: { name: "Sales tax" }, unit_amount: taxCents }, quantity: 1 }]
+        ...card.stripeLines,
+        ...(card.split.taxCents > 0
+          ? [{ price_data: { currency: "usd", product_data: { name: "Sales tax" }, unit_amount: card.split.taxCents }, quantity: 1 }]
           : []),
       ],
       // Same metadata key self-checkout uses, so the existing Stripe webhook
@@ -209,6 +219,6 @@ export async function POST(req: NextRequest) {
     });
     await db.selfCart.update({ where: { id: cart.id }, data: { stripeSessionId: session.id } });
 
-    return NextResponse.json({ mode: "CARD", url: session.url, cartId: cart.id, totalCents, taxCents, subtotalCents });
+    return NextResponse.json({ mode: "CARD", url: session.url, cartId: cart.id, totalCents: card.totalCents, taxCents: card.split.taxCents, subtotalCents: subtotalCents + card.cardAdjustCents });
   });
 }

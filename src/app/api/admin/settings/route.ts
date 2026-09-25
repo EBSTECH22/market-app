@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { denyUnless } from "@/lib/perm";
-import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey, getPrinterHost, getPrintMode } from "@/lib/settings";
+import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getMarketFeePercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey, getPrinterHost, getPrintMode } from "@/lib/settings";
 import { getApprovalThresholdCents, setApprovalThresholdCents, recordAudit } from "@/lib/audit";
 import { getPayoutFee, setPayoutFee } from "@/lib/payouts";
 import { db } from "@/lib/db";
@@ -21,7 +21,7 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 export async function GET() {
   // The register and the kiosk read the tax rates from here on every load.
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee(),
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), marketFeePercent: await getMarketFeePercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee(),
     /* What hardware the till can count on. The register asks on every load so
        it can offer "put it on the reader" or fall back to typing an approval
        code, without a second round trip to find out which. */
@@ -109,6 +109,15 @@ export async function POST(req: NextRequest) {
     await db.setting.upsert({ where: { key: "cardAdjustPercent" }, create: { key: "cardAdjustPercent", value: String(v) }, update: { value: String(v) } });
     await auditSetting(req, "cardAdjustPercent", before, v, `Card adjustment set to ${v}% (was ${before}%)`);
     return NextResponse.json({ ok: true, cardAdjustPercent: v });
+  }
+
+  if (body.marketFeePercent !== undefined) {
+    const v = Number(body.marketFeePercent);
+    if (!Number.isFinite(v) || v < 0 || v > 25) return NextResponse.json({ error: "The service fee must be between 0 and 25%." }, { status: 400 });
+    const before = await getMarketFeePercent();
+    await db.setting.upsert({ where: { key: "marketFeePercent" }, create: { key: "marketFeePercent", value: String(v) }, update: { value: String(v) } });
+    await auditSetting(req, "marketFeePercent", before, v, `Market service fee set to ${v}% (was ${before}%)`);
+    return NextResponse.json({ ok: true, marketFeePercent: v });
   }
 
   if (body.selfCheckoutPaused !== undefined) {

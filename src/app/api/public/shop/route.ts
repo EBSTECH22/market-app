@@ -3,9 +3,10 @@ import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
 import { stripe } from "@/lib/stripe";
 import { randomBytes } from "crypto";
-import type { CartLine } from "@/lib/selfcheckout";
+import { priceCardCart, type CartLine } from "@/lib/selfcheckout";
+import { tagCents, cashCents } from "@/lib/cardprice";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
-import { getTaxRates } from "@/lib/settings";
+import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
 export const dynamic = "force-dynamic";
@@ -28,10 +29,13 @@ export async function GET() {
     orderBy: { name: "asc" },
   });
   const rates = await getTaxRates();
+  /* Self-checkout is card-only, so shoppers see and pay the TAG price. */
+  const pct = await getCardAdjustPercent();
+  const fee = await getMarketFeePercent();
   return NextResponse.json({
     taxRatePercent: rates.standardPercent,
     foodTaxRatePercent: rates.foodPercent,
-    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: effectivePriceCents(i), basePriceCents: i.priceCents, salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, taxClass: normalizeTaxClass(i.taxClass), vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
+    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: tagCents(cashCents(effectivePriceCents(i), fee), pct), basePriceCents: tagCents(cashCents(i.priceCents, fee), pct), salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, taxClass: normalizeTaxClass(i.taxClass), vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
   });
 }
 
@@ -51,7 +55,9 @@ export async function POST(req: NextRequest) {
     }
     if (!item.vendor.allowSelfCheckout) return NextResponse.json({ error: `${item.vendor.businessName} items go through the register — take this one up front. 😊` }, { status: 400 });
     if (item.quantity <= 0) return NextResponse.json({ error: `${item.name} shows sold out — grab a staff member if you're holding one.` }, { status: 400 });
-    return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), basePriceCents: item.priceCents, salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, taxClass: normalizeTaxClass(item.taxClass), vendorName: item.vendor.businessName } });
+    const pct = await getCardAdjustPercent();
+    const fee = await getMarketFeePercent();
+    return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: tagCents(cashCents(effectivePriceCents(item), fee), pct), basePriceCents: tagCents(cashCents(item.priceCents, fee), pct), salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, taxClass: normalizeTaxClass(item.taxClass), vendorName: item.vendor.businessName } });
   }
 
   if (b.action === "checkout") {
@@ -62,6 +68,7 @@ export async function POST(req: NextRequest) {
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return NextResponse.json({ error: "That email doesn't look right — fix it or leave it blank." }, { status: 400 });
 
     const lines: CartLine[] = [];
+    const fee = await getMarketFeePercent();
     for (const rl of reqLines) {
       const sku = String(rl.sku || "").trim().toUpperCase();
       const qty = Math.max(1, Math.min(99, Math.round(Number(rl.qty) || 1)));
@@ -70,17 +77,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `${sku} isn't available for self-checkout — remove it or pay at the register.` }, { status: 400 });
       }
       if (item.quantity < qty) return NextResponse.json({ error: `Only ${item.quantity} of ${item.name} left in the system — adjust your quantity.` }, { status: 400 });
-      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName, taxClass: normalizeTaxClass(item.taxClass) });
+      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: cashCents(effectivePriceCents(item), fee), vendorCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName, taxClass: normalizeTaxClass(item.taxClass) });
     }
 
-    const rates = await getTaxRates();
-    const subtotalCents = lines.reduce((n, l) => n + l.priceCents * l.quantity, 0);
-    const split = taxFor(
-      lines.map((l) => ({ amountCents: l.priceCents * l.quantity, taxClass: normalizeTaxClass(l.taxClass) })),
-      rates
-    );
+    /* Card pays the tag prices; the cart keeps the vendors' own prices. */
+    const priced = priceCardCart(lines, await getTaxRates(), await getCardAdjustPercent());
+    const { subtotalCents, split, totalCents, stripeLines } = priced;
     const taxCents = split.taxCents;
-    const totalCents = subtotalCents + taxCents;
 
     const token = randomBytes(16).toString("hex");
     const cart = await db.selfCart.create({
@@ -94,10 +97,7 @@ export async function POST(req: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [
-        ...lines.map((l) => ({
-          price_data: { currency: "usd", product_data: { name: `${l.name} — ${l.vendorName}`.slice(0, 120) }, unit_amount: l.priceCents },
-          quantity: l.quantity,
-        })),
+        ...stripeLines,
         { price_data: { currency: "usd", product_data: { name: "Sales tax" }, unit_amount: taxCents }, quantity: 1 },
       ],
       metadata: { app: "community-harvest-market", selfCartId: cart.id },

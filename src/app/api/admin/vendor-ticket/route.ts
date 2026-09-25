@@ -10,6 +10,7 @@ import { denyUnless } from "@/lib/perm";
 import { getTillSettings } from "@/lib/settings";
 import { printForSale } from "@/lib/receiptjob";
 import { afterResponse } from "@/lib/after";
+import { lineShares } from "@/lib/cardprice";
 
 export const dynamic = "force-dynamic";
 
@@ -136,11 +137,12 @@ export async function POST(req: NextRequest) {
       number = Math.max(1000, (last._max.number || 999) + 1);
 
       const saleLines = lines.map((l) => {
-        const commissionCents = Math.round((l.priceCents * l.quantity * (vendor.commissionPercent || 0)) / 100);
+        /* Vendor paid on their own price; the service fee is the market's. */
+        const shares = lineShares(l.vendorCents ?? l.priceCents, l.priceCents, l.quantity, vendor.commissionPercent || 0);
         return {
           itemId: l.itemId, vendorId: l.vendorId, name: l.name,
           priceCents: l.priceCents, quantity: l.quantity,
-          commissionCents, vendorNetCents: l.priceCents * l.quantity - commissionCents,
+          commissionCents: shares.commissionCents, vendorNetCents: shares.vendorNetCents,
           taxClass: normalizeTaxClass(l.taxClass),
         };
       });

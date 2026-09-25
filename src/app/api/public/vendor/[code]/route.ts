@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
+import { tagCents, cashCents } from "@/lib/cardprice";
+import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
@@ -87,6 +89,8 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
       )
     : new Set<string>();
 
+  const pct = await getCardAdjustPercent();
+  const fee = await getMarketFeePercent();
   const shaped = items.map((i) => ({
     id: i.id,
     /* Two different things, kept apart on purpose:
@@ -105,8 +109,9 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
     category: i.category,
     quantity: i.quantity,
     inStock: i.quantity > 0,
-    priceCents: effectivePriceCents(i),
-    basePriceCents: i.priceCents,
+    /* The tag price — what the shelf label says and what the online shop charges. */
+    priceCents: tagCents(cashCents(effectivePriceCents(i), fee), pct),
+    basePriceCents: tagCents(cashCents(i.priceCents, fee), pct),
     salePercent: Math.max(0, Math.min(90, i.salePercent || 0)),
     photoIds: itemPhotos.get(i.id) || [],
   }));

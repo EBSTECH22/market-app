@@ -1,3 +1,4 @@
+import { vendorGrossCents } from "@/lib/cardprice";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { sendDailySummaryEmail } from "@/lib/email";
@@ -45,7 +46,8 @@ export async function GET(req: NextRequest) {
     for (const sale of sales) {
       for (const l of sale.lines) {
         if (l.vendorId !== v.id) continue;
-        const g = l.priceCents * l.quantity;
+        /* The vendor's own prices, without the market service fee. */
+        const g = vendorGrossCents(l.vendorNetCents, v.commissionPercent || 0);
         gross += g; net += l.vendorNetCents;
         byItem[l.name] = byItem[l.name] || { name: l.name, quantity: 0, grossCents: 0 };
         byItem[l.name].quantity += l.quantity;

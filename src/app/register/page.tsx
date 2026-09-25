@@ -17,6 +17,7 @@ import {
   type QueuedSale,
 } from "@/lib/offline";
 import { isPickupCode } from "@/lib/pickupcode";
+import { tagCents, cardUpliftCents } from "@/lib/cardprice";
 
 /**
  * The register as a kiosk.
@@ -181,7 +182,11 @@ export default function RegisterKiosk() {
      adjustment afterwards, which meant a card customer was quoted one number
      and charged another. Computed here with the same function the server uses,
      surcharge included, so the two agree to the cent. */
-  const cardAdjustCents = cardAdjustPercent > 0 ? Math.round((subtotal * cardAdjustPercent) / 100) : 0;
+  /* The tag price is the vendor's price plus the card percentage, per item —
+     the number on the shelf label. Card pays the tags; cash gets the
+     percentage back. Same function the server uses (lib/cardprice). */
+  const tag = (cents: number) => tagCents(cents, cardAdjustPercent);
+  const cardAdjustCents = cardUpliftCents(cart, cardAdjustPercent);
   const cardTaxCents = taxFor(taxLines, rates, cardAdjustCents).taxCents;
   const cardTotal = subtotal + cardAdjustCents + cardTaxCents;
 
@@ -763,12 +768,18 @@ export default function RegisterKiosk() {
         </div>
         <div style="text-align:left">
           ${sale.lines.map((l: { quantity: number; name: string; priceCents: number; basePriceCents?: number }) =>
-            `<div style="display:flex;justify-content:space-between"><span>${l.quantity}x ${String(l.name).slice(0, 26)}</span><span>${money((l.basePriceCents || l.priceCents) * l.quantity)}</span></div>`).join("")}
+            `<div style="display:flex;justify-content:space-between"><span>${l.quantity}x ${String(l.name).slice(0, 26)}</span><span>${money(tag(l.basePriceCents || l.priceCents) * l.quantity)}</span></div>`).join("")}
         </div>
         <div style="border-top:1px dashed #000;margin-top:4px;padding-top:4px;text-align:left">
-          <div style="display:flex;justify-content:space-between"><span>SUBTOTAL</span><span>${money(sale.subtotalCents + (sale.saleSavingsCents || 0))}</span></div>
-          ${sale.saleSavingsCents ? `<div style="display:flex;justify-content:space-between"><span>SALE SAVINGS</span><span>-${money(sale.saleSavingsCents)}</span></div>` : ""}
-          ${sale.cardAdjustCents ? `<div style="display:flex;justify-content:space-between"><span>NON-CASH ADJ</span><span>${money(sale.cardAdjustCents)}</span></div>` : ""}
+          ${(() => {
+            const ls = sale.lines as { quantity: number; priceCents: number; basePriceCents?: number }[];
+            const tagBase = ls.reduce((n, l) => n + tag(l.basePriceCents || l.priceCents) * l.quantity, 0);
+            const tagPaid = ls.reduce((n, l) => n + tag(l.priceCents) * l.quantity, 0);
+            const row = (a: string, b: string) => `<div style="display:flex;justify-content:space-between"><span>${a}</span><span>${b}</span></div>`;
+            return row("SUBTOTAL", money(tagBase))
+              + (tagBase > tagPaid ? row("SALE SAVINGS", `-${money(tagBase - tagPaid)}`) : "")
+              + (sale.paymentMethod === "CASH" && tagPaid > sale.subtotalCents ? row("CASH DISCOUNT", `-${money(tagPaid - sale.subtotalCents)}`) : "");
+          })()}
           ${sale.foodTaxCents && sale.standardTaxCents
             ? `<div style="display:flex;justify-content:space-between"><span>TAX (GENERAL)</span><span>${money(sale.standardTaxCents)}</span></div>
           <div style="display:flex;justify-content:space-between"><span>TAX (FOOD)</span><span>${money(sale.foodTaxCents)}</span></div>`
@@ -1496,7 +1507,7 @@ export default function RegisterKiosk() {
   const itemTile = (i: FloorItem) => (
     <button key={i.id} type="button" className={`rg-tile${i.quantity === 0 ? " out" : ""}`} onClick={() => addItem(i)}>
       <b>{i.name}</b>
-      <span className="meta"><span>{i.quantity === 0 ? "Out" : `${i.quantity} left`}</span><span className="num">{money(i.priceCents)}</span></span>
+      <span className="meta"><span>{i.quantity === 0 ? "Out" : `${i.quantity} left`}</span><span className="num">{money(tag(i.priceCents))}</span></span>
     </button>
   );
 
@@ -1530,26 +1541,34 @@ export default function RegisterKiosk() {
               )}
               <span className="rg-name">
                 <b>{l.name}</b>
-                <small>{l.vendorName} · {money(l.priceCents)} each</small>
+                <small>{l.vendorName} · {money(tag(l.priceCents))} each</small>
               </span>
-              <span className="rg-amt">{money(l.priceCents * l.quantity)}</span>
+              <span className="rg-amt">{money(tag(l.priceCents) * l.quantity)}</span>
             </div>
           ))
         )}
       </div>
       <div className="rg-foot">
+        {/* Tag prices up top. Paying cash shows the discount and the cash
+            total; otherwise the total is the card (tag) total. */}
         {totals(
-          [
-            { label: "Subtotal", cents: subtotal },
-            { label: shownRate === null ? "Tax (mixed)" : `Tax (${shownRate}%)`, cents: taxCents },
-          ],
-          total
+          pay === "CASH"
+            ? [
+                { label: "Subtotal", cents: subtotal + cardAdjustCents },
+                ...(cardAdjustCents > 0 ? [{ label: `Cash discount (${cardAdjustPercent}%)`, cents: cardAdjustCents, minus: true }] : []),
+                { label: shownRate === null ? "Tax (mixed)" : `Tax (${shownRate}%)`, cents: taxCents },
+              ]
+            : [
+                { label: "Subtotal", cents: subtotal + cardAdjustCents },
+                { label: shownRate === null ? "Tax (mixed)" : `Tax (${shownRate}%)`, cents: cardTaxCents },
+              ],
+          pay === "CASH" ? total : cardTotal
         )}
         {pay === "NONE" ? (
           <div className="rg-pay">
             <button type="button" className="rg-paybtn rg-cash" disabled={busy || !cart.length} onClick={() => setPay("CASH")}>
               <span><Icon name="cash" size={20} /> Cash</span>
-              <small>{money(total)}</small>
+              <small>{money(total)}{cardAdjustCents > 0 ? ` · ${cardAdjustPercent}% off` : ""}</small>
             </button>
             <button type="button" className="rg-paybtn rg-card" disabled={busy || !cart.length} onClick={() => setPay("CARD")}>
               <span><Icon name="card" size={20} /> Card</span>
@@ -1573,7 +1592,7 @@ export default function RegisterKiosk() {
           <span className="t-label t-accent">Charge the card</span>
           <span className="rg-hero num">{money(cardTotal)}</span>
           {cardAdjustCents > 0 ? (
-            <span className="t-xs t-muted">{money(total)} cash price + {money(cardAdjustCents)} non-cash adjustment, tax included</span>
+            <span className="t-xs t-muted">Tag prices, tax included. Paying cash would be {money(total)}.</span>
           ) : null}
         </div>
         {readerReady ? (

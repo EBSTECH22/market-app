@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { tagCents, cashCents } from "@/lib/cardprice";
 import {
   Button, LinkButton, Field, Input, Checkbox, Segmented, Card, Note,
   EmptyState, PageHeader, Skeleton,
@@ -25,6 +26,10 @@ const FORMATS = {
 type FormatKey = keyof typeof FORMATS;
 
 export default function LabelsPage() {
+  const [cardPercent, setCardPercent] = useState(0);
+  const [feePercent, setFeePercent] = useState(0);
+  /* The TAG: vendor's price + the market service fee, then + the card percentage. */
+  const labelCents = (vendorCents: number) => tagCents(cashCents(vendorCents, feePercent), cardPercent);
   const [items, setItems] = useState<Item[]>([]);
   const [business, setBusiness] = useState("");
   const [ready, setReady] = useState(false);
@@ -52,6 +57,8 @@ export default function LabelsPage() {
       const data = await r.json();
       setItems(data.items.filter((i: Item & { active: boolean }) => i.active));
       setBusiness(data.vendor.businessName);
+      setCardPercent(Number(data.cardPercent) || 0);
+      setFeePercent(Number(data.feePercent) || 0);
       const c: Record<string, number> = {};
       for (const it of data.items) c[it.id] = Math.max(1, it.quantity || 1);
       setCopies(c);
@@ -236,7 +243,7 @@ export default function LabelsPage() {
                         checked={!!selected[it.id]}
                         onCheckedChange={(on) => setSelected((sel) => ({ ...sel, [it.id]: on }))}
                         label={it.name}
-                        hint={`${it.sku} · ${money(it.priceCents)}`}
+                        hint={`${it.sku} · tag ${money(labelCents(it.priceCents))}${labelCents(it.priceCents) !== it.priceCents ? ` (your price ${money(it.priceCents)})` : ""}`}
                       />
                     </div>
                     <Field label="Copies" className="shrink0">
@@ -270,7 +277,9 @@ export default function LabelsPage() {
           {sheet.map(({ item, n }) => (
             <div className="lbl" key={`${item.id}-${n}`}>
               <div className="nm">{item.name}</div>
-              <div className="pr">${(item.priceCents / 100) % 1 === 0 ? (item.priceCents / 100).toFixed(0) : (item.priceCents / 100).toFixed(2)}</div>
+              {/* The TAG price: the vendor's price plus the card percentage.
+                  Card pays this; cash gets the percentage off at the register. */}
+              <div className="pr">${(() => { const c = labelCents(item.priceCents); return (c / 100) % 1 === 0 ? (c / 100).toFixed(0) : (c / 100).toFixed(2); })()}</div>
               <svg className="barcode" data-code={item.sku}></svg>
               <div className="biz">{business}</div>
             </div>
