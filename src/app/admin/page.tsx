@@ -4190,7 +4190,15 @@ export default function AdminPage() {
                 <div className="stack" style={{ gap: 2 }}>
                   {items.map((i) =>
                     i.href ? (
-                      <a key={i.id} className="nav-item" href={i.href}>
+                      <a
+                        key={i.id}
+                        className="nav-item"
+                        href={i.href}
+                        /* The register opens in its own window so admin stays
+                           open behind it — switch between them with the
+                           tablet's recent-apps button. */
+                        {...(i.href === "/register" ? { target: "_blank", rel: "noopener" } : {})}
+                      >
                         <Icon name={i.icon} size={16} />
                         <span className="truncate">{i.label}</span>
                         {navBadge[i.id] ? (
