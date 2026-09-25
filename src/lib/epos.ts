@@ -287,7 +287,9 @@ export function printRequestXml(
     )
     .join("");
   const open = version === "2.00" ? `<PrintRequestInfo Version="2.00">` : `<PrintRequestInfo>`;
-  return `<?xml version="1.0" encoding="utf-8"?>${open}${parts}</PrintRequestInfo>`;
+  /* Spelled the way Epson's sample spells it, space before the close and all.
+     There is no reason a parser should care and no reason to find out. */
+  return `<?xml version="1.0" encoding="utf-8" ?>${open}${parts}</PrintRequestInfo>`;
 }
 
 /**

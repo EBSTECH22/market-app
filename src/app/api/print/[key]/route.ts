@@ -4,10 +4,10 @@ import { printRequestXml } from "@/lib/epos";
 import { getPrinterKey, getSdpVersion, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
-/* The reply is held open while waiting for a receipt to appear — see below.
-   That wait plus the database round trips has to fit inside the function's own
-   lifetime, or the printer gets a gateway error instead of paper. */
-export const maxDuration = 30;
+/* Nothing here waits on anything now, so this is only a ceiling against a
+   database that has gone slow — the printer would rather have an error than a
+   connection that never answers. */
+export const maxDuration = 15;
 
 /**
  * Where the printer comes to ask for work.
@@ -36,7 +36,20 @@ export const maxDuration = 30;
  * and the paper starts moving as the cashier takes the money.
  */
 
-/** Everything the printer is sent, with the length it insists on being told. */
+/**
+ * Everything the printer is sent, shaped like Epson's own sample and nothing
+ * more.
+ *
+ * The manual's sample response carries exactly two headers: the content type
+ * and the length. Earlier versions of this added a few more out of habit —
+ * Connection, cache directives — and a printer this old is not the place to
+ * find out which extras it tolerates. So: the two it documents, plus
+ * `no-transform`, which is the one instruction worth adding. It tells anything
+ * between here and the shop not to re-encode the body on the way. A host that
+ * helpfully gzips a reply is invisible to a modern browser and completely
+ * opaque to a printer that will then parse nothing, run nothing, and report
+ * nothing — which is exactly the silence we were chasing.
+ */
 const xml = (body: string, status = 200) => {
   const bytes = Buffer.from(body, "utf8");
   return new NextResponse(bytes, {
@@ -44,8 +57,7 @@ const xml = (body: string, status = 200) => {
     headers: {
       "Content-Type": "text/xml; charset=utf-8",
       "Content-Length": String(bytes.byteLength),
-      "Cache-Control": "no-store",
-      Connection: "close",
+      "Cache-Control": "no-store, no-transform",
     },
   });
 };
@@ -93,24 +105,20 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
 
   const version = await getSdpVersion();
   const devid = await getPrinterDeviceId();
-  const deadline = Date.now() + 9_000;
-  for (;;) {
-    const jobs = await claim(1);
-    if (jobs.length) {
-      await notePrinterEvent(`was handed ${jobs[0].label}`).catch(() => {});
-      await logPrinter(`handed over ${jobs[0].label}`).catch(() => {});
-      return xml(printRequestXml(jobs, 60_000, version, devid));
-    }
-    if (Date.now() >= deadline) {
-      /* Not logged. An idle poll every three seconds all day would push
-         everything worth reading out of a twelve-line log. */
-      return xml("");
-    }
-    /* Quarter of a second. Short enough that a receipt rung now prints now;
-       long enough that holding the line costs four queries a second rather
-       than a thousand. */
-    await new Promise((r) => setTimeout(r, 250));
+  /* Answer at once, either way.
+     There used to be a few seconds of holding the line here so a receipt rung
+     during the wait could go out on a connection already standing open. It is
+     a good trick and it is not in Epson's protocol, and while the printer was
+     silent that was one unknown too many. The printer asks every three
+     seconds; three seconds is a perfectly good wait for a receipt. */
+  const jobs = await claim(1);
+  if (jobs.length) {
+    const doc = printRequestXml(jobs, 60_000, version, devid);
+    await notePrinterEvent(`was handed ${jobs[0].label}`).catch(() => {});
+    await logPrinter(`handed over ${jobs[0].label} (${Buffer.byteLength(doc, "utf8")} bytes, v${version}, devid ${devid})`).catch(() => {});
+    return xml(doc);
   }
+  return xml("");
 }
 
 /**
