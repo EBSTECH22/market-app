@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { claim, complete, noteSeen, requeueStale } from "@/lib/printqueue";
 import { printRequestXml } from "@/lib/epos";
-import { getPrinterKey, getSdpVersion, notePrinterEvent } from "@/lib/settings";
+import { getPrinterKey, getSdpVersion, notePrinterEvent, notePrinterResponse } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 /* The reply is held open while waiting for a receipt to appear — see below.
@@ -64,6 +64,9 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
   /* ------------------------------------------------ how did that print? -- */
   if (kind === "SetResponse") {
     const report = form.get("ResponseFile") || "";
+    /* Kept verbatim. Whatever this says is the only first-hand account of why
+       a job did or didn't print. */
+    await notePrinterResponse(report).catch(() => {});
     const done = await complete(report).catch(() => null);
     await noteSeen().catch(() => {});
     await notePrinterEvent(

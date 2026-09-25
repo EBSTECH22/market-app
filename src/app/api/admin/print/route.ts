@@ -4,7 +4,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
 import { enqueue, lastSeen, requeueStale } from "@/lib/printqueue";
-import { drawerXml, testXml, receiptXml } from "@/lib/epos";
+import { drawerXml, testXml, plainTestXml, receiptXml } from "@/lib/epos";
 import { drawerForRequest } from "@/lib/drawer";
 import {
   getPrinterKey,
@@ -18,6 +18,7 @@ import {
   getSdpVersion,
   setSdpVersion,
   getPrinterEvent,
+  getPrinterResponse,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,7 @@ export async function GET() {
       getSdpVersion(),
       getPrinterEvent(),
     ]);
+    const lastResponse = await getPrinterResponse();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -59,6 +61,7 @@ export async function GET() {
          prints, the difference between "was handed Receipt #12" over and over
          and "reported a job refused" is the whole diagnosis. */
       lastEvent,
+      lastResponse,
       configured: !!(await getPrinterKey()),
     });
   });
@@ -108,6 +111,13 @@ export async function POST(req: NextRequest) {
 
     if (action === "test") {
       const id = await enqueue({ kind: "TEST", label: "Test print", body: testXml(who), createdBy: who });
+      return NextResponse.json({ ok: true, jobId: id });
+    }
+
+    /* The bisect. Nothing but text and a cut — if this prints and a receipt
+       doesn't, the fault is one element in the receipt, not the link. */
+    if (action === "plain") {
+      const id = await enqueue({ kind: "TEST", label: "Plain test", body: plainTestXml(), createdBy: who });
       return NextResponse.json({ ok: true, jobId: id });
     }
 

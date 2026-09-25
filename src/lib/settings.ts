@@ -153,3 +153,18 @@ export async function getPrinterEvent(): Promise<{ at: string; what: string } | 
   const i = raw.indexOf("|");
   return i < 0 ? null : { at: raw.slice(0, i), what: raw.slice(i + 1) };
 }
+
+/**
+ * The printer's last report, word for word.
+ *
+ * Kept because a tidied-up error message is no use when the tidying is the
+ * thing that's wrong. When paper isn't coming out and the code means nothing,
+ * the raw document is what settles it.
+ */
+export async function notePrinterResponse(raw: string): Promise<void> {
+  await put("printerLastResponse", String(raw || "").slice(0, 900));
+}
+
+export async function getPrinterResponse(): Promise<string> {
+  return str("printerLastResponse");
+}

@@ -25,6 +25,7 @@ type PrintState = {
   autoPrint: boolean;
   sdpVersion: "1.00" | "2.00";
   lastEvent: { at: string; what: string } | null;
+  lastResponse: string;
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
 
@@ -201,7 +202,7 @@ export default function TillHardware() {
     } finally { setBusy(false); }
   };
 
-  const send = async (action: "test" | "drawer") => {
+  const send = async (action: "test" | "drawer" | "plain") => {
     setBusy(true);
     try {
       const r = await fetch("/api/admin/print", {
@@ -211,7 +212,7 @@ export default function TillHardware() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { toast.error("Couldn't send that", String(d.error || "")); return; }
       toast.success(
-        action === "test" ? "Test sent" : "Drawer sent",
+        action === "test" ? "Test sent" : action === "plain" ? "Plain test sent" : "Drawer sent",
         "It goes out next time the printer checks in — a few seconds."
       );
       await loadPrint();
@@ -360,6 +361,12 @@ export default function TillHardware() {
                   <Button variant="secondary" icon="cash" disabled={busy} onClick={() => void send("drawer")}>
                     Open the drawer
                   </Button>
+                  {/* Text and a cut, nothing else. Whether this prints when a
+                      receipt won't is the fastest way to tell a broken link
+                      from a receipt the printer doesn't like. */}
+                  <Button variant="ghost" icon="print" disabled={busy} onClick={() => void send("plain")}>
+                    Plain test
+                  </Button>
                   <Button variant="ghost" icon="refresh" disabled={busy} onClick={() => void newKey()}>
                     New address
                   </Button>
@@ -466,6 +473,23 @@ export default function TillHardware() {
               </div>
             ))}
           </div>
+
+          {/* The printer's own words, untouched. A tidied message is no help
+              when the tidying is what's wrong. */}
+          {print.lastResponse ? (
+            <div className="stack g-1 mt-3">
+              <span className="t-label">What the printer last sent back</span>
+              <code
+                className="mono t-xs"
+                style={{
+                  display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all",
+                  background: "var(--bg-sunken)", padding: "var(--sp-2)", borderRadius: "var(--radius-sm)",
+                }}
+              >
+                {print.lastResponse}
+              </code>
+            </div>
+          ) : null}
         </Card>
       ) : null}
     </main>

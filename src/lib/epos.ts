@@ -294,10 +294,30 @@ export function printRequestXml(jobs: QueuedPrint[], timeoutMs = 60000, version:
  * printing path. Anything it can't make sense of is treated as a failure,
  * which puts the job back rather than losing it.
  */
-export function readPrintResponse(xml: string): { jobId: string; ok: boolean; code: string } {
+export function readPrintResponse(xml: string): { jobId: string; ok: boolean; code: string; status: string } {
   const s = String(xml || "");
   const jobId = (s.match(/<printjobid>([^<]*)<\/printjobid>/i) || [])[1] || "";
-  const success = (s.match(/success\s*=\s*"([^"]*)"/i) || [])[1] || "";
-  const code = (s.match(/code\s*=\s*"([^"]*)"/i) || [])[1] || "";
-  return { jobId: jobId.trim(), ok: /^(true|1)$/i.test(success.trim()), code: code.trim() };
+  /* Attributes are read from inside the <response> tag rather than from the
+     document at large. The envelope around it carries a Version attribute and
+     a namespace, and a loose search for code= has no way of knowing it has
+     wandered into one of those. */
+  const tag = (s.match(/<response\b[^>]*>/i) || [])[0] || s;
+  const attr = (name: string) => (tag.match(new RegExp(`${name}\\s*=\\s*"([^"]*)"`, "i")) || [])[1] || "";
+  return {
+    jobId: jobId.trim(),
+    ok: /^(true|1)$/i.test(attr("success").trim()),
+    code: attr("code").trim(),
+    status: attr("status").trim(),
+  };
 }
+
+/**
+ * The simplest document the printer could possibly accept.
+ *
+ * Nothing but a line of text and a cut: no sizes, no alignment, no drawer, no
+ * feed amount. When a full receipt is refused and this prints, the fault is a
+ * particular element in the receipt rather than the connection, the address or
+ * the protocol — which is a much smaller haystack.
+ */
+export const plainTestXml = (): string =>
+  eposDoc(`<text>PLAIN TEST&#10;</text><text>If this prints, the link works.&#10;</text><feed line="3"/><cut/>`);
