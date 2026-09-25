@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 
 import { findOrCreateCustomer, pointsFor, REDEEM_POINTS, REDEEM_CENTS } from "@/lib/customers";
 import { sendCustomerReceiptEmail } from "@/lib/email";
-import { getTaxRates, getCardAdjustPercent, getAutoPrint, getReceiptHeader, getReceiptFooter, getReceiptColumns, getReceiptLogo, getLogoSize, getLogoSource, getLogoKeys } from "@/lib/settings";
+import { getPrintMode, getPrinterHost, getPrinterDeviceId, getTaxRates, getCardAdjustPercent, getAutoPrint, getReceiptHeader, getReceiptFooter, getReceiptColumns, getReceiptLogo, getLogoSize, getLogoSource, getLogoKeys } from "@/lib/settings";
 import { unpackTicket } from "@/lib/ticket";
 import { enqueue } from "@/lib/printqueue";
 import { receiptXml, receiptWithDrawerXml } from "@/lib/epos";
@@ -457,12 +457,21 @@ export async function POST(req: NextRequest) {
      the drawer opens as the paper starts rather than a beat before or after.
      Card sales don't open the drawer at all — there is no change to give, and
      a drawer that opens on every sale is a drawer that stops being counted. */
+  /* Filled in below when the till that rang this sale can print it itself.
+     Travels back with the sale so the paper starts moving straight away. */
+  let printNow: { job: { id: string; body: string }; host: string; devid: string } | null = null;
+
   try {
     if (await getAutoPrint()) {
-      const [header, footer, cols, logo, logoSize, logoSource, keys] = await Promise.all([
-        getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
-        getLogoSource(), getLogoKeys(),
-      ]);
+      const [header, footer, cols, logo, logoSize, logoSource, keys, printMode, printerHost, devid] =
+        await Promise.all([
+          getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(), getLogoSize(),
+          getLogoSource(), getLogoKeys(),
+          /* Fetched here with the rest rather than after the receipt is built:
+             each of these is a round trip to the database, and on the hot path
+             of a sale they are worth having for free. */
+          getPrintMode(), getPrinterHost(), getPrinterDeviceId(),
+        ]);
       const forPrint = {
         number: sale.number,
         createdAt: sale.createdAt,
@@ -492,13 +501,43 @@ export async function POST(req: NextRequest) {
         cardName: sale.cardName,
       };
       const opts = { header, footer, cols, logo, logoSize, logoSource, logoKey1: keys.key1, logoKey2: keys.key2 };
-      await enqueue({
+      const receiptBodyXml =
+        paymentMethod === "CASH" ? receiptWithDrawerXml(forPrint, opts) : receiptXml(forPrint, opts);
+      const jobId = await enqueue({
         kind: "RECEIPT",
         label: `Receipt #${sale.number}`,
         saleId: sale.id,
         createdBy: clerk,
-        body: paymentMethod === "CASH" ? receiptWithDrawerXml(forPrint, opts) : receiptXml(forPrint, opts),
+        body: receiptBodyXml,
       });
+
+      /* HAND THE RECEIPT BACK WITH THE SALE.
+         
+         The queue works, but it costs four or five seconds: the till has to
+         wait for its next poll, ask the server for work, and only then send
+         anything to the printer. On a cash sale that is four or five seconds
+         of the cashier standing in front of a closed drawer with the
+         customer's note in their hand, which is not a till.
+         
+         So the receipt goes back in the same reply as the sale and the till
+         puts it on the printer immediately. It is marked as handed over
+         first, exactly as the poll would have marked it, so nothing else
+         picks it up in the meantime — and if the till can't reach the
+         printer, its report puts the job back and the poll prints it late,
+         which is the behaviour this has always had. */
+      if (printMode === "direct" && printerHost) {
+        const claimed = await db.printJob.updateMany({
+          where: { id: jobId, status: "QUEUED" },
+          data: { status: "SENT", sentAt: new Date(), attempts: 1 },
+        });
+        if (claimed.count === 1) {
+          printNow = {
+            job: { id: jobId, body: receiptBodyXml },
+            host: printerHost,
+            devid,
+          };
+        }
+      }
     }
   } catch (err) {
     /* A receipt that couldn't be queued must never lose the sale. The money is
@@ -507,42 +546,62 @@ export async function POST(req: NextRequest) {
     console.error("receipt queue failed", err);
   }
 
-  // one email per vendor involved, after commit
+  /* NOTHING THAT ISN'T THE SALE HOLDS UP THE REPLY.
+
+     Telling vendors and emailing the customer are calls out to Google's push
+     servers and to the mail provider — a second or two each, and they were
+     being made one after another with the till waiting on every one of them.
+     Three vendors on a ticket meant the cashier watching a spinner for the
+     best part of ten seconds with the customer stood there. None of it is
+     the sale.
+
+     So they all go at once and the reply waits a moment at most. Anything
+     slower finishes on its own, a vendor push that doesn't land is covered
+     by the daily summary, and none of it can touch money that is already
+     committed. */
   const byVendor = new Map<string, typeof saleLines>();
   for (const sl of saleLines) {
     byVendor.set(sl.vendorId, [...(byVendor.get(sl.vendorId) || []), sl]);
-  }
-  for (const [vendorId, vLines] of byVendor) {
-    const vendor = items.find((i) => i.vendorId === vendorId)?.vendor;
-    if (vendor?.email) {
-      try {
-        const net = vLines.reduce((n, l) => n + l.vendorNetCents, 0);
-        const itemsTxt = vLines.map((l) => `${l.quantity}x ${l.name}`).join(", ");
-        // push-enabled vendors get pinged per sale; everyone else gets one daily summary email (cron)
-        await pushToVendor(
-          vendor.id,
-          "You made a sale! 🎉",
-          `${itemsTxt} — your net $${(net / 100).toFixed(2)}`
-        );
-      } catch (err) {
-        console.error("sale email failed", err);
-      }
-    }
   }
 
   let customerPoints: number | null = null;
   if (customer) {
     const fresh = await db.customer.findUnique({ where: { id: customer.id } });
     customerPoints = fresh?.points ?? null;
-    if (customer.email) {
-      try {
-        await sendCustomerReceiptEmail(customer.email, sale.number,
-          saleLines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.basePriceCents || l.priceCents })),
-          subtotal, taxCents, discountCents, totalCents, customerPoints ?? 0, saleSavingsCents);
-      } catch {}
-    }
   }
 
-  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate: rates.standardPercent, foodTaxCents: taxSplit.foodTaxCents, standardTaxCents: taxSplit.standardTaxCents, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" } });
+  const tellPeople: Promise<unknown>[] = [];
+  for (const [vendorId, vLines] of byVendor) {
+    const vendor = items.find((i) => i.vendorId === vendorId)?.vendor;
+    if (!vendor?.email) continue;
+    const net = vLines.reduce((n, l) => n + l.vendorNetCents, 0);
+    const itemsTxt = vLines.map((l) => `${l.quantity}x ${l.name}`).join(", ");
+    // push-enabled vendors get pinged per sale; everyone else gets one daily summary email (cron)
+    tellPeople.push(
+      pushToVendor(
+        vendor.id,
+        "You made a sale! 🎉",
+        `${itemsTxt} — your net $${(net / 100).toFixed(2)}`
+      ).catch((err) => console.error("vendor sale push failed", err))
+    );
+  }
+  if (customer?.email) {
+    tellPeople.push(
+      sendCustomerReceiptEmail(customer.email, sale.number,
+        saleLines.map((l) => ({ name: l.name, quantity: l.quantity, priceCents: l.basePriceCents || l.priceCents })),
+        subtotal, taxCents, discountCents, totalCents, customerPoints ?? 0, saleSavingsCents
+      ).catch(() => {})
+    );
+  }
+  /* A moment, not a minute: long enough that a quick push is done before the
+     function is torn down, short enough that nobody at the counter notices. */
+  if (tellPeople.length) {
+    await Promise.race([
+      Promise.allSettled(tellPeople),
+      new Promise((r) => setTimeout(r, 1200)),
+    ]);
+  }
+
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate: rates.standardPercent, foodTaxCents: taxSplit.foodTaxCents, standardTaxCents: taxSplit.standardTaxCents, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" }, printNow });
   });
 }

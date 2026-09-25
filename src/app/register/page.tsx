@@ -8,7 +8,7 @@ import {
 import { money, fmtTime, plural, dollarsToCents } from "@/lib/format";
 import { ScanBurst, looksLikeProductBarcode } from "@/lib/scanner";
 import { WedgeTiming, isTerminator, readCode } from "@/lib/wedge";
-import { PrintAgent } from "@/components/PrintAgent";
+import { PrintAgent, deliverJob } from "@/components/PrintAgent";
 import { taxFor, displayRate, normalizeTaxClass } from "@/lib/tax";
 import { TZ } from "@/lib/time";
 import { CashTender } from "@/components/register/CashTender";
@@ -825,6 +825,14 @@ export default function RegisterKiosk() {
           return;
         }
         setScanErr(String(d.error || "Sale failed.")); setPay("NONE"); return;
+      }
+      /* Straight onto the printer, before anything else happens on screen.
+         Not awaited: the cashier gets the receipt screen now and the paper
+         and the drawer follow a beat later, rather than the screen waiting on
+         the printer. If it fails it is already in the queue and the agent
+         above prints it. */
+      if (d.printNow?.job?.id && d.printNow?.host) {
+        void deliverJob(d.printNow.job, d.printNow.host, d.printNow.devid);
       }
       setReceipt({ ...(d.sale as Receipt), paymentMethod: method, cardName: terminal?.cardLabel || "" });
       setCart([]); setPay("NONE"); setCardRef(""); setCharge(null);

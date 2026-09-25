@@ -59,6 +59,50 @@ function holdsLease(me: string): boolean {
   }
 }
 
+/**
+ * Carry one job to the printer and report back. The whole of the agent's
+ * work, minus the waiting.
+ *
+ * Exported because the register calls it the instant a sale is booked. Going
+ * through the queue means the till waits for its next poll, then a round trip
+ * to claim the job, before a single dot is printed — four or five seconds
+ * during which the cashier is looking at a closed drawer. The server hands
+ * the receipt back with the sale instead, already claimed, and this puts it
+ * straight on the printer.
+ *
+ * The job is still in the queue the whole time. If this fails, the report
+ * says so and it prints on the next poll exactly as it always did.
+ */
+export async function deliverJob(
+  job: { id: string; body: string },
+  host: string,
+  devid?: string
+): Promise<boolean> {
+  let raw = "";
+  let ok = false;
+  try {
+    const res = await fetch(directPrintUrl(host, devid), {
+      method: "POST",
+      headers: { "Content-Type": "text/xml; charset=utf-8" },
+      body: soapEnvelope(job.body),
+    });
+    raw = await res.text().catch(() => "");
+    ok = /success\s*=\s*"(true|1)"/i.test(raw);
+  } catch {
+    ok = false;
+  }
+  try {
+    await fetch("/api/admin/print/done", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: job.id, ok, raw }),
+    });
+  } catch {
+    /* The sweep puts it back in a few seconds. */
+  }
+  return ok;
+}
+
 export type PrintAgentStatus = {
   /** True while a job is actually being sent. */
   busy: boolean;
@@ -88,19 +132,6 @@ export function PrintAgent({
   const meRef = useRef("");
   if (!meRef.current) meRef.current = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-  const report = useCallback(async (jobId: string, ok: boolean, raw: string) => {
-    try {
-      await fetch("/api/admin/print/done", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, ok, raw }),
-      });
-    } catch {
-      /* The job stays claimed and the sweep puts it back in a minute. Losing
-         the report is survivable; losing the receipt is not. */
-    }
-  }, []);
-
   const tick = useCallback(async () => {
     if (runningRef.current) return;
     if (!holdsLease(meRef.current)) return;
@@ -117,31 +148,8 @@ export function PrintAgent({
       if (d.mode !== "direct" || !d.host || !d.jobs?.length) return;
 
       for (const job of d.jobs) {
-        let raw = "";
-        let ok = false;
-        try {
-          const res = await fetch(directPrintUrl(d.host, d.devid), {
-            method: "POST",
-            headers: { "Content-Type": "text/xml; charset=utf-8" },
-            body: soapEnvelope(job.body),
-          });
-          raw = await res.text().catch(() => "");
-          ok = /success\s*=\s*"(true|1)"/i.test(raw);
-          setTrouble(
-            ok
-              ? ""
-              : raw
-                ? "The printer refused a receipt — check paper and the cover."
-                : "The printer answered oddly."
-          );
-        } catch {
-          /* Almost always one of two things: the printer is off, or this
-             device hasn't been told to trust its certificate yet. Both look
-             identical from here, so the wording covers both. */
-          ok = false;
-          setTrouble("Can't reach the printer from this device.");
-        }
-        await report(job.id, ok, raw);
+        const ok = await deliverJob(job, d.host, d.devid);
+        setTrouble(ok ? "" : "The printer didn't take a receipt — check paper, the cover, and that it's on.");
         if (ok) setPrinted((n) => n + 1);
       }
     } catch {
@@ -149,7 +157,7 @@ export function PrintAgent({
     } finally {
       runningRef.current = false;
     }
-  }, [report]);
+  }, []);
 
   useEffect(() => {
     if (!active) return;

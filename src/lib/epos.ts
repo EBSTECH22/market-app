@@ -161,6 +161,135 @@ export const logoImage = (size: number = DEFAULT_LOGO_SIZE): string => {
 export const eposDoc = (children: string): string =>
   `<epos-print xmlns="${EPOS_NS}">${children}</epos-print>`;
 
+/* ------------------------------------------ putting the logo IN the printer -- */
+
+/**
+ * Base64 to hex, by hand.
+ *
+ * Buffer belongs to the server and atob to the browser, and this file is
+ * imported by both. Forty lines of arithmetic beats a runtime check that
+ * works everywhere except the one place it's needed.
+ */
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const HEX = "0123456789ABCDEF";
+
+function b64ToHex(b64: string): string {
+  let bits = 0;
+  let acc = 0;
+  let out = "";
+  for (const ch of b64) {
+    if (ch === "=" || ch === "\n" || ch === "\r" || ch === " ") continue;
+    const v = B64.indexOf(ch);
+    if (v < 0) continue;
+    acc = (acc << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      const byte = (acc >> bits) & 0xff;
+      out += HEX[byte >> 4] + HEX[byte & 0x0f];
+    }
+  }
+  return out;
+}
+
+const hexByte = (n: number): string => HEX[(n >> 4) & 0x0f] + HEX[n & 0x0f];
+
+/**
+ * The ESC/POS command that writes the logo into the printer's own memory.
+ *
+ * GS ( L function 112 — "define the NV graphics data, raster format". Once
+ * this has run the artwork lives in the printer until it is overwritten, and
+ * every receipt after it names two key codes instead of carrying thirty
+ * kilobytes of picture. That is the whole point: the receipts that were
+ * timing out stop being big.
+ *
+ * Laid out exactly as Epson's reference has it:
+ *   GS ( L pL pH m fn a kc1 kc2 b xL xH yL yH c  d1...dk
+ * where p is everything after pH, the two key codes are the name the logo
+ * will answer to, b is one colour, and c names that colour.
+ */
+export function nvLogoCommandHex(size: number, key1: number, key2: number): string {
+  const l = RECEIPT_LOGOS[size] || RECEIPT_LOGOS[DEFAULT_LOGO_SIZE];
+  if (!l) return "";
+  const data = b64ToHex(l.data);
+  const bytes = data.length / 2;
+
+  /* m fn a kc1 kc2 b xL xH yL yH c, then the raster. */
+  const p = 11 + bytes;
+  const k1 = Math.max(32, Math.min(126, Math.round(key1)));
+  const k2 = Math.max(32, Math.min(126, Math.round(key2)));
+
+  return (
+    "1D284C" +
+    hexByte(p & 0xff) +
+    hexByte((p >> 8) & 0xff) +
+    "30" + // m
+    "70" + // fn 112, define NV graphics
+    "30" + // a, monochrome
+    hexByte(k1) +
+    hexByte(k2) +
+    "01" + // one colour
+    hexByte(l.width & 0xff) +
+    hexByte((l.width >> 8) & 0xff) +
+    hexByte(l.height & 0xff) +
+    hexByte((l.height >> 8) & 0xff) +
+    "31" + // colour 1
+    data
+  );
+}
+
+/**
+ * The same command wrapped for the printer, in both dialects.
+ *
+ * Epson's own documentation is not consistent about whether a <command>
+ * element carries hex or base64, and the two firmwares in this building
+ * disagree. Rather than spend an evening finding out, both are sent: they
+ * define byte-for-byte the same logo under the same key codes, so whichever
+ * one the printer understands is the one that takes, and the other is
+ * refused without doing anything. Nothing prints either way.
+ */
+export function nvLogoJobs(
+  size: number,
+  key1: number,
+  key2: number
+): { label: string; body: string }[] {
+  const hex = nvLogoCommandHex(size, key1, key2);
+  if (!hex) return [];
+  const raw = RECEIPT_LOGOS[size] || RECEIPT_LOGOS[DEFAULT_LOGO_SIZE];
+  const b64 = hexToB64(hex);
+  return [
+    { label: `Store the logo (${raw.width} dots)`, body: eposDoc(`<command>${hex}</command>`) },
+    { label: `Store the logo (second format)`, body: eposDoc(`<command>${b64}</command>`) },
+  ];
+}
+
+function hexToB64(hex: string): string {
+  let out = "";
+  let acc = 0;
+  let bits = 0;
+  for (let i = 0; i < hex.length; i += 2) {
+    acc = (acc << 8) | parseInt(hex.slice(i, i + 2), 16);
+    bits += 8;
+    while (bits >= 6) {
+      bits -= 6;
+      out += B64[(acc >> bits) & 0x3f];
+    }
+  }
+  if (bits > 0) out += B64[(acc << (6 - bits)) & 0x3f];
+  while (out.length % 4) out += "=";
+  return out;
+}
+
+/** Print whatever is stored under those key codes, with a line to say so. */
+export const nvLogoProofXml = (key1: number, key2: number): string =>
+  eposDoc(
+    storedLogo(key1, key2) +
+      t("") +
+      t(center("LOGO STORED IN THE PRINTER")) +
+      t(center(`key codes ${Math.round(key1)} and ${Math.round(key2)}`)) +
+      cut()
+  );
+
 /* --------------------------------------------------------- the receipt -- */
 
 export type ReceiptLine = {

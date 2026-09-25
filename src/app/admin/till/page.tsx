@@ -61,6 +61,9 @@ export default function TillHardware() {
   const [cols, setCols] = useState("42");
   const [k1, setK1] = useState("32");
   const [k2, setK2] = useState("32");
+  /* How big the stored copy is. Only used while storing it — once it's in the
+     printer the receipt just names it. */
+  const [storeSize, setStoreSize] = useState(256);
   const [footer, setFooter] = useState("");
 
   const loadReaders = useCallback(async () => {
@@ -199,6 +202,29 @@ export default function TillHardware() {
         logoSource === "printer" ? "Using the logo stored in the printer" : "Sending the logo with each receipt",
         "Print a test."
       );
+    } finally { setBusy(false); }
+  };
+
+  /**
+   * Write the artwork into the printer, once.
+   *
+   * Three jobs go into the queue and the tablet carries them like any other
+   * receipt, so this works from the counter with nothing installed on any PC.
+   */
+  const storeLogo = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/print", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "storelogo", size: storeSize }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast.error("Couldn't send that", String(d.error || "")); return; }
+      toast.success(
+        "Sent to the printer",
+        "Watch the paper. One refusal is normal; the last page shows what got stored."
+      );
+      await loadPrint();
     } finally { setBusy(false); }
   };
 
@@ -666,24 +692,52 @@ export default function TillHardware() {
                       </Button>
                     </div>
                     <span className="t-xs t-muted">
-                      Stored in the printer has no size limit and can&rsquo;t make a receipt too big to print —
-                      but the logo has to be loaded into the printer once with Epson&rsquo;s utility first.
+                      Stored in the printer keeps the artwork in the printer&rsquo;s own memory, so a receipt
+                      carries two numbers instead of thirty kilobytes of picture. Receipts print faster and
+                      can&rsquo;t be too big to go through.
                     </span>
                   </div>
 
                   {print.logoSource === "printer" ? (
-                    <div className="stack g-2">
-                      <span className="t-label">Key codes from the utility</span>
-                      <div className="row wrap g-2" style={{ alignItems: "center" }}>
-                        <Input className="mono" value={k1} style={{ width: 90 }} onChange={(e) => setK1(e.target.value)} />
-                        <Input className="mono" value={k2} style={{ width: 90 }} onChange={(e) => setK2(e.target.value)} />
-                        <Button size="sm" variant="secondary" icon="check" disabled={busy} onClick={() => void saveKeys()}>
-                          Save
+                    <div className="stack g-3">
+                      <div className="stack g-2">
+                        <span className="t-label">Put the logo in the printer</span>
+                        <div className="row wrap g-2">
+                          {[192, 256, 320, 384].map((n) => (
+                            <Button key={n} size="sm" variant={storeSize === n ? "primary" : "secondary"}
+                              disabled={busy} onClick={() => setStoreSize(n)}>
+                              {n} dots
+                            </Button>
+                          ))}
+                        </div>
+                        <Button size="sm" variant="primary" icon="print" disabled={busy}
+                          onClick={() => void storeLogo()}>
+                          Store the logo in the printer
                         </Button>
+                        <span className="t-xs t-muted">
+                          Do this once. Three things go to the printer: the logo twice, in the two formats
+                          Epson printers disagree about, and then a page that prints whatever got stored.
+                          One of the first two will be refused — that&rsquo;s expected. If the last page comes
+                          out with the logo on it, it worked. Start at 256. Bigger is a bigger command and
+                          this printer refuses ones it thinks are too long, so if nothing comes out, drop a
+                          size and go again — it costs nothing but a tap.
+                        </span>
                       </div>
-                      <span className="t-xs t-muted">
-                        The two numbers Epson&rsquo;s utility showed when it stored the logo. Usually 32 and 32.
-                      </span>
+
+                      <div className="stack g-2">
+                        <span className="t-label">Key codes</span>
+                        <div className="row wrap g-2" style={{ alignItems: "center" }}>
+                          <Input className="mono" value={k1} style={{ width: 90 }} onChange={(e) => setK1(e.target.value)} />
+                          <Input className="mono" value={k2} style={{ width: 90 }} onChange={(e) => setK2(e.target.value)} />
+                          <Button size="sm" variant="secondary" icon="check" disabled={busy} onClick={() => void saveKeys()}>
+                            Save
+                          </Button>
+                        </div>
+                        <span className="t-xs t-muted">
+                          The name the logo answers to inside the printer. 32 and 32 is fine — only change
+                          these if you store a second logo, and store it before you change them.
+                        </span>
+                      </div>
                     </div>
                   ) : null}
                 </div>

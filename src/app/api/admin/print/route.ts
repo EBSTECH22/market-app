@@ -4,7 +4,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
 import { enqueue, lastSeen, requeueStale } from "@/lib/printqueue";
-import { drawerXml, testXml, plainTestXml, receiptXml } from "@/lib/epos";
+import { drawerXml, testXml, plainTestXml, receiptXml, nvLogoJobs, nvLogoProofXml } from "@/lib/epos";
 import { drawerForRequest } from "@/lib/drawer";
 import {
   getPrinterKey,
@@ -165,6 +165,51 @@ export async function POST(req: NextRequest) {
           (await getReceiptLogo()) && (await getLogoSource()) === "printer" ? await getLogoKeys() : undefined
         ), createdBy: who });
       return NextResponse.json({ ok: true, jobId: id });
+    }
+
+    /**
+     * Write the logo into the printer's memory, then prove it took.
+     *
+     * Epson's own way of doing this is a Windows utility and a USB cable.
+     * This does the same thing down the wire the till already uses: the
+     * define command goes into the queue like any other job, the tablet
+     * carries it, and the printer keeps the artwork until something
+     * overwrites it. Two formats go out because the firmwares disagree about
+     * how a raw command is encoded; they define the same logo under the same
+     * key codes, so one taking and one being refused is the expected outcome.
+     *
+     * The last job prints what was stored. If that page comes out with the
+     * logo on it, it worked — there is nothing further to check.
+     */
+    if (action === "storelogo") {
+      const size = Number(body.size) || (await getLogoSize());
+      const { key1: k1, key2: k2 } = await getLogoKeys();
+      const jobs = nvLogoJobs(size, k1, k2);
+      if (!jobs.length) {
+        return NextResponse.json({ error: "No logo artwork at that size." }, { status: 400 });
+      }
+      const ids: string[] = [];
+      for (const j of jobs) {
+        ids.push(await enqueue({ kind: "SETUP", label: j.label, body: j.body, createdBy: who }));
+      }
+      ids.push(
+        await enqueue({
+          kind: "TEST",
+          label: "Proof the stored logo",
+          body: nvLogoProofXml(k1, k2),
+          createdBy: who,
+        })
+      );
+      await recordAudit(
+        {
+          action: "SETTING_CHANGE",
+          targetType: "PRINTER",
+          targetLabel: "Stored logo",
+          detail: `${who || "Someone"} wrote the logo into the printer's memory at ${size} dots, key codes ${k1} and ${k2}.`,
+        },
+        req
+      );
+      return NextResponse.json({ ok: true, jobIds: ids });
     }
 
     /* The bisect. Nothing but text and a cut — if this prints and a receipt
