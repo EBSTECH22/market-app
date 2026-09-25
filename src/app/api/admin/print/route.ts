@@ -28,6 +28,10 @@ import {
   setPrinterHost,
   getPrintMode,
   setPrintMode,
+  getReceiptColumns,
+  setReceiptColumns,
+  getReceiptLogo,
+  setReceiptLogo,
 } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +61,8 @@ export async function GET() {
     const sdpStyle = await getSdpStyle();
     const printerHost = await getPrinterHost();
     const printMode = await getPrintMode();
+    const receiptColumns = await getReceiptColumns();
+    const receiptLogo = await getReceiptLogo();
 
     /* "Online" is the printer having asked for work recently, which is the
        only thing this app can actually know about it. Two minutes is generous
@@ -131,7 +137,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "test") {
-      const id = await enqueue({ kind: "TEST", label: "Test print", body: testXml(who), createdBy: who });
+      const id = await enqueue({ kind: "TEST", label: "Test print", body: testXml(who, new Date(), "America/Chicago", await getReceiptColumns()), createdBy: who });
       return NextResponse.json({ ok: true, jobId: id });
     }
 
@@ -150,7 +156,9 @@ export async function POST(req: NextRequest) {
       });
       if (!sale) return NextResponse.json({ error: "That ticket is gone." }, { status: 404 });
 
-      const [header, footer] = await Promise.all([getReceiptHeader(), getReceiptFooter()]);
+      const [header, footer, cols, logo] = await Promise.all([
+        getReceiptHeader(), getReceiptFooter(), getReceiptColumns(), getReceiptLogo(),
+      ]);
       const id = await enqueue({
         kind: "REPRINT",
         label: `Reprint #${sale.number}`,
@@ -177,7 +185,7 @@ export async function POST(req: NextRequest) {
           },
           /* Marked, always. An unmarked second copy of a receipt is the thing
              a returned-goods scam is built on. */
-          { header, footer, reprint: true }
+          { header, footer, cols, logo, reprint: true }
         ),
       });
       return NextResponse.json({ ok: true, jobId: id });
@@ -208,6 +216,8 @@ export async function PATCH(req: NextRequest) {
     if (body.sdpStyle !== undefined) await setSdpStyle(String(body.sdpStyle));
     if (body.printerHost !== undefined) await setPrinterHost(String(body.printerHost));
     if (body.printMode !== undefined) await setPrintMode(String(body.printMode));
+    if (body.receiptColumns !== undefined) await setReceiptColumns(Number(body.receiptColumns));
+    if (body.receiptLogo !== undefined) await setReceiptLogo(!!body.receiptLogo);
     if (body.deviceId !== undefined) await setPrinterDeviceId(String(body.deviceId));
 
     const key = await getPrinterKey();
@@ -221,6 +231,8 @@ export async function PATCH(req: NextRequest) {
       sdpStyle: await getSdpStyle(),
       printerHost: await getPrinterHost(),
       printMode: await getPrintMode(),
+      receiptColumns: await getReceiptColumns(),
+      receiptLogo: await getReceiptLogo(),
       deviceId: await getPrinterDeviceId(),
     });
   });

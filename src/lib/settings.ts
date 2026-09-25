@@ -256,3 +256,29 @@ export async function getPrintMode(): Promise<"direct" | "collect"> {
 export async function setPrintMode(v: string): Promise<void> {
   await put("printMode", v === "collect" ? "collect" : "direct");
 }
+
+/**
+ * Characters across the receipt.
+ *
+ * 42 on this market's printer. Wrong by even one and every total wraps, so it
+ * is a setting rather than a constant — a replacement printer on a different
+ * paper width should be a number typed in, not a deploy.
+ */
+export async function getReceiptColumns(): Promise<number> {
+  const n = Math.round(Number(await str("receiptColumns", "42")));
+  return Number.isFinite(n) && n >= 24 && n <= 96 ? n : 42;
+}
+
+export async function setReceiptColumns(v: number): Promise<void> {
+  const n = Math.round(Number(v));
+  await put("receiptColumns", String(Number.isFinite(n) && n >= 24 && n <= 96 ? n : 42));
+}
+
+/** Print the logo at the top of every receipt. */
+export async function getReceiptLogo(): Promise<boolean> {
+  return (await str("receiptLogo", "1")) !== "0";
+}
+
+export async function setReceiptLogo(on: boolean): Promise<void> {
+  await put("receiptLogo", on ? "1" : "0");
+}

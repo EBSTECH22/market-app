@@ -31,6 +31,8 @@ type PrintState = {
   deviceId: string;
   printerHost: string;
   printMode: "direct" | "collect";
+  receiptColumns: number;
+  receiptLogo: boolean;
   log: { at: string; what: string }[];
   recent: { id: string; kind: string; label: string; status: string; error: string; createdAt: string; attempts: number }[];
 };
@@ -53,6 +55,7 @@ export default function TillHardware() {
   const [header, setHeader] = useState("");
   const [deviceId, setDeviceId] = useState("local_printer");
   const [host, setHost] = useState("");
+  const [cols, setCols] = useState("42");
   const [footer, setFooter] = useState("");
 
   const loadReaders = useCallback(async () => {
@@ -82,6 +85,7 @@ export default function TillHardware() {
     setPrinterKey(String(d.key || ""));
     setDeviceId(String(d.deviceId || "local_printer"));
     setHost(String(d.printerHost || ""));
+    setCols(String(d.receiptColumns || 42));
     setHeader(String(d.header || ""));
     setFooter(String(d.footer || ""));
   }, []);
@@ -177,12 +181,23 @@ export default function TillHardware() {
     } finally { setBusy(false); }
   };
 
+  const toggleLogo = async () => {
+    setBusy(true);
+    try {
+      await fetch("/api/admin/print", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receiptLogo: !print?.receiptLogo }),
+      });
+      await loadPrint();
+    } finally { setBusy(false); }
+  };
+
   const saveReceipt = async () => {
     setBusy(true);
     try {
       const r = await fetch("/api/admin/print", {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ header, footer }),
+        body: JSON.stringify({ header, footer, receiptColumns: Number(cols) }),
       });
       if (!r.ok) { toast.error("Couldn't save that"); return; }
       toast.success("Receipt wording saved");
@@ -565,7 +580,25 @@ export default function TillHardware() {
         <div className="mb-4">
           <Card title="What the receipt says" subtitle="One line each. Leave them empty for the market's usual wording.">
             <div className="stack g-3">
-              <Field label="Top of the receipt" hint="First line prints big — it's the shop's name.">
+              <div className="row wrap g-3" style={{ alignItems: "flex-end" }}>
+                <Field label="Characters across" hint="42 on this printer. Wrong and every total wraps.">
+                  {(p) => (
+                    <Input {...p} type="number" min="24" max="96" step="1" className="mono"
+                      value={cols} style={{ width: 110 }} onChange={(e) => setCols(e.target.value)} />
+                  )}
+                </Field>
+                <Button size="sm" variant={print?.receiptLogo ? "primary" : "secondary"} icon="image"
+                  disabled={busy} onClick={() => void toggleLogo()}>
+                  {print?.receiptLogo ? "Logo on the receipt" : "No logo"}
+                </Button>
+              </div>
+
+              <Field
+                label="Top of the receipt"
+                hint={print?.receiptLogo
+                  ? "The logo stands in for the first line, so start with the address."
+                  : "First line prints big — it's the shop's name."}
+              >
                 {(p) => <Textarea {...p} rows={3} value={header} onChange={(e) => setHeader(e.target.value)} placeholder={"COMMUNITY HARVEST\n510 N Main St\nNoble, Oklahoma"} />}
               </Field>
               <Field label="Bottom of the receipt">

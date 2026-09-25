@@ -12,10 +12,21 @@
  * monospace, and every line has to be padded to fit by hand.
  */
 
+import { RECEIPT_LOGO_B64, RECEIPT_LOGO_WIDTH, RECEIPT_LOGO_HEIGHT } from "@/lib/receiptlogo";
+
 export const EPOS_NS = "http://www.epson-pos.com/schemas/2011/03/epos-print";
 
-/** 80mm paper, Font A. Narrower paper or Font B would change this. */
-export const COLS = 48;
+/**
+ * How many characters fit across the paper in Font A.
+ *
+ * 42 on the market's TM-H6000V — Epson's sheet lists its receipt as 56/51/42
+ * columns against fonts 9x17, 10x20 and 12x24, and Font A is the 12x24. This
+ * number is the whole layout: every line below is padded out to it by hand, so
+ * setting it too high makes every total wrap onto a line of its own and the
+ * receipt comes out looking like a ransom note. A different printer would want
+ * a different number, which is why it can be overridden per receipt.
+ */
+export const COLS = 42;
 
 export const esc = (s: string): string =>
   String(s)
@@ -47,6 +58,42 @@ export function pad(left: string, right: string, cols = COLS): string {
   return cut + " ".repeat(gap) + r;
 }
 
+/**
+ * A name and an amount, wrapped rather than chopped.
+ *
+ * "Hand-poured soy candle, large lavender" does not fit beside its price on
+ * 42 columns, and cutting it at "large la" makes the paper look broken. The
+ * name runs on instead, indented, with the money on the last line where the
+ * eye expects it.
+ */
+export function wrapLine(left: string, right: string, cols = COLS, indent = "   "): string[] {
+  const room = Math.max(8, cols - right.length - 1);
+  const words = String(left).split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    const limit = lines.length === 0 ? room : room - indent.length;
+    if (next.length <= limit) { cur = next; continue; }
+    if (cur) lines.push(cur);
+    /* A single word longer than the paper — a SKU, or a name typed without
+       spaces. Break it rather than let the printer decide. */
+    cur = w;
+    while (cur.length > room - indent.length) {
+      lines.push(cur.slice(0, room - indent.length));
+      cur = cur.slice(room - indent.length);
+    }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length === 0) lines.push("");
+
+  return lines.map((l, i) =>
+    i === lines.length - 1
+      ? pad(i === 0 ? l : indent + l, right, cols)
+      : (i === 0 ? l : indent + l)
+  );
+}
+
 export function center(s: string, cols = COLS): string {
   const t = String(s).slice(0, cols);
   const left = Math.max(0, Math.floor((cols - t.length) / 2));
@@ -73,6 +120,17 @@ const t = (s: string): string => `<text>${esc(s)}&#10;</text>`;
 export const drawerPulse = (): string => `<pulse drawer="drawer_1" time="pulse_200"/>`;
 
 export const cut = (): string => `<feed unit="60"/><cut type="feed"/>`;
+
+/**
+ * The market's logo across the top of the receipt.
+ *
+ * Sent as raster dots rather than stored in the printer's own memory, so the
+ * logo travels with the receipt and changing it needs no trip to the printer
+ * with a Windows utility.
+ */
+export const logoImage = (): string =>
+  `<image width="${RECEIPT_LOGO_WIDTH}" height="${RECEIPT_LOGO_HEIGHT}" align="center" color="color_1" mode="mono">` +
+  `${RECEIPT_LOGO_B64}</image>`;
 
 /** Wrap finished children in the document element the printer expects. */
 export const eposDoc = (children: string): string =>
@@ -108,6 +166,10 @@ export type ReceiptSale = {
 };
 
 export type ReceiptOptions = {
+  /** Characters across. Defaults to this printer's 42. */
+  cols?: number;
+  /** Print the market's logo above the address. */
+  logo?: boolean;
   /** Shop name and address, from settings, so a rename doesn't need a deploy. */
   header?: string[];
   footer?: string[];
@@ -128,18 +190,23 @@ const DEFAULT_FOOTER = ["THANK YOU!", "homegrown + homemade", "", "ALL SALES FIN
  */
 export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): string {
   const tz = opts.timeZone || "America/Chicago";
+  const cols = Math.max(24, Math.min(96, Math.round(opts.cols || COLS)));
   const when = new Date(sale.createdAt);
   const header = opts.header?.length ? opts.header : DEFAULT_HEADER;
   const footer = opts.footer?.length ? opts.footer : DEFAULT_FOOTER;
+  const line = (l: string, r: string) => t(pad(l, r, cols));
 
   const out: string[] = [];
   out.push(`<text align="center"/>`);
 
-  /* The shop's name is the one thing on the receipt worth the double-size
-     characters — everything else has to fit 48 columns, and doubling the width
-     halves that to 24. */
-  out.push(`<text width="2" height="2">${esc(header[0] || "")}&#10;</text>`);
-  out.push(`<text width="1" height="1"/>`);
+  if (opts.logo !== false) {
+    out.push(logoImage());
+  } else {
+    /* No logo: the shop's name in double-size characters instead, so the top
+       of the receipt is still the top of the receipt. */
+    out.push(`<text width="2" height="2">${esc(header[0] || "")}&#10;</text>`);
+    out.push(`<text width="1" height="1"/>`);
+  }
   for (const h of header.slice(1)) out.push(t(h));
 
   if (opts.reprint) {
@@ -149,54 +216,59 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
 
   out.push(t(""));
   out.push(`<text align="left"/>`);
-  out.push(t(rule()));
-  out.push(t(pad(`RECEIPT #${sale.number}`, when.toLocaleDateString("en-US", { timeZone: tz }))));
+  out.push(t(rule("-", cols)));
+  out.push(line(`RECEIPT #${sale.number}`, when.toLocaleDateString("en-US", { timeZone: tz })));
   out.push(
-    t(
-      pad(
-        sale.employee ? `CLERK: ${sale.employee}` : "",
-        when.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz })
-      )
+    line(
+      sale.employee ? `CLERK: ${sale.employee}` : "",
+      when.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz })
     )
   );
-  out.push(t(rule()));
+  out.push(t(rule("-", cols)));
 
   for (const l of sale.lines) {
     const qty = Math.max(1, Math.round(l.quantity));
     const unit = l.basePriceCents || l.priceCents;
-    out.push(t(pad(`${qty}x ${l.name}`, money(unit * qty))));
+    for (const row of wrapLine(`${qty}x ${l.name}`, money(unit * qty), cols)) out.push(t(row));
     /* A discounted item shows what it normally is, indented under itself —
        people want to see the saving on the paper, not just in the total. */
     if (l.basePriceCents && l.priceCents !== l.basePriceCents) {
-      out.push(t(pad(`   sale price`, money(l.priceCents * qty))));
+      out.push(line(`   sale price`, money(l.priceCents * qty)));
     }
   }
 
-  out.push(t(rule()));
-  out.push(t(pad("SUBTOTAL", money(sale.subtotalCents + (sale.saleSavingsCents || 0)))));
-  if (sale.saleSavingsCents) out.push(t(pad("SALE SAVINGS", `-${money(sale.saleSavingsCents)}`)));
-  if (sale.cardAdjustCents) out.push(t(pad("NON-CASH ADJ", money(sale.cardAdjustCents))));
+  out.push(t(rule("-", cols)));
+  out.push(line("SUBTOTAL", money(sale.subtotalCents + (sale.saleSavingsCents || 0))));
+  if (sale.saleSavingsCents) out.push(line("SALE SAVINGS", `-${money(sale.saleSavingsCents)}`));
+  if (sale.cardAdjustCents) out.push(line("NON-CASH ADJ", money(sale.cardAdjustCents)));
 
   if (sale.foodTaxCents && sale.standardTaxCents) {
-    out.push(t(pad("TAX (GENERAL)", money(sale.standardTaxCents))));
-    out.push(t(pad("TAX (FOOD)", money(sale.foodTaxCents))));
+    out.push(line("TAX (GENERAL)", money(sale.standardTaxCents)));
+    out.push(line("TAX (FOOD)", money(sale.foodTaxCents)));
   } else {
-    out.push(t(pad("TAX", money(sale.taxCents))));
+    out.push(line("TAX", money(sale.taxCents)));
   }
-  if (sale.discountCents) out.push(t(pad("REWARDS", `-${money(sale.discountCents)}`)));
+  if (sale.discountCents) out.push(line("REWARDS", `-${money(sale.discountCents)}`));
 
-  out.push(`<text em="true" width="2" height="2">${esc(pad("TOTAL", money(sale.totalCents), Math.floor(COLS / 2)))}&#10;</text>`);
+  /* Double-size characters are twice as wide, so the total gets half the
+     columns to lay itself out in. */
+  out.push(`<text em="true" width="2" height="2">${esc(pad("TOTAL", money(sale.totalCents), Math.floor(cols / 2)))}&#10;</text>`);
   out.push(`<text em="false" width="1" height="1"/>`);
 
-  if ((sale.cashTenderedCents || 0) > 0) {
-    out.push(t(pad("CASH", money(sale.cashTenderedCents || 0))));
-    out.push(t(pad("CHANGE", money(sale.changeCents || 0))));
+  const tendered = (sale.cashTenderedCents || 0) > 0;
+  if (tendered) {
+    out.push(line("CASH", money(sale.cashTenderedCents || 0)));
+    out.push(line("CHANGE", money(sale.changeCents || 0)));
   }
-  out.push(t(pad(sale.paymentMethod, sale.cardName ? String(sale.cardName) : "")));
+  /* Say how it was paid once. Cash that shows what was handed over and what
+     came back has already said it; a card says which card. */
+  if (!tendered || sale.cardName) {
+    out.push(line(`PAID BY ${sale.paymentMethod}`, sale.cardName ? String(sale.cardName) : ""));
+  }
 
   if (typeof sale.customerPoints === "number") {
     out.push(t(""));
-    out.push(t(center(`REWARDS POINTS: ${sale.customerPoints}`)));
+    out.push(t(center(`REWARDS POINTS: ${sale.customerPoints}`, cols)));
   }
 
   out.push(t(""));
@@ -219,7 +291,7 @@ export const receiptWithDrawerXml = (sale: ReceiptSale, opts: ReceiptOptions = {
   eposDoc(drawerPulse() + receiptBody(sale, opts));
 
 /** Proof of life: prints, then pops the drawer, so one test covers both. */
-export function testXml(who: string, at: Date = new Date(), timeZone = "America/Chicago"): string {
+export function testXml(who: string, at: Date = new Date(), timeZone = "America/Chicago", cols = COLS): string {
   const out: string[] = [];
   out.push(`<text align="center"/>`);
   out.push(`<text width="2" height="2">${esc("TEST")}&#10;</text>`);
@@ -227,12 +299,12 @@ export function testXml(who: string, at: Date = new Date(), timeZone = "America/
   out.push(t("Community Harvest"));
   out.push(t(""));
   out.push(`<text align="left"/>`);
-  out.push(t(rule()));
-  out.push(t(pad("PRINTER", "OK")));
-  out.push(t(pad("DRAWER", "kicking now")));
-  out.push(t(pad("SENT BY", who || "the office")));
-  out.push(t(pad("AT", at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone }))));
-  out.push(t(rule()));
+  out.push(t(rule("-", cols)));
+  out.push(t(pad("PRINTER", "OK", cols)));
+  out.push(t(pad("DRAWER", "kicking now", cols)));
+  out.push(t(pad("SENT BY", who || "the office", cols)));
+  out.push(t(pad("AT", at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone }), cols)));
+  out.push(t(rule("-", cols)));
   out.push(t(""));
   out.push(`<text align="center"/>`);
   out.push(t("If you are reading this, the till"));
