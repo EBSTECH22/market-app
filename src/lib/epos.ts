@@ -269,7 +269,10 @@ export type SdpVersion = "1.00" | "2.00";
 
 export function printRequestXml(
   jobs: QueuedPrint[],
-  timeoutMs = 60000,
+  /* Epson's own sample says 10000 and there is no reason to differ. A value
+     outside what the firmware expects is the kind of thing that makes a
+     printer skip a job without saying why. */
+  timeoutMs = 10000,
   version: SdpVersion = "1.00",
   devid = "local_printer"
 ): string {

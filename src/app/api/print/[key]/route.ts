@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { claim, complete, noteSeen, requeueStale } from "@/lib/printqueue";
+import { claim, complete, noteSeen, requeueStale, peek } from "@/lib/printqueue";
 import { printRequestXml } from "@/lib/epos";
 import { getPrinterKey, getSdpVersion, getPrinterDeviceId, notePrinterEvent, notePrinterResponse, logPrinter } from "@/lib/settings";
 
@@ -57,7 +57,10 @@ const xml = (body: string, status = 200) => {
     headers: {
       "Content-Type": "text/xml; charset=utf-8",
       "Content-Length": String(bytes.byteLength),
-      "Cache-Control": "no-store, no-transform",
+      /* The only header here beyond Epson's two. Its whole job is to tell
+         anything in between not to re-encode the body — a gzipped reply is
+         invisible to a browser and unreadable to this printer. */
+      "Cache-Control": "no-transform",
     },
   });
 };
@@ -113,9 +116,20 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
      seconds; three seconds is a perfectly good wait for a receipt. */
   const jobs = await claim(1);
   if (jobs.length) {
-    const doc = printRequestXml(jobs, 60_000, version, devid);
+    const doc = printRequestXml(jobs, 10_000, version, devid);
     await notePrinterEvent(`was handed ${jobs[0].label}`).catch(() => {});
-    await logPrinter(`handed over ${jobs[0].label} (${Buffer.byteLength(doc, "utf8")} bytes, v${version}, devid ${devid})`).catch(() => {});
+    /* What kind of client is actually asking. The document is right and the
+       printer reads our root tag and not our children, which a correct body
+       does not allow — so the next thing worth knowing is whether it asked for
+       a compressed reply, and what it says it is. */
+    const asked =
+      `ua=${req.headers.get("user-agent") || "?"} ` +
+      `enc=${req.headers.get("accept-encoding") || "none"} ` +
+      `accept=${req.headers.get("accept") || "none"} ` +
+      `ctype=${req.headers.get("content-type") || "none"}`;
+    await logPrinter(
+      `handed over ${jobs[0].label} (${Buffer.byteLength(doc, "utf8")} bytes, v${version}, devid ${devid}) :: ${asked}`
+    ).catch(() => {});
     return xml(doc);
   }
   return xml("");
@@ -130,5 +144,34 @@ export async function POST(req: NextRequest, { params }: { params: { key: string
 export async function GET(req: NextRequest, { params }: { params: { key: string } }) {
   const expected = await getPrinterKey();
   if (!expected || params.key !== expected) return xml("", 404);
+
+  /* ?peek=1 — the exact document the printer would be handed, as plain text,
+     for looking at in a browser.
+     
+     This exists because there are only two things left it can be: what we
+     send, or what happens to it on the way. Opening this on the tablet — the
+     same wifi, the same route, the same host — answers that. Whole document
+     on the screen means the bytes arrive intact and the fault is in what the
+     printer makes of them. Anything garbled or short means it never had a
+     chance. It claims nothing and changes nothing. */
+  if (req.nextUrl.searchParams.get("peek")) {
+    const next = await peek();
+    const body = next
+      ? printRequestXml([next], 10_000, await getSdpVersion(), await getPrinterDeviceId())
+      : "Nothing waiting to print. Queue a test first, then reload this.";
+    const bytes = Buffer.from(body, "utf8");
+    return new NextResponse(bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": String(bytes.byteLength),
+        /* The only header here beyond Epson's two. Its whole job is to tell
+         anything in between not to re-encode the body — a gzipped reply is
+         invisible to a browser and unreadable to this printer. */
+      "Cache-Control": "no-transform",
+      },
+    });
+  }
+
   return xml("");
 }

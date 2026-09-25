@@ -199,3 +199,13 @@ export async function lastSeen(): Promise<Date | null> {
   const d = new Date(row.value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
+
+/** The next job, looked at without taking it. For the peek view only. */
+export async function peek(): Promise<{ id: string; body: string; label: string } | null> {
+  const j = await db.printJob.findFirst({
+    where: { status: { in: ["QUEUED", "SENT"] } },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, body: true, label: true },
+  });
+  return j || null;
+}
