@@ -40,7 +40,8 @@ export async function GET(req: NextRequest) {
 
     if (id) {
       const conv = await db.conversation.findUnique({ where: { id } });
-      if (!conv) return NextResponse.json({ error: "That conversation is gone." }, { status: 404 });
+      /* Private chats between two vendors are theirs, not the office's. */
+      if (!conv || conv.kind === "VENDOR") return NextResponse.json({ error: "That conversation is gone." }, { status: 404 });
       await syncMembers(conv);
       const members = await db.conversationMember.findMany({ where: { conversationId: id } });
       const vendors = await db.vendor.findMany({
@@ -85,7 +86,7 @@ export async function GET(req: NextRequest) {
     }
 
     await syncAllGroups();
-    const convs = await db.conversation.findMany({ orderBy: { lastAt: "desc" } });
+    const convs = await db.conversation.findMany({ where: { kind: { not: "VENDOR" } }, orderBy: { lastAt: "desc" } });
     const out = [];
     for (const c of convs) {
       const [last, unread, memberCount] = await Promise.all([
@@ -139,6 +140,10 @@ export async function POST(req: NextRequest) {
       if (!body) throw new HttpError(400, "Write the message first.");
 
       let conversationId = String(b.conversationId || "");
+      if (conversationId) {
+        const c = await db.conversation.findUnique({ where: { id: conversationId }, select: { kind: true } });
+        if (!c || c.kind === "VENDOR") throw new HttpError(404, "That conversation is gone.");
+      }
       if (!conversationId) {
         const to = b.to || {};
         await ensureStandardConversations();

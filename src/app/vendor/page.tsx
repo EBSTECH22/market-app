@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
+import { VendorMessages } from "@/components/vendor/VendorMessages";
 import { subscribeToPush } from "@/lib/pushclient";
 import { fmtLength, fmtSize, sqFt, bounds, centreOf, type Pt } from "@/lib/floorplan";
 
@@ -125,10 +126,10 @@ const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }
   orders: { label: "Online orders", icon: "receipt", sub: "What people have bought from your page — pack it, send it, hand it over" },
   insights: { label: "What's working", icon: "chart", sub: "What sells, what's stuck, and what's about to run out" },
   inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
-  messages: { label: "Messages", icon: "mail", sub: "From the market office — read them and reply" },
+  messages: { label: "Messages", icon: "message", sub: "The office, the vendor chat, your groups, and other vendors — all in one place" },
   page: { label: "My page", icon: "star", sub: "Your public page, photos, and market feed posts" },
   money: { label: "Money", icon: "dollar", sub: "Balance, rent, card on file, and your full statement" },
-  chat: { label: "Vendor chat", icon: "message", sub: "Every vendor and staff member at the market" },
+  chat: { label: "Messages", icon: "message", sub: "The office, the vendor chat, your groups, and other vendors — all in one place" },
   settings: { label: "Settings", icon: "settings", sub: "Sale alerts and your password" },
 };
 
@@ -144,7 +145,7 @@ const CATEGORY_SUGGESTIONS = [
 ];
 
 const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "orders", "money"];
-const MORE_MOBILE: VendorTab[] = ["messages", "insights", "page", "chat", "settings"];
+const MORE_MOBILE: VendorTab[] = ["messages", "insights", "page", "settings"];
 
 const LEDGER_ICON = (type: string): IconName =>
   type === "SALE" ? "receipt" : type === "PAYOUT" ? "cash" : type === "RENT" ? "store" : "edit";
@@ -308,6 +309,10 @@ export default function VendorDashboard() {
   const [officeConvs, setOfficeConvs] = useState<OfficeConv[]>([]);
   const [officeBanner, setOfficeBanner] = useState<OfficeBanner[]>([]);
   const [officeOpen, setOfficeOpen] = useState("");
+  const [msgUnread, setMsgUnread] = useState(0);
+  const clearOfficeOpen = useCallback(() => setOfficeOpen(""), []);
+  /* The old "Vendor chat" tab lives inside Messages now; old links land there. */
+  useEffect(() => { if (tab === "chat") setTab("messages"); }, [tab, setTab]);
   const [officeThread, setOfficeThread] = useState<{ conversation: { id: string; title: string; kind: string }; messages: OfficeMsg[] } | null>(null);
   const [officeReply, setOfficeReply] = useState("");
   const [officeBusy, setOfficeBusy] = useState(false);
@@ -389,7 +394,6 @@ export default function VendorDashboard() {
   }, []);
   useEffect(() => { loadChat(); loadPosts(); void loadOffice(); }, [loadChat, loadPosts, loadOffice]);
   /* Opening a conversation marks it read, so the list and banner refresh after. */
-  useEffect(() => { if (officeOpen) void loadOfficeThread(officeOpen).then(() => loadOffice()); }, [officeOpen, loadOfficeThread, loadOffice]);
 
   /* Loaded on demand rather than up front — both scan a vendor's whole sales
      history, and most visits to the portal are "did anything sell". */
@@ -485,7 +489,7 @@ export default function VendorDashboard() {
   useEffect(() => {
     load();
   }, [load]);
-  usePulse(() => { load(); loadChat(); loadPosts(); void loadOffice(); if (officeOpen && tab === "messages") void loadOfficeThread(officeOpen); });
+  usePulse(() => { load(); loadChat(); loadPosts(); void loadOffice(); });
 
   const loadInbox = useCallback(async () => {
     try {
@@ -1134,7 +1138,7 @@ export default function VendorDashboard() {
   const onSale = activeItems.filter((it) => (it.salePercent || 0) > 0).length;
   const meta = TAB_META[tab];
   const editing = activeItems.find((it) => it.id === editItem) || null;
-  const navBadge: Partial<Record<VendorTab, number>> = { inbox: needsReply, messages: officeConvs.reduce((n, c) => n + c.unread, 0) };
+  const navBadge: Partial<Record<VendorTab, number>> = { inbox: needsReply, messages: msgUnread };
 
   const go = (t: VendorTab) => { setTab(t); setMoreOpen(false); window.scrollTo({ top: 0 }); };
 
@@ -1248,7 +1252,7 @@ export default function VendorDashboard() {
 
         <div className="sidebar-nav">
           <div className="stack" style={{ gap: 2 }}>
-            {VENDOR_TABS.map((t) => (
+            {VENDOR_TABS.filter((t) => t !== "chat").map((t) => (
               <button
                 key={t}
                 type="button"
@@ -2589,202 +2593,8 @@ export default function VendorDashboard() {
           )}
 
           {/* -------------------------------------------------------- messages */}
-          {tab === "messages" && (
-            <Card
-              title={officeThread && officeOpen ? officeThread.conversation.title : "Messages from the market"}
-              subtitle={officeThread && officeOpen ? undefined : "Messages from the Community Harvest office. Reply right here — in a group conversation, everyone in the group sees replies."}
-              actions={officeOpen ? (
-                <Button size="sm" variant="ghost" icon="arrowLeft" onClick={() => { setOfficeOpen(""); setOfficeThread(null); }}>All messages</Button>
-              ) : (
-                /* Vendors can start a conversation, not just answer one. */
-                <Button
-                  size="sm"
-                  variant="primary"
-                  icon="message"
-                  onClick={async () => {
-                    const r = await fetch("/api/vendor/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start" }) });
-                    const d = await r.json().catch(() => ({}));
-                    if (r.ok && d.conversationId) { setOfficeOpen(d.conversationId); void loadOffice(); }
-                    else toast.error("Couldn't open that", "Try again in a moment.");
-                  }}
-                >
-                  Message the office
-                </Button>
-              )}
-            >
-              {!officeOpen ? (
-                officeConvs.length === 0 ? (
-                  <EmptyState icon="mail" title="No messages yet" body="When the market office writes to you, it shows up here. To ask the office something, tap Message the office." />
-                ) : (
-                  <div className="stack g-2">
-                    {officeConvs.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => setOfficeOpen(c.id)}
-                        style={{
-                          textAlign: "left", width: "100%", padding: "var(--sp-3)", borderRadius: "var(--r-md)",
-                          border: "1px solid var(--border)", background: c.unread ? "var(--accent-soft)" : "var(--surface)",
-                          color: "inherit", cursor: "pointer",
-                        }}
-                      >
-                        <span className="row between g-2" style={{ alignItems: "baseline" }}>
-                          <b className="truncate">{c.title}</b>
-                          {c.unread ? <Badge tone="success">{c.unread} new</Badge> : <span className="t-xs t-muted">{fmtDateTime(c.lastAt)}</span>}
-                        </span>
-                        <span className="t-sm t-muted truncate" style={{ display: "block" }}>{c.lastBody}</span>
-                      </button>
-                    ))}
-                  </div>
-                )
-              ) : !officeThread ? (
-                <span className="t-sm t-muted">Loading…</span>
-              ) : (
-                <div className="stack g-4">
-                  <div
-                    className="stack g-3"
-                    style={{ maxHeight: 460, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-md)", background: "var(--bg-sunken)", padding: "var(--sp-3)" }}
-                  >
-                    {officeThread.messages.map((mg) => (
-                      <div key={mg.id} style={{ textAlign: mg.mine ? "right" : "left" }}>
-                        <div className="t-xs t-muted">{mg.fromOffice ? "📣 " : ""}{mg.mine ? "You" : mg.name} · {fmtDateTime(mg.createdAt)}</div>
-                        <div
-                          className="t-sm"
-                          style={{
-                            display: "inline-block", textAlign: "left", maxWidth: "85%", marginTop: 2,
-                            padding: "var(--sp-2) var(--sp-3)", borderRadius: "var(--r-md)", whiteSpace: "pre-wrap",
-                            border: `1px solid ${mg.fromOffice ? "var(--accent)" : "var(--border)"}`,
-                            background: mg.mine ? "var(--accent-soft)" : mg.fromOffice ? "var(--accent-soft)" : "var(--surface)",
-                          }}
-                        >
-                          {mg.body}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="row g-2">
-                    <Input
-                      className="grow"
-                      placeholder={officeThread.conversation.kind === "DIRECT" ? "Reply to the office…" : "Reply to the group…"}
-                      value={officeReply}
-                      onChange={(e) => setOfficeReply(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (document.getElementById("office-send") as HTMLButtonElement | null)?.click(); } }}
-                    />
-                    <Button
-                      id="office-send"
-                      variant="primary"
-                      icon="message"
-                      loading={officeBusy}
-                      disabled={!officeReply.trim()}
-                      onClick={async () => {
-                        const text = officeReply.trim();
-                        if (!text || officeBusy) return;
-                        setOfficeBusy(true);
-                        try {
-                          const r = await fetch("/api/vendor/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "reply", conversationId: officeOpen, body: text }) });
-                          if (r.ok) { setOfficeReply(""); await loadOfficeThread(officeOpen); }
-                          else toast.error("Didn't send", "Try again in a moment.");
-                        } finally { setOfficeBusy(false); }
-                      }}
-                    >
-                      Send
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </Card>
-          )}
-
-          {/* ------------------------------------------------------------ chat */}
-          {tab === "chat" && (
-            <Card
-              title="Vendor chat"
-              subtitle="Every vendor and staff member can read this — coordinate menus, cover restocks, plan the weekend."
-            >
-              <div className="stack g-4">
-                <div
-                  className="stack g-3"
-                  style={{
-                    maxHeight: 420,
-                    overflowY: "auto",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--r-md)",
-                    background: "var(--bg-sunken)",
-                    padding: "var(--sp-3)",
-                  }}
-                >
-                  {chat.length === 0 ? (
-                    <EmptyState icon="message" title="No messages yet" body="Say hello — everyone at the market reads this." />
-                  ) : (
-                    chat.map((mg) => {
-                      const mine = mg.vendorId === chatMe;
-                      /* The office posting in the board: marked, full width. */
-                      if (mg.vendorId === "MARKET") {
-                        return (
-                          <div key={mg.id}>
-                            <div className="t-xs" style={{ fontWeight: 700 }}>📣 Community Harvest · {fmtTime(mg.createdAt)}</div>
-                            <div
-                              className="t-sm"
-                              style={{
-                                marginTop: 2, padding: "var(--sp-2) var(--sp-3)", borderRadius: "var(--r-md)",
-                                border: "1px solid var(--accent)", background: "var(--accent-soft)", whiteSpace: "pre-wrap",
-                              }}
-                            >
-                              {mg.body}
-                            </div>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={mg.id} style={{ textAlign: mine ? "right" : "left" }}>
-                          <div className="t-xs t-muted">{mg.name} · {fmtTime(mg.createdAt)}</div>
-                          <div
-                            className="t-sm"
-                            style={{
-                              display: "inline-block",
-                              textAlign: "left",
-                              maxWidth: "85%",
-                              marginTop: 2,
-                              padding: "var(--sp-2) var(--sp-3)",
-                              borderRadius: "var(--r-md)",
-                              border: "1px solid var(--border)",
-                              background: mine ? "var(--accent-soft)" : "var(--surface)",
-                              color: mine ? "var(--accent-text)" : "inherit",
-                            }}
-                          >
-                            {mg.body}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <Field label="Message the vendors">
-                  {(p) => (
-                    <div className="row g-2">
-                      <Input
-                        {...p}
-                        className="grow"
-                        placeholder="Message the vendors…"
-                        value={chatBody}
-                        onChange={(e) => setChatBody(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendChat(); } }}
-                      />
-                      <Button
-                        variant="primary"
-                        icon="message"
-                        loading={chatBusy}
-                        disabled={!chatBody.trim()}
-                        onClick={sendChat}
-                      >
-                        Send
-                      </Button>
-                    </div>
-                  )}
-                </Field>
-              </div>
-            </Card>
+          {(tab === "messages" || tab === "chat") && (
+            <VendorMessages focus={officeOpen} onFocused={clearOfficeOpen} onUnread={setMsgUnread} />
           )}
 
           {/* -------------------------------------------------------- settings */}

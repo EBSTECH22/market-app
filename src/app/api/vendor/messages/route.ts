@@ -10,11 +10,20 @@ export const dynamic = "force-dynamic";
 const EPOCH = new Date(0);
 const latest = (...ds: (Date | null | undefined)[]) => new Date(Math.max(...ds.map((d) => (d ? d.getTime() : 0))));
 
-/** What a vendor sees a conversation called. */
-const titleFor = (c: { kind: string; title: string }) =>
+/** What a vendor sees a conversation called. A private chat with another
+    vendor is called by that vendor's name (passed in as `other`). */
+const titleFor = (c: { kind: string; title: string }, other = "") =>
   c.kind === "ALL" ? "Everyone at the market"
     : c.kind === "DIRECT" ? `${OFFICE_NAME} office`
-      : c.title || "Group message";
+      : c.kind === "VENDOR" ? other || "Vendor"
+        : c.title || "Group message";
+
+/** The other vendor in a private vendor-to-vendor chat. */
+async function otherVendorName(conversationId: string, me: string): Promise<string> {
+  const m = await db.conversationMember.findFirst({ where: { conversationId, vendorId: { not: me } }, select: { vendorId: true } });
+  if (!m) return "";
+  return (await db.vendor.findUnique({ where: { id: m.vendorId }, select: { businessName: true } }))?.businessName || "";
+}
 
 /**
  * GET        — this vendor's conversations with the office, unread counts, and
@@ -26,6 +35,16 @@ export async function GET(req: NextRequest) {
     const vendorId = currentVendorId();
     if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
     const id = req.nextUrl.searchParams.get("id");
+
+    /* ?vendors=1 — who this vendor can start a private chat with. */
+    if (req.nextUrl.searchParams.get("vendors") === "1") {
+      const vs = await db.vendor.findMany({
+        where: { active: true, id: { not: vendorId } },
+        select: { id: true, businessName: true, code: true },
+        orderBy: { businessName: "asc" },
+      });
+      return NextResponse.json({ vendors: vs });
+    }
 
     if (id) {
       const member = await db.conversationMember.findUnique({ where: { conversationId_vendorId: { conversationId: id, vendorId } } });
@@ -42,7 +61,7 @@ export async function GET(req: NextRequest) {
       }
       return NextResponse.json({
         me: vendorId,
-        conversation: { id: conv.id, kind: conv.kind, title: titleFor(conv) },
+        conversation: { id: conv.id, kind: conv.kind, title: titleFor(conv, conv.kind === "VENDOR" ? await otherVendorName(conv.id, vendorId) : "") },
         messages: messages.map((m) => ({
           id: m.id,
           fromOffice: m.fromOffice,
@@ -69,9 +88,9 @@ export async function GET(req: NextRequest) {
       ]);
       /* A private conversation with the office is always listed, even before
          anyone has written in it. Empty group ones stay hidden. */
-      if (!last && c.kind !== "DIRECT") continue;
+      if (!last && c.kind !== "DIRECT" && c.kind !== "VENDOR") continue;
       conversations.push({
-        id: c.id, kind: c.kind, title: titleFor(c), lastAt: c.lastAt,
+        id: c.id, kind: c.kind, title: titleFor(c, c.kind === "VENDOR" ? await otherVendorName(c.id, vendorId) : ""), lastAt: c.lastAt,
         lastBody: last ? last.body.slice(0, 120) : "No messages yet", lastFromOffice: last?.fromOffice ?? false, unread,
       });
       /* Only the OFFICE's messages make a banner, and only until seen or dismissed. */
@@ -92,6 +111,21 @@ export async function POST(req: NextRequest) {
     const vendorId = currentVendorId();
     if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
     const b = await req.json().catch(() => ({}));
+
+    /* A private chat with another vendor, made if needed. The office can't see these. */
+    if (b.action === "dm") {
+      const otherId = String(b.vendorId || "");
+      const other = await db.vendor.findFirst({ where: { id: otherId, active: true }, select: { id: true } });
+      if (!other || otherId === vendorId) throw new HttpError(400, "Pick another vendor.");
+      const mine = (await db.conversationMember.findMany({ where: { vendorId }, select: { conversationId: true } })).map((m) => m.conversationId);
+      const theirs = (await db.conversationMember.findMany({ where: { vendorId: otherId, conversationId: { in: mine } }, select: { conversationId: true } })).map((m) => m.conversationId);
+      let dm = await db.conversation.findFirst({ where: { kind: "VENDOR", id: { in: theirs } } });
+      if (!dm) {
+        dm = await db.conversation.create({ data: { kind: "VENDOR", title: "" } });
+        await db.conversationMember.createMany({ data: [{ conversationId: dm.id, vendorId }, { conversationId: dm.id, vendorId: otherId }] });
+      }
+      return NextResponse.json({ ok: true, conversationId: dm.id });
+    }
 
     /* "Message the office": the vendor's private conversation, made if needed. */
     if (b.action === "start") {
@@ -121,9 +155,13 @@ export async function POST(req: NextRequest) {
       await db.conversationMessage.create({ data: { conversationId, vendorId, fromOffice: false, body, createdAt: now } });
       await db.conversation.update({ where: { id: conversationId }, data: { lastAt: now } });
       await db.conversationMember.update({ where: { id: member.id }, data: { lastReadAt: now } });
-      /* Replies tell the office, nobody else — only the office notifies vendors. */
-      const v = await db.vendor.findUnique({ where: { id: vendorId }, select: { businessName: true } });
-      await pushToAdmin(`${v?.businessName || "A vendor"} replied`, body.slice(0, 160)).catch(() => 0);
+      /* Replies tell the office, nobody else — only the office notifies vendors.
+         A private vendor-to-vendor chat doesn't involve the office at all. */
+      const conv = await db.conversation.findUnique({ where: { id: conversationId }, select: { kind: true } });
+      if (conv?.kind !== "VENDOR") {
+        const v = await db.vendor.findUnique({ where: { id: vendorId }, select: { businessName: true } });
+        await pushToAdmin(`${v?.businessName || "A vendor"} replied`, body.slice(0, 160)).catch(() => 0);
+      }
       return NextResponse.json({ ok: true });
     }
 
