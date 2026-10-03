@@ -14,7 +14,7 @@
 import { useMemo } from "react";
 import {
   wallPoints, roomPolygon, bounds, centroid, wallSolids, openingPoints, outwardNormal, offsetPt,
-  outline, centreOf, fmtLength, type Wall, type Space,
+  outline, centreOf, fmtLength, describeSize, rentable, type Wall, type Space,
 } from "@/lib/floorplan";
 
 type Room = {
@@ -22,14 +22,35 @@ type Room = {
   spaces: (Space & { kind: string })[];
 };
 
-const FILL: Record<string, string> = { AVAILABLE: "var(--bg-elevated)", HELD: "var(--warn-soft)", TAKEN: "var(--accent-soft)" };
-const STROKE: Record<string, string> = { AVAILABLE: "var(--border-strong)", HELD: "var(--warn)", TAKEN: "var(--accent)" };
+const SCREEN = {
+  fill: { AVAILABLE: "var(--bg-elevated)", HELD: "var(--warn-soft)", TAKEN: "var(--accent-soft)" } as Record<string, string>,
+  stroke: { AVAILABLE: "var(--border-strong)", HELD: "var(--warn)", TAKEN: "var(--accent)" } as Record<string, string>,
+  wall: "var(--text)", text: "var(--text)", muted: "var(--text-secondary)", room: "var(--text-muted)",
+  window: "var(--info)", opening: "var(--warn)", grid: "var(--border-subtle)",
+  fixture: "var(--bg-sunken)", fixtureStroke: "var(--text-muted)", walk: "var(--info-soft)", walkStroke: "var(--info)",
+};
+/* Paper: fixed light colours, so a dark-mode screen still prints a white map. */
+const PAPER: typeof SCREEN = {
+  fill: { AVAILABLE: "#ffffff", HELD: "#fdf0d5", TAKEN: "#dcefe3" },
+  stroke: { AVAILABLE: "#111111", HELD: "#b7791f", TAKEN: "#2f6b45" },
+  wall: "#111111", text: "#111111", muted: "#555555", room: "#9aa0a6",
+  window: "#2b6cb0", opening: "#b7791f", grid: "#ececec",
+  fixture: "#e5e7eb", fixtureStroke: "#6b7280", walk: "#eef5fb", walkStroke: "#2b6cb0",
+};
 
-export function BuildingView({ rooms, onOpen, showLengths = true }: {
+/** Biggest font that fits `text` across `width` (rough average glyph width). */
+const fit = (text: string, width: number, max: number) => Math.max(2, Math.min(max, (width * 0.92) / Math.max(1, text.length * 0.56)));
+
+export function BuildingView({ rooms, onOpen, showLengths = true, detailed = false, paper = false }: {
   rooms: Room[];
   onOpen?: (id: string) => void;
   showLengths?: boolean;
+  /** Each booth shows who is in it (or OPEN) and its size — the printed map. */
+  detailed?: boolean;
+  /** Fixed light colours for printing. */
+  paper?: boolean;
 }) {
+  const C = paper ? PAPER : SCREEN;
   const drawn = useMemo(() => rooms.filter((r) => r.walls.length >= 3).map((r) => {
     const dx = r.originXIn || 0, dy = r.originYIn || 0;
     const pts = wallPoints(r.walls).map((p) => ({ x: p.x + dx, y: p.y + dy }));
@@ -53,7 +74,7 @@ export function BuildingView({ rooms, onOpen, showLengths = true }: {
     >
       <defs>
         <pattern id="bft" width="12" height="12" patternUnits="userSpaceOnUse">
-          <path d="M12 0 L0 0 0 12" fill="none" stroke="var(--border-subtle)" strokeWidth="0.5" />
+          <path d="M12 0 L0 0 0 12" fill="none" stroke={C.grid} strokeWidth="0.5" />
         </pattern>
       </defs>
 
@@ -77,14 +98,33 @@ export function BuildingView({ rooms, onOpen, showLengths = true }: {
           <g key={s.id} transform={`translate(${dx} ${dy}) rotate(${s.rotationDeg || 0} ${c.x} ${c.y})`} style={{ pointerEvents: "none" }}>
             <polygon
               points={outline({ ...s, rotationDeg: 0 }).map((q) => `${q.x},${q.y}`).join(" ")}
-              fill={walk ? "var(--info-soft)" : fixture ? "var(--bg-sunken)" : FILL[s.status] || FILL.AVAILABLE}
+              fill={walk ? C.walk : fixture ? C.fixture : C.fill[s.status] || C.fill.AVAILABLE}
               opacity={walk ? 0.5 : 1}
-              stroke={walk ? "var(--info)" : fixture ? "var(--text-muted)" : STROKE[s.status] || STROKE.AVAILABLE}
-              strokeWidth={1.2 * u}
+              stroke={walk ? C.walkStroke : fixture ? C.fixtureStroke : C.stroke[s.status] || C.stroke.AVAILABLE}
+              strokeWidth={(detailed && !walk && !fixture ? 1.6 : 1.2) * u}
               strokeDasharray={walk ? `${8 * u} ${5 * u}` : undefined}
             />
-            {s.label && !walk ? (
-              <text x={c.x} y={c.y} fontSize={fs} textAnchor="middle" dominantBaseline="middle" fill="var(--text)">
+            {detailed && !walk && rentable(s.kind) ? (() => {
+              /* Up to three lines: booth number, who's in it (or OPEN), size. */
+              const w = Math.min(s.widthIn, s.depthIn) < 30 ? Math.max(s.widthIn, s.depthIn) : s.widthIn;
+              const who = s.status === "TAKEN" ? (s.vendorName || "Taken") : s.status === "HELD" ? "HELD" : "OPEN";
+              const size = describeSize(s);
+              const lines = [s.label, who, size].filter(Boolean) as string[];
+              const max = Math.min(fs * 1.15, (Math.min(s.widthIn, s.depthIn) || 24) / (lines.length * 1.25));
+              const sizes = lines.map((t) => fit(t, w, max));
+              const lh = Math.max(...sizes) * 1.2;
+              const top = c.y - ((lines.length - 1) * lh) / 2;
+              return lines.map((t, k) => (
+                <text
+                  key={k} x={c.x} y={top + k * lh} fontSize={sizes[k]} textAnchor="middle" dominantBaseline="middle"
+                  fontWeight={t === who ? 700 : 400}
+                  fill={t === "OPEN" ? C.stroke.TAKEN : t === size ? C.muted : C.text}
+                >
+                  {t}
+                </text>
+              ));
+            })() : s.label && !walk ? (
+              <text x={c.x} y={c.y} fontSize={fit(s.label, s.widthIn, fs)} textAnchor="middle" dominantBaseline="middle" fill={C.text}>
                 {s.label}
               </text>
             ) : null}
@@ -104,20 +144,20 @@ export function BuildingView({ rooms, onOpen, showLengths = true }: {
         return (
           <g key={`${room.id}w${i}`}>
             {wallSolids(a, b, openings).map((seg, k) => (
-              <line key={k} x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} stroke="var(--text)" strokeWidth={4 * u} strokeLinecap="square" />
+              <line key={k} x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} stroke={C.wall} strokeWidth={4 * u} strokeLinecap="square" />
             ))}
             {openings.map((o, k) => {
               const p = openingPoints(a, b, o);
               return o.kind === "WINDOW" ? (
-                <line key={`o${k}`} x1={p.from.x} y1={p.from.y} x2={p.to.x} y2={p.to.y} stroke="var(--info)" strokeWidth={2.5 * u} />
+                <line key={`o${k}`} x1={p.from.x} y1={p.from.y} x2={p.to.x} y2={p.to.y} stroke={C.window} strokeWidth={2.5 * u} />
               ) : (
-                <line key={`o${k}`} x1={p.from.x} y1={p.from.y} x2={p.to.x} y2={p.to.y} stroke="var(--warn)" strokeWidth={1.5 * u} strokeDasharray={`${5 * u} ${4 * u}`} />
+                <line key={`o${k}`} x1={p.from.x} y1={p.from.y} x2={p.to.x} y2={p.to.y} stroke={C.opening} strokeWidth={1.5 * u} strokeDasharray={`${5 * u} ${4 * u}`} />
               );
             })}
             {showLengths && len >= 18 ? (
               <text
                 x={labelAt.x} y={labelAt.y} fontSize={fs * 0.9} textAnchor="middle" dominantBaseline="middle"
-                fill="var(--text-secondary)" style={{ pointerEvents: "none" }}
+                fill={C.muted} style={{ pointerEvents: "none" }}
               >
                 {fmtLength(w.lengthIn)}
               </text>
@@ -130,7 +170,7 @@ export function BuildingView({ rooms, onOpen, showLengths = true }: {
         <text
           key={`n${room.id}`}
           x={centre.x} y={centre.y} fontSize={fs * 1.7} fontWeight={700} textAnchor="middle" dominantBaseline="middle"
-          fill="var(--text-muted)" opacity={0.8}
+          fill={C.room} opacity={detailed ? 0.35 : 0.8}
           style={{ cursor: onOpen ? "pointer" : undefined, textTransform: "uppercase", letterSpacing: "0.08em" }}
           onClick={() => onOpen?.(room.id)}
         >

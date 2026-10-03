@@ -521,6 +521,8 @@ export default function FloorPlanPage() {
               </Button>
             ))}
             <Button size="sm" variant="ghost" icon="plus" onClick={() => void addRoom()}>Room</Button>
+            <span className="grow" />
+            <LinkButton size="sm" variant="secondary" icon="print" href="/admin/floorplan/print">Print site map</LinkButton>
           </div>
 
           {planId === BUILDING ? (
