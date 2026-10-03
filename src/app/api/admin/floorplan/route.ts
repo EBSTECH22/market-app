@@ -128,6 +128,8 @@ export async function GET() {
           name: p.name,
           gridIn: p.gridIn,
           notes: p.notes,
+          originXIn: p.originXIn,
+          originYIn: p.originYIn,
           walls,
           gapIn: closureGapIn(walls),
           areaSqFt: roomAreaSqFt(walls),
@@ -251,6 +253,8 @@ export async function PATCH(req: NextRequest) {
       if (body.notes !== undefined) data.notes = String(body.notes).slice(0, 1000);
       if (body.gridIn !== undefined) data.gridIn = Math.max(0, Math.min(24, int(body.gridIn, 3)));
       if (body.walls !== undefined) data.walls = cleanWalls(body.walls) as unknown as object;
+      if (body.originXIn !== undefined) data.originXIn = Math.max(-100000, Math.min(100000, int(body.originXIn, 0)));
+      if (body.originYIn !== undefined) data.originYIn = Math.max(-100000, Math.min(100000, int(body.originYIn, 0)));
       await db.floorPlan.update({ where: { id: String(body.id || "") }, data });
       return NextResponse.json({ ok: true });
     }

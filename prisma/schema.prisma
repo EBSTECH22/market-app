@@ -859,6 +859,10 @@ model FloorPlan {
   notes     String   @default("")
   sortOrder Int      @default(0)
   walls     Json     @default("[]")
+  // Where this room's first corner sits in the whole building, in inches, so
+  // every room can be drawn together on one map.
+  originXIn Int      @default(0)
+  originYIn Int      @default(0)
   spaces    FloorSpace[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

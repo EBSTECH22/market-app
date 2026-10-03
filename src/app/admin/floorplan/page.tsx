@@ -15,6 +15,10 @@ import {
   STATUS_LABEL, KIND_LABEL, KIND_PRESETS, OPENING_LABEL, OPENING_PRESETS, SPACE_KINDS,
   type Wall, type Space, type Opening, type SpaceKind, type Pt,
 } from "@/lib/floorplan";
+import { BuildingView } from "@/components/floorplan/BuildingView";
+
+/* The room switcher's "Whole building" choice. */
+const BUILDING = "__building__";
 
 /**
  * The site map.
@@ -33,7 +37,7 @@ import {
 
 type PlanSpace = Space & { kind: string; contractId: string; notes: string; vendorCode: string };
 type Plan = {
-  id: string; name: string; gridIn: number; notes: string;
+  id: string; name: string; gridIn: number; notes: string; originXIn: number; originYIn: number;
   walls: Wall[]; gapIn: number; areaSqFt: number; spaces: PlanSpace[];
 };
 type ContractRow = {
@@ -184,7 +188,7 @@ export default function FloorPlanPage() {
       const d = await r.json();
       setPlans(d.plans || []);
       setContracts(d.contracts || []);
-      setPlanId((cur) => cur || (d.plans?.[0]?.id ?? ""));
+      setPlanId((cur) => cur || ((d.plans?.length || 0) > 1 ? BUILDING : (d.plans?.[0]?.id ?? "")));
     } catch {
       setErr("No connection.");
     } finally {
@@ -497,6 +501,14 @@ export default function FloorPlanPage() {
         <div className="stack g-4">
           {/* ---- room switcher ---- */}
           <div className="row wrap g-2" style={{ alignItems: "center" }}>
+            <Button
+              size="sm"
+              icon="grid"
+              variant={planId === BUILDING ? "primary" : "secondary"}
+              onClick={() => { setPlanId(BUILDING); setSelected(null); }}
+            >
+              Whole building
+            </Button>
             {plans.map((p) => (
               <Button
                 key={p.id}
@@ -510,6 +522,18 @@ export default function FloorPlanPage() {
             ))}
             <Button size="sm" variant="ghost" icon="plus" onClick={() => void addRoom()}>Room</Button>
           </div>
+
+          {planId === BUILDING ? (
+            <Card
+              flush
+              title="Whole building"
+              subtitle="Every room where it sits, drawn from its measured walls. Tap a room to edit its walls and booths."
+            >
+              <div style={{ background: "var(--bg-sunken)", borderRadius: "var(--r-lg)", padding: "var(--sp-2)" }}>
+                <BuildingView rooms={plans} onOpen={(id) => { setPlanId(id); setSelected(null); }} />
+              </div>
+            </Card>
+          ) : null}
 
           {plan ? (
             <>
@@ -722,6 +746,34 @@ export default function FloorPlanPage() {
                         </button>
                       ))}
                     </span>
+                    <Field label="Place in building" hint="Where this room's first corner sits, from the building's corner">
+                      {() => (
+                        <span className="row g-2">
+                          <Input
+                            key={`x${plan.id}${plan.originXIn}`}
+                            defaultValue={fmtLength(plan.originXIn || 0)}
+                            aria-label="Across"
+                            style={{ width: 92 }}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              if (v === null) { toast.error("Can't read that length", "Try 12'8\" or 152\"."); return; }
+                              if (v !== (plan.originXIn || 0)) void patchPlan({ originXIn: v });
+                            }}
+                          />
+                          <Input
+                            key={`y${plan.id}${plan.originYIn}`}
+                            defaultValue={fmtLength(plan.originYIn || 0)}
+                            aria-label="Down"
+                            style={{ width: 92 }}
+                            onBlur={(e) => {
+                              const v = parseLength(e.target.value);
+                              if (v === null) { toast.error("Can't read that length", "Try 12'8\" or 152\"."); return; }
+                              if (v !== (plan.originYIn || 0)) void patchPlan({ originYIn: v });
+                            }}
+                          />
+                        </span>
+                      )}
+                    </Field>
                     <Field label="Snap to">
                       {(p) => (
                         <Select {...p} value={String(plan.gridIn)} onChange={(e) => void patchPlan({ gridIn: Number(e.target.value) })} style={{ width: 130 }}>

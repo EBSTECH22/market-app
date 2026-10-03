@@ -134,7 +134,9 @@ export type Pt = { x: number; y: number };
  * room that is drawn wrong and believed.
  */
 export function parseLength(raw: string): number | null {
-  const s = String(raw || "").trim().replace(/\s+/g, " ");
+  /* Prime marks too (12′ 8″), which is how lengths are shown back, and the
+     curly quotes a phone keyboard types. */
+  const s = String(raw || "").trim().replace(/[\u2032\u2019\u2018]/g, "'").replace(/[\u2033\u201D\u201C]/g, '"').replace(/\s+/g, " ");
   if (!s) return null;
 
   // 6" — inches only
