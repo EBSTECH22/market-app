@@ -21,6 +21,23 @@ export async function GET(req: NextRequest) {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const id = req.nextUrl.searchParams.get("id");
 
+    /* ?board=1 — the vendors' own chat board, which the office can read and
+       post in. Posts there never notify anyone. */
+    if (req.nextUrl.searchParams.get("board") === "1") {
+      const msgs = (await db.vendorChatMsg.findMany({ orderBy: { createdAt: "desc" }, take: 200 })).reverse();
+      const vs = await db.vendor.findMany({ where: { id: { in: [...new Set(msgs.map((m) => m.vendorId))] } }, select: { id: true, businessName: true } });
+      const vn = new Map<string, string>(vs.map((v) => [v.id, v.businessName] as [string, string]));
+      return NextResponse.json({
+        messages: msgs.map((m) => ({
+          id: m.id,
+          fromOffice: m.vendorId === "MARKET",
+          name: m.vendorId === "MARKET" ? "Community Harvest" : vn.get(m.vendorId) || "Vendor",
+          body: m.body,
+          createdAt: m.createdAt,
+        })),
+      });
+    }
+
     if (id) {
       const conv = await db.conversation.findUnique({ where: { id } });
       if (!conv) return NextResponse.json({ error: "That conversation is gone." }, { status: 404 });
@@ -165,6 +182,15 @@ export async function POST(req: NextRequest) {
         email: b.email !== false,
       });
       return NextResponse.json({ ok: true, conversationId, ...result });
+    }
+
+    /* The office posting in the vendors' own chat board. No notifications —
+       that board stays a board. */
+    if (action === "board-post") {
+      const body = String(b.body || "").trim().slice(0, 1000);
+      if (!body) throw new HttpError(400, "Write something first.");
+      await db.vendorChatMsg.create({ data: { vendorId: "MARKET", body } });
+      return NextResponse.json({ ok: true });
     }
 
     if (action === "tag-create" || action === "tag-rename") {

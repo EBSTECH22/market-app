@@ -2593,11 +2593,28 @@ export default function VendorDashboard() {
             <Card
               title={officeThread && officeOpen ? officeThread.conversation.title : "Messages from the market"}
               subtitle={officeThread && officeOpen ? undefined : "Messages from the Community Harvest office. Reply right here — in a group conversation, everyone in the group sees replies."}
-              actions={officeOpen ? <Button size="sm" variant="ghost" icon="arrowLeft" onClick={() => { setOfficeOpen(""); setOfficeThread(null); }}>All messages</Button> : undefined}
+              actions={officeOpen ? (
+                <Button size="sm" variant="ghost" icon="arrowLeft" onClick={() => { setOfficeOpen(""); setOfficeThread(null); }}>All messages</Button>
+              ) : (
+                /* Vendors can start a conversation, not just answer one. */
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon="message"
+                  onClick={async () => {
+                    const r = await fetch("/api/vendor/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start" }) });
+                    const d = await r.json().catch(() => ({}));
+                    if (r.ok && d.conversationId) { setOfficeOpen(d.conversationId); void loadOffice(); }
+                    else toast.error("Couldn't open that", "Try again in a moment.");
+                  }}
+                >
+                  Message the office
+                </Button>
+              )}
             >
               {!officeOpen ? (
                 officeConvs.length === 0 ? (
-                  <EmptyState icon="mail" title="No messages yet" body="When the market office writes to you, it shows up here." />
+                  <EmptyState icon="mail" title="No messages yet" body="When the market office writes to you, it shows up here. To ask the office something, tap Message the office." />
                 ) : (
                   <div className="stack g-2">
                     {officeConvs.map((c) => (
@@ -2701,6 +2718,23 @@ export default function VendorDashboard() {
                   ) : (
                     chat.map((mg) => {
                       const mine = mg.vendorId === chatMe;
+                      /* The office posting in the board: marked, full width. */
+                      if (mg.vendorId === "MARKET") {
+                        return (
+                          <div key={mg.id}>
+                            <div className="t-xs" style={{ fontWeight: 700 }}>📣 Community Harvest · {fmtTime(mg.createdAt)}</div>
+                            <div
+                              className="t-sm"
+                              style={{
+                                marginTop: 2, padding: "var(--sp-2) var(--sp-3)", borderRadius: "var(--r-md)",
+                                border: "1px solid var(--accent)", background: "var(--accent-soft)", whiteSpace: "pre-wrap",
+                              }}
+                            >
+                              {mg.body}
+                            </div>
+                          </div>
+                        );
+                      }
                       return (
                         <div key={mg.id} style={{ textAlign: mine ? "right" : "left" }}>
                           <div className="t-xs t-muted">{mg.name} · {fmtTime(mg.createdAt)}</div>

@@ -12,7 +12,8 @@ export async function GET() {
   const msgs = (await db.vendorChatMsg.findMany({ orderBy: { createdAt: "desc" }, take: 200 })).reverse();
   const vendors = await db.vendor.findMany({ select: { id: true, businessName: true } });
   const vmap = Object.fromEntries(vendors.map((v) => [v.id, v.businessName]));
-  return NextResponse.json({ me: vendorId, messages: msgs.map((m) => ({ id: m.id, vendorId: m.vendorId, name: vmap[m.vendorId] || "Vendor", body: m.body, createdAt: m.createdAt })) });
+  /* The office posts here as "MARKET". */
+  return NextResponse.json({ me: vendorId, messages: msgs.map((m) => ({ id: m.id, vendorId: m.vendorId, name: m.vendorId === "MARKET" ? "Community Harvest" : vmap[m.vendorId] || "Vendor", body: m.body, createdAt: m.createdAt })) });
 }
 
 export async function POST(req: NextRequest) {

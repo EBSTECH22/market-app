@@ -67,10 +67,12 @@ export async function GET(req: NextRequest) {
         db.conversationMessage.count({ where: { conversationId: c.id, createdAt: { gt: readFrom }, NOT: { vendorId, fromOffice: false } } }),
         db.conversationMessage.findFirst({ where: { conversationId: c.id, fromOffice: true }, orderBy: { createdAt: "desc" } }),
       ]);
-      if (!last) continue;
+      /* A private conversation with the office is always listed, even before
+         anyone has written in it. Empty group ones stay hidden. */
+      if (!last && c.kind !== "DIRECT") continue;
       conversations.push({
         id: c.id, kind: c.kind, title: titleFor(c), lastAt: c.lastAt,
-        lastBody: last.body.slice(0, 120), lastFromOffice: last.fromOffice, unread,
+        lastBody: last ? last.body.slice(0, 120) : "No messages yet", lastFromOffice: last?.fromOffice ?? false, unread,
       });
       /* Only the OFFICE's messages make a banner, and only until seen or dismissed. */
       if (lastOffice && lastOffice.createdAt > latest(m.lastReadAt, m.dismissedAt, m.joinedAt || EPOCH)) {
@@ -90,6 +92,19 @@ export async function POST(req: NextRequest) {
     const vendorId = currentVendorId();
     if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
     const b = await req.json().catch(() => ({}));
+
+    /* "Message the office": the vendor's private conversation, made if needed. */
+    if (b.action === "start") {
+      const mine = await db.conversationMember.findMany({ where: { vendorId }, select: { conversationId: true } });
+      let direct = await db.conversation.findFirst({ where: { kind: "DIRECT", id: { in: mine.map((m) => m.conversationId) } } });
+      if (!direct) {
+        const v = await db.vendor.findUnique({ where: { id: vendorId }, select: { businessName: true } });
+        direct = await db.conversation.create({ data: { kind: "DIRECT", title: v?.businessName || "Vendor" } });
+        await db.conversationMember.create({ data: { conversationId: direct.id, vendorId } });
+      }
+      return NextResponse.json({ ok: true, conversationId: direct.id });
+    }
+
     const conversationId = String(b.conversationId || "");
     const member = await db.conversationMember.findUnique({ where: { conversationId_vendorId: { conversationId, vendorId } } });
     if (!member) throw new HttpError(404, "That conversation isn't yours.");

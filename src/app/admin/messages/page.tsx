@@ -33,6 +33,11 @@ type Thread = {
 
 const KIND_LABEL: Record<string, string> = { ALL: "Everyone", TAG: "Group", DIRECT: "Private", CUSTOM: "Picked vendors" };
 
+/* The vendors' own chat board, shown as a pinned item at the top of the list.
+   The office can read it and post in it; posts there never notify anyone. */
+const BOARD = "__board__";
+type BoardMsg = { id: string; fromOffice: boolean; name: string; body: string; createdAt: string };
+
 /** A Messages link with every number and the text filled in, for this phone. */
 function smsLink(phones: string[], text: string): string {
   const body = encodeURIComponent(text);
@@ -51,6 +56,7 @@ export default function MessagesPage() {
   const [openId, setOpenId] = useState<string>("");
   const [thread, setThread] = useState<Thread | null>(null);
   const [receiptsFor, setReceiptsFor] = useState<string>("");
+  const [board, setBoard] = useState<BoardMsg[] | null>(null);
 
   /* Composer for the open conversation. */
   const [subject, setSubject] = useState("");
@@ -76,6 +82,12 @@ export default function MessagesPage() {
 
   const loadThread = useCallback(async (id: string) => {
     if (!id) { setThread(null); return; }
+    if (id === BOARD) {
+      const r = await fetch("/api/admin/messages?board=1");
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) setBoard(d.messages || []);
+      return;
+    }
     const r = await fetch(`/api/admin/messages?id=${encodeURIComponent(id)}`);
     const d = await r.json().catch(() => ({}));
     if (r.ok) setThread(d as Thread);
@@ -88,9 +100,10 @@ export default function MessagesPage() {
 
   /* Keep the thread scrolled to the newest message. */
   const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [thread?.messages.length]);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [thread?.messages.length, board?.length, openId]);
 
   const open = (id: string) => {
+    if (id !== BOARD) setBoard(null);
     setOpenId(id);
     setSubject(""); setBody(""); setLastText(null); setReceiptsFor("");
   };
@@ -98,6 +111,19 @@ export default function MessagesPage() {
   const sendHere = async () => {
     if (!body.trim() || !openId) return;
     setBusy(true);
+    if (openId === BOARD) {
+      try {
+        const r = await fetch("/api/admin/messages", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "board-post", body: body.trim() }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { toast.error("Didn't post", String(d.error || "")); return; }
+        setBody("");
+        void loadThread(BOARD);
+      } finally { setBusy(false); }
+      return;
+    }
     try {
       const r = await fetch("/api/admin/messages", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -139,6 +165,10 @@ export default function MessagesPage() {
       <div className={`msg-shell${openId ? " has-open" : ""}`}>
         {/* ------------------------------------------------ conversation list */}
         <aside className="msg-list">
+          <button type="button" className={`msg-item msg-board${openId === BOARD ? " on" : ""}`} onClick={() => open(BOARD)}>
+            <b>Vendor chat</b>
+            <span className="t-xs t-muted">The vendors&rsquo; own board · no notifications</span>
+          </button>
           {convs.length === 0 ? (
             <EmptyState icon="message" title="No conversations yet" body="Tap New message to write to everyone, a group, or one vendor." />
           ) : (
@@ -157,7 +187,40 @@ export default function MessagesPage() {
 
         {/* ------------------------------------------------ open conversation */}
         <section className="msg-thread">
-          {!openId || !thread ? (
+          {openId === BOARD ? (
+            <>
+              <header className="msg-head">
+                <button type="button" className="msg-back" onClick={() => setOpenId("")} aria-label="Back to conversations">
+                  <Icon name="arrowLeft" size={18} />
+                </button>
+                <div className="stack" style={{ minWidth: 0 }}>
+                  <b>Vendor chat</b>
+                  <span className="t-xs t-muted">Every vendor reads this. You post as Community Harvest. Nobody gets notified.</span>
+                </div>
+              </header>
+              <div className="msg-body">
+                {!board ? (
+                  <div className="msg-empty"><span className="t-sm">Loading…</span></div>
+                ) : board.length === 0 ? (
+                  <div className="msg-empty"><span className="t-sm">Nobody has posted yet.</span></div>
+                ) : (
+                  board.map((m) => (
+                    <div key={m.id} className={`msg-row${m.fromOffice ? " mine" : ""}`}>
+                      <div className="t-xs t-muted">{m.fromOffice ? "You (Community Harvest)" : m.name} · {fmtDateTime(m.createdAt)}</div>
+                      <div className="msg-bubble">{m.body}</div>
+                    </div>
+                  ))
+                )}
+                <div ref={endRef} />
+              </div>
+              <footer className="msg-compose">
+                <div className="row g-2" style={{ alignItems: "flex-end" }}>
+                  <Textarea className="grow" rows={2} maxLength={1000} value={body} placeholder="Post in vendor chat…" onChange={(e) => setBody(e.target.value)} />
+                  <Button variant="primary" icon="message" loading={busy} disabled={busy || !body.trim()} onClick={() => void sendHere()}>Post</Button>
+                </div>
+              </footer>
+            </>
+          ) : !openId || !thread ? (
             <div className="msg-empty">
               <Icon name="message" size={36} />
               <b>Pick a conversation, or start a new one.</b>
@@ -444,22 +507,23 @@ function Groups({ tags, vendors, onClose, onChanged, confirm }: {
 
 const CSS = `
 .msg-shell { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px; height: calc(100dvh - 140px); min-height: 480px; }
-.msg-list { overflow-y: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.msg-list { min-height: 0; overflow-y: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .msg-item { width: 100%; display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; text-align: left; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: var(--text); cursor: pointer; }
 .msg-item:hover { background: var(--surface-hover); }
 .msg-item.on { background: var(--accent-soft); }
 .msg-unread { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
-.msg-thread { min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.msg-thread { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .msg-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
 .msg-back { display: none; border: 0; background: none; color: var(--text); padding: 4px; }
-.msg-body { flex: 1 1 auto; overflow-y: auto; padding: 14px; background: var(--bg-sunken); display: flex; flex-direction: column; gap: 12px; }
+.msg-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; background: var(--bg-sunken); display: flex; flex-direction: column; gap: 12px; }
 .msg-row { max-width: 78%; display: flex; flex-direction: column; gap: 3px; align-self: flex-start; }
 .msg-row.mine { align-self: flex-end; align-items: flex-end; }
 .msg-bubble { padding: 9px 12px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); white-space: pre-wrap; word-break: break-word; font-size: var(--fs-md); }
 .msg-row.mine .msg-bubble { background: var(--accent); border-color: var(--accent); color: #fff; }
 .msg-receipt { border: 0; background: none; padding: 0; font-size: var(--fs-xs); color: var(--text-secondary); text-decoration: underline; cursor: pointer; }
 .msg-receipts { font-size: var(--fs-xs); color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; max-width: 100%; }
-.msg-compose { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
+.msg-compose { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); background: var(--surface); }
+.msg-board { background: var(--bg-sunken); }
 .msg-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); padding: 24px; text-align: center; }
 .msg-pick { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
 @media (max-width: 820px) {
