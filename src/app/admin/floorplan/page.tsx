@@ -143,6 +143,8 @@ export default function FloorPlanPage() {
 
   const [plans, setPlans] = useState<Plan[]>([]);
   const [contracts, setContracts] = useState<ContractRow[]>([]);
+  const [allVendors, setAllVendors] = useState<{ id: string; code: string; businessName: string; rentFree?: boolean }[]>([]);
+  const [assignQ, setAssignQ] = useState("");
   const [planId, setPlanId] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -188,6 +190,7 @@ export default function FloorPlanPage() {
       const d = await r.json();
       setPlans(d.plans || []);
       setContracts(d.contracts || []);
+      setAllVendors(d.vendors || []);
       setPlanId((cur) => cur || ((d.plans?.length || 0) > 1 ? BUILDING : (d.plans?.[0]?.id ?? "")));
     } catch {
       setErr("No connection.");
@@ -1432,12 +1435,15 @@ export default function FloorPlanPage() {
         />
       ) : null}
 
-      <Modal open={!!assignFor} onClose={() => setAssignFor(null)} title="Who's in this booth?" width="sm">
+      <Modal open={!!assignFor} onClose={() => { setAssignFor(null); setAssignQ(""); }} title="Who's in this booth?" width="sm">
         <div className="stack g-2">
-          {contracts.length === 0 ? (
-            <EmptyState icon="store" title="No signed agreements" body="Once an agreement is signed by both sides the vendor turns up here." />
-          ) : (
-            contracts.map((c) => (
+          <Input value={assignQ} placeholder="Find a vendor" aria-label="Find a vendor" onChange={(e) => setAssignQ(e.target.value)} />
+          {contracts.length === 0 && allVendors.length === 0 ? (
+            <EmptyState icon="store" title="No vendors yet" body="Add a vendor first, then put them in a booth." />
+          ) : null}
+          {contracts.length ? <b className="t-xs t-muted" style={{ textTransform: "uppercase", letterSpacing: ".05em" }}>Signed agreements</b> : null}
+          {(
+            contracts.filter((c) => !assignQ.trim() || `${c.vendorName} ${c.vendorCode}`.toLowerCase().includes(assignQ.trim().toLowerCase())).map((c) => (
               <button
                 key={c.id}
                 type="button"
@@ -1460,6 +1466,41 @@ export default function FloorPlanPage() {
               </button>
             ))
           )}
+          {/* Vendors with no signed agreement — rent-free vendors, mostly,
+              who have nothing to sign. */}
+          {(() => {
+            const withAgreement = new Set(contracts.map((c) => c.vendorId));
+            const q = assignQ.trim().toLowerCase();
+            const rest = allVendors
+              .filter((v) => !withAgreement.has(v.id))
+              .filter((v) => !q || `${v.businessName} ${v.code}`.toLowerCase().includes(q))
+              .sort((a, b) => Number(!!b.rentFree) - Number(!!a.rentFree) || a.businessName.localeCompare(b.businessName));
+            if (!rest.length) return null;
+            return (
+              <>
+                <b className="t-xs t-muted" style={{ textTransform: "uppercase", letterSpacing: ".05em", marginTop: 6 }}>Other vendors</b>
+                {rest.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className="nav-item"
+                    style={{ minHeight: 48 }}
+                    onClick={async () => {
+                      const id = assignFor;
+                      setAssignFor(null); setAssignQ("");
+                      if (id) await patchSpace(id, { vendorId: v.id, contractId: "" }, false);
+                    }}
+                  >
+                    <Icon name="store" size={16} />
+                    <span className="stack g-1 grow" style={{ minWidth: 0, textAlign: "left" }}>
+                      <span className="truncate">{v.businessName}</span>
+                      <span className="t-xs t-muted truncate">{v.code} · {v.rentFree ? "Rent free" : "No signed agreement"}</span>
+                    </span>
+                  </button>
+                ))}
+              </>
+            );
+          })()}
         </div>
       </Modal>
     </main>

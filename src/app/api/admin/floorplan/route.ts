@@ -100,7 +100,7 @@ export async function GET() {
 
     const vendors = await db.vendor.findMany({
       where: { active: true },
-      select: { id: true, code: true, businessName: true },
+      select: { id: true, code: true, businessName: true, rentFree: true },
       orderBy: { businessName: "asc" },
     });
     const nameOf = new Map<string, { code: string; businessName: string }>(
