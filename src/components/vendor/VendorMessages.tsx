@@ -3,10 +3,10 @@
 /**
  * Every conversation a vendor has, in one texting-style screen:
  *
- *   Vendor chat          the whole market's board (no notifications)
+ *   Vendor chat          the whole market's board
  *   Community Harvest    their private line to the office
  *   Everyone / groups    messages the office sent to everyone or a group
- *   Other vendors        private chats with another vendor (the office can't see these)
+ *   Other vendors        one-on-one chats with another vendor (the office can read these)
  *
  * List on the left, the open conversation on the right; on a phone the list
  * and the conversation take turns. The reply box is always at the bottom.
@@ -21,7 +21,7 @@ type Msg = { id: string; fromOffice: boolean; mine: boolean; name: string; body:
 type BoardMsg = { id: string; vendorId: string; name: string; body: string; createdAt: string };
 
 const BOARD = "__board__";
-const KIND: Record<string, string> = { ALL: "From the office · everyone", TAG: "From the office · group", DIRECT: "Private · office", CUSTOM: "From the office · group", VENDOR: "Private · vendor" };
+const KIND: Record<string, string> = { ALL: "From the office · everyone", TAG: "From the office · group", DIRECT: "Private · office", CUSTOM: "From the office · group", VENDOR: "Vendor to vendor · the office can read this" };
 
 export function VendorMessages({ focus, onFocused, onUnread }: {
   /** A conversation to open (from the Home banner's Reply button). */
@@ -112,7 +112,7 @@ export function VendorMessages({ focus, onFocused, onUnread }: {
     ? board.map((m) => ({ id: m.id, fromOffice: m.vendorId === "MARKET", mine: m.vendorId === me, name: m.name, body: m.body, createdAt: m.createdAt }))
     : thread?.messages || [];
   const title = openId === BOARD ? "Vendor chat" : thread?.conversation.title || "";
-  const sub = openId === BOARD ? "Everyone at the market reads this. Nobody gets notified." : thread ? KIND[thread.conversation.kind] || "" : "";
+  const sub = openId === BOARD ? "Everyone at the market reads this." : thread ? KIND[thread.conversation.kind] || "" : "";
 
   return (
     <div className={`vm-shell${openId ? " has-open" : ""}`}>
@@ -215,7 +215,7 @@ function NewChat({ onClose, onOffice, onVendor }: { onClose: () => void; onOffic
       <div className="stack g-3">
         <Button variant="primary" block icon="mail" onClick={onOffice}>Message the Community Harvest office</Button>
         <div className="stack g-2">
-          <b className="t-sm">Or a private message to another vendor</b>
+          <b className="t-sm">Or message another vendor</b>
           <SearchInput value={q} onValueChange={setQ} placeholder="Find a vendor" aria-label="Find a vendor" />
           <div className="stack g-1" style={{ maxHeight: 300, overflowY: "auto" }}>
             {vendors === null ? (
@@ -230,7 +230,7 @@ function NewChat({ onClose, onOffice, onVendor }: { onClose: () => void; onOffic
               ))
             )}
           </div>
-          <span className="t-xs t-muted">Private messages between vendors are only seen by the two of you.</span>
+          <span className="t-xs t-muted">Only the two of you get it. The market office can also read vendor-to-vendor chats.</span>
         </div>
       </div>
     </Modal>

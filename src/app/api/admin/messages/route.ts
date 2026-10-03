@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { runRoute, HttpError } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { currentAuditActor } from "@/lib/audit";
+import { pushToVendors } from "@/lib/push";
+import { afterResponse } from "@/lib/after";
 import { syncAllGroups, syncMembers, sendOfficeMessage, ensureStandardConversations, toE164 } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +12,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const EPOCH = new Date(0);
+
+function pairTitle(names: string[]): string {
+  return [...names].sort((a, b) => a.localeCompare(b)).join(" & ") || "Vendors";
+}
 
 /**
  * GET            — every conversation, the groups, and the vendor list.
@@ -40,8 +46,7 @@ export async function GET(req: NextRequest) {
 
     if (id) {
       const conv = await db.conversation.findUnique({ where: { id } });
-      /* Private chats between two vendors are theirs, not the office's. */
-      if (!conv || conv.kind === "VENDOR") return NextResponse.json({ error: "That conversation is gone." }, { status: 404 });
+      if (!conv) return NextResponse.json({ error: "That conversation is gone." }, { status: 404 });
       await syncMembers(conv);
       const members = await db.conversationMember.findMany({ where: { conversationId: id } });
       const vendors = await db.vendor.findMany({
@@ -56,7 +61,7 @@ export async function GET(req: NextRequest) {
       })).reverse();
       /* Only when there's something new. Every write tells all open screens to
          reload, so writing on every look would make them reload forever. */
-      if (!conv.officeReadAt || conv.lastAt > conv.officeReadAt) {
+      if (conv.kind !== "VENDOR" && (!conv.officeReadAt || conv.lastAt > conv.officeReadAt)) {
         await db.conversation.update({ where: { id }, data: { officeReadAt: new Date() } });
       }
 
@@ -69,7 +74,7 @@ export async function GET(req: NextRequest) {
       }
 
       return NextResponse.json({
-        conversation: { id: conv.id, kind: conv.kind, title: conv.title, tagId: conv.tagId },
+        conversation: { id: conv.id, kind: conv.kind, title: conv.kind === "VENDOR" ? pairTitle(members.map((m) => vname.get(m.vendorId) || "Vendor")) : conv.title, tagId: conv.tagId },
         members: members
           .map((m) => ({ vendorId: m.vendorId, name: vname.get(m.vendorId) || "Vendor", joinedAt: m.joinedAt, lastReadAt: m.lastReadAt }))
           .sort((a, b) => a.name.localeCompare(b.name)),
@@ -86,14 +91,35 @@ export async function GET(req: NextRequest) {
     }
 
     await syncAllGroups();
-    const convs = await db.conversation.findMany({ where: { kind: { not: "VENDOR" } }, orderBy: { lastAt: "desc" } });
+    const convs = await db.conversation.findMany({ orderBy: { lastAt: "desc" } });
+    /* Vendor-to-vendor chats: the office can read them. Names for their titles. */
+    const pairIds = convs.filter((c) => c.kind === "VENDOR").map((c) => c.id);
+    const pairMembers = pairIds.length ? await db.conversationMember.findMany({ where: { conversationId: { in: pairIds } } }) : [];
+    const pairVendors = pairMembers.length
+      ? await db.vendor.findMany({ where: { id: { in: [...new Set(pairMembers.map((m) => m.vendorId))] } }, select: { id: true, businessName: true } })
+      : [];
+    const pairName = new Map<string, string>(pairVendors.map((v) => [v.id, v.businessName] as [string, string]));
     const out = [];
     for (const c of convs) {
+      if (c.kind === "VENDOR") {
+        /* An empty DM (someone opened it and never wrote) isn't worth listing. */
+        const last = await db.conversationMessage.findFirst({ where: { conversationId: c.id }, orderBy: { createdAt: "desc" } });
+        if (!last) continue;
+        const names = pairMembers.filter((m) => m.conversationId === c.id).map((m) => pairName.get(m.vendorId) || "Vendor");
+        out.push({
+          id: c.id, kind: c.kind, title: pairTitle(names), tagId: c.tagId, lastAt: c.lastAt,
+          lastBody: `${pairName.get(last.vendorId) || "Vendor"}: ${last.body.slice(0, 110)}`, lastFromOffice: false,
+          unread: 0, memberCount: names.length, hasMessages: true,
+        });
+        continue;
+      }
       const [last, unread, memberCount] = await Promise.all([
         db.conversationMessage.findFirst({ where: { conversationId: c.id }, orderBy: { createdAt: "desc" } }),
         db.conversationMessage.count({ where: { conversationId: c.id, fromOffice: false, createdAt: { gt: c.officeReadAt || EPOCH } } }),
         db.conversationMember.count({ where: { conversationId: c.id } }),
       ]);
+      /* A picked-vendors chat that was opened but never written in. */
+      if (!last && c.kind === "CUSTOM") continue;
       out.push({
         id: c.id, kind: c.kind, title: c.title, tagId: c.tagId, lastAt: c.lastAt,
         lastBody: last ? last.body.slice(0, 120) : "", lastFromOffice: last?.fromOffice ?? false,
@@ -128,11 +154,63 @@ export async function GET(req: NextRequest) {
  * POST { action: "tag-create", name } | { action: "tag-rename", tagId, name } | { action: "tag-delete", tagId }
  * POST { action: "tag-toggle", tagId, vendorId, on }
  */
+
+/** Who a new conversation is with → its id. Everyone and each group already
+    have one; one vendor reuses their private line; several get a new group. */
+async function resolveTo(raw: unknown): Promise<string> {
+  const to = (raw || {}) as { kind?: string; tagId?: string; vendorIds?: unknown };
+  await ensureStandardConversations();
+  if (to.kind === "ALL") {
+    return (await db.conversation.findFirst({ where: { kind: "ALL" } }))!.id;
+  } else if (to.kind === "TAG") {
+    const c = await db.conversation.findFirst({ where: { kind: "TAG", tagId: String(to.tagId || "") } });
+    if (!c) throw new HttpError(400, "That group doesn't exist any more.");
+    return c.id;
+  } else if (to.kind === "VENDORS") {
+    const ids = [...new Set<string>((Array.isArray(to.vendorIds) ? to.vendorIds : []).map(String))];
+    const vendors = await db.vendor.findMany({ where: { id: { in: ids }, active: true }, select: { id: true, businessName: true } });
+    if (!vendors.length) throw new HttpError(400, "Pick at least one vendor.");
+    if (vendors.length === 1) {
+      /* One vendor: their private conversation with the office, reused. */
+      const mine = await db.conversationMember.findMany({ where: { vendorId: vendors[0].id }, select: { conversationId: true } });
+      const direct = await db.conversation.findFirst({ where: { kind: "DIRECT", id: { in: mine.map((m) => m.conversationId) } } });
+      if (direct) return direct.id;
+      else {
+        const c = await db.conversation.create({ data: { kind: "DIRECT", title: vendors[0].businessName } });
+        await db.conversationMember.create({ data: { conversationId: c.id, vendorId: vendors[0].id } });
+        return c.id;
+      }
+    } else {
+      /* The same set of vendors again reuses their conversation. */
+      const want = vendors.map((v) => v.id).sort().join(",");
+      const customs = await db.conversation.findMany({ where: { kind: "CUSTOM" }, select: { id: true } });
+      if (customs.length) {
+        const mem = await db.conversationMember.findMany({ where: { conversationId: { in: customs.map((c) => c.id) } }, select: { conversationId: true, vendorId: true } });
+        for (const c of customs) {
+          if (mem.filter((m) => m.conversationId === c.id).map((m) => m.vendorId).sort().join(",") === want) return c.id;
+        }
+      }
+      const names = vendors.map((v) => v.businessName);
+      const title = names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} + ${names.length - 2} more`;
+      const c = await db.conversation.create({ data: { kind: "CUSTOM", title: title.slice(0, 80) } });
+      await db.conversationMember.createMany({ data: vendors.map((v) => ({ conversationId: c.id, vendorId: v.id })), skipDuplicates: true });
+      return c.id;
+    }
+  }
+  throw new HttpError(400, "Choose who it goes to.");
+}
+
 export async function POST(req: NextRequest) {
   return runRoute("admin/messages POST", async () => {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const b = await req.json().catch(() => ({}));
     const action = String(b.action || "");
+
+    /* Open (or make) a conversation without sending anything yet — the New
+       button, so the message is written in the normal chat box. */
+    if (action === "open") {
+      return NextResponse.json({ ok: true, conversationId: await resolveTo(b.to) });
+    }
 
     if (action === "send") {
       const body = String(b.body || "").trim().slice(0, 2000);
@@ -143,40 +221,8 @@ export async function POST(req: NextRequest) {
       if (conversationId) {
         const c = await db.conversation.findUnique({ where: { id: conversationId }, select: { kind: true } });
         if (!c || c.kind === "VENDOR") throw new HttpError(404, "That conversation is gone.");
-      }
-      if (!conversationId) {
-        const to = b.to || {};
-        await ensureStandardConversations();
-        if (to.kind === "ALL") {
-          conversationId = (await db.conversation.findFirst({ where: { kind: "ALL" } }))!.id;
-        } else if (to.kind === "TAG") {
-          const c = await db.conversation.findFirst({ where: { kind: "TAG", tagId: String(to.tagId || "") } });
-          if (!c) throw new HttpError(400, "That group doesn't exist any more.");
-          conversationId = c.id;
-        } else if (to.kind === "VENDORS") {
-          const ids = [...new Set<string>((Array.isArray(to.vendorIds) ? to.vendorIds : []).map(String))];
-          const vendors = await db.vendor.findMany({ where: { id: { in: ids }, active: true }, select: { id: true, businessName: true } });
-          if (!vendors.length) throw new HttpError(400, "Pick at least one vendor.");
-          if (vendors.length === 1) {
-            /* One vendor: their private conversation with the office, reused. */
-            const mine = await db.conversationMember.findMany({ where: { vendorId: vendors[0].id }, select: { conversationId: true } });
-            const direct = await db.conversation.findFirst({ where: { kind: "DIRECT", id: { in: mine.map((m) => m.conversationId) } } });
-            if (direct) conversationId = direct.id;
-            else {
-              const c = await db.conversation.create({ data: { kind: "DIRECT", title: vendors[0].businessName } });
-              await db.conversationMember.create({ data: { conversationId: c.id, vendorId: vendors[0].id } });
-              conversationId = c.id;
-            }
-          } else {
-            const names = vendors.map((v) => v.businessName);
-            const title = names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} + ${names.length - 2} more`;
-            const c = await db.conversation.create({ data: { kind: "CUSTOM", title: title.slice(0, 80) } });
-            await db.conversationMember.createMany({ data: vendors.map((v) => ({ conversationId: c.id, vendorId: v.id })), skipDuplicates: true });
-            conversationId = c.id;
-          }
-        } else {
-          throw new HttpError(400, "Choose who it goes to.");
-        }
+      } else {
+        conversationId = await resolveTo(b.to);
       }
 
       const actor = await currentAuditActor();
@@ -189,12 +235,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, conversationId, ...result });
     }
 
-    /* The office posting in the vendors' own chat board. No notifications —
-       that board stays a board. */
+    /* The office posting in the vendors' chat board. Every vendor is notified. */
     if (action === "board-post") {
       const body = String(b.body || "").trim().slice(0, 1000);
       if (!body) throw new HttpError(400, "Write something first.");
       await db.vendorChatMsg.create({ data: { vendorId: "MARKET", body } });
+      const everyone = await db.vendor.findMany({ where: { active: true }, select: { id: true } });
+      await afterResponse(pushToVendors(everyone.map((v) => v.id), "Vendor chat · Community Harvest", body.slice(0, 180), { url: "/vendor#messages", tag: "board" }));
       return NextResponse.json({ ok: true });
     }
 

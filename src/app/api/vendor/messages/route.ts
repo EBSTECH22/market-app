@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { runRoute, HttpError } from "@/lib/handler";
-import { pushToAdmin } from "@/lib/push";
+import { pushToAdmin, pushToVendors } from "@/lib/push";
+import { afterResponse } from "@/lib/after";
 import { syncAllGroups, OFFICE_NAME } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest) {
     if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
     const b = await req.json().catch(() => ({}));
 
-    /* A private chat with another vendor, made if needed. The office can't see these. */
+    /* A one-on-one chat with another vendor, made if needed. The office can read these. */
     if (b.action === "dm") {
       const otherId = String(b.vendorId || "");
       const other = await db.vendor.findFirst({ where: { id: otherId, active: true }, select: { id: true } });
@@ -155,13 +156,21 @@ export async function POST(req: NextRequest) {
       await db.conversationMessage.create({ data: { conversationId, vendorId, fromOffice: false, body, createdAt: now } });
       await db.conversation.update({ where: { id: conversationId }, data: { lastAt: now } });
       await db.conversationMember.update({ where: { id: member.id }, data: { lastReadAt: now } });
-      /* Replies tell the office, nobody else — only the office notifies vendors.
-         A private vendor-to-vendor chat doesn't involve the office at all. */
-      const conv = await db.conversation.findUnique({ where: { id: conversationId }, select: { kind: true } });
-      if (conv?.kind !== "VENDOR") {
-        const v = await db.vendor.findUnique({ where: { id: vendorId }, select: { businessName: true } });
-        await pushToAdmin(`${v?.businessName || "A vendor"} replied`, body.slice(0, 160)).catch(() => 0);
-      }
+      /* Everyone else in the conversation gets a notification: the other
+         vendors in it, and the office — except in a vendor-to-vendor chat,
+         which the office can read but isn't part of. */
+      const [conv, v, others] = await Promise.all([
+        db.conversation.findUnique({ where: { id: conversationId }, select: { kind: true, title: true } }),
+        db.vendor.findUnique({ where: { id: vendorId }, select: { businessName: true } }),
+        db.conversationMember.findMany({ where: { conversationId, vendorId: { not: vendorId } }, select: { vendorId: true } }),
+      ]);
+      const who = v?.businessName || "A vendor";
+      const group = conv?.kind === "VENDOR" || conv?.kind === "DIRECT" ? who : `${who} · ${titleFor(conv || { kind: "", title: "" })}`;
+      const jobs: Promise<unknown>[] = [
+        pushToVendors(others.map((m) => m.vendorId), group, body.slice(0, 180), { url: "/vendor#messages", tag: conversationId }),
+      ];
+      if (conv?.kind !== "VENDOR") jobs.push(pushToAdmin(group, body.slice(0, 180), { url: "/admin/messages", tag: conversationId }));
+      await afterResponse(Promise.all(jobs));
       return NextResponse.json({ ok: true });
     }
 

@@ -1,25 +1,26 @@
 "use client";
 
 /**
- * The office's messages to vendors, laid out like a texting app.
+ * The office's messages, as one texting app — the same screen vendors have.
  *
- * Left: every conversation — Everyone, each group (tag), hand-picked groups
- * and one-to-one chats — with unread counts for vendor replies. Right: the open
- * conversation, read receipts on every office message, and the reply box.
+ *   Vendor chat          the whole market's board
+ *   Everyone / groups    the office to everyone, a group, or picked vendors
+ *   Each vendor          the office's private line with them
+ *   Between vendors      vendor-to-vendor chats (read only for the office)
  *
- * Only the office's messages notify vendors (app notification, email, and a
- * Home banner they can dismiss). Group texts go from the owner's own phone.
+ * Every message notifies the people it's for. Email is an extra, per message.
+ * Group texts go from the owner's own phone.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Button, LinkButton, Input, Textarea, Checkbox, Note, Badge, Modal, Segmented,
+  Button, LinkButton, Input, Checkbox, Note, Modal, Segmented,
   SearchInput, EmptyState, Icon, useToast, useDialog,
 } from "@/components/ui";
 import { fmtDateTime } from "@/lib/format";
 import { usePulse } from "@/lib/usePulse";
 
 type Conv = {
-  id: string; kind: "ALL" | "TAG" | "DIRECT" | "CUSTOM"; title: string; tagId: string; lastAt: string;
+  id: string; kind: "ALL" | "TAG" | "DIRECT" | "CUSTOM" | "VENDOR"; title: string; tagId: string; lastAt: string;
   lastBody: string; lastFromOffice: boolean; unread: number; memberCount: number; hasMessages: boolean;
 };
 type Tag = { id: string; name: string; count: number };
@@ -30,13 +31,11 @@ type Thread = {
   messages: { id: string; fromOffice: boolean; vendorId: string; name: string; body: string; createdAt: string }[];
   phones: string[];
 };
-
-const KIND_LABEL: Record<string, string> = { ALL: "Everyone", TAG: "Group", DIRECT: "Private", CUSTOM: "Picked vendors" };
-
-/* The vendors' own chat board, shown as a pinned item at the top of the list.
-   The office can read it and post in it; posts there never notify anyone. */
-const BOARD = "__board__";
 type BoardMsg = { id: string; fromOffice: boolean; name: string; body: string; createdAt: string };
+
+const KIND_LABEL: Record<string, string> = { ALL: "Everyone", TAG: "Group", DIRECT: "Private", CUSTOM: "Picked vendors", VENDOR: "Between vendors · read only" };
+const BOARD = "__board__";
+const SEEN_KEY = "ch_admin_board_seen";
 
 /** A Messages link with every number and the text filled in, for this phone. */
 function smsLink(phones: string[], text: string): string {
@@ -52,89 +51,82 @@ export default function MessagesPage() {
   const [convs, setConvs] = useState<Conv[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [board, setBoard] = useState<BoardMsg[]>([]);
   const [err, setErr] = useState("");
   const [openId, setOpenId] = useState<string>("");
   const [thread, setThread] = useState<Thread | null>(null);
   const [receiptsFor, setReceiptsFor] = useState<string>("");
-  const [board, setBoard] = useState<BoardMsg[] | null>(null);
 
-  /* Composer for the open conversation. */
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [push, setPush] = useState(true);
-  const [email, setEmail] = useState(true);
+  const [text, setText] = useState("");
+  const [email, setEmail] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lastText, setLastText] = useState<{ phones: string[]; text: string } | null>(null);
 
-  /* New message / groups dialogs. */
   const [newOpen, setNewOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
 
+  /* Board unread, remembered on this device. */
+  const [boardSeen, setBoardSeen] = useState(0);
+  useEffect(() => { try { setBoardSeen(Number(window.localStorage.getItem(SEEN_KEY) || 0)); } catch { /* storage blocked */ } }, []);
+  const markBoardSeen = useCallback(() => {
+    const now = Date.now();
+    setBoardSeen(now);
+    try { window.localStorage.setItem(SEEN_KEY, String(now)); } catch { /* storage blocked */ }
+  }, []);
+
   const load = useCallback(async () => {
-    const r = await fetch("/api/admin/messages");
+    const [r, rb] = await Promise.all([fetch("/api/admin/messages"), fetch("/api/admin/messages?board=1")]);
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { setErr(String(d.error || "Couldn't load messages.")); return; }
     setErr("");
     setConvs(d.conversations || []);
     setTags(d.tags || []);
     setVendors(d.vendors || []);
+    if (rb.ok) setBoard(((await rb.json().catch(() => ({}))).messages) || []);
   }, []);
 
   const loadThread = useCallback(async (id: string) => {
-    if (!id) { setThread(null); return; }
-    if (id === BOARD) {
-      const r = await fetch("/api/admin/messages?board=1");
-      const d = await r.json().catch(() => ({}));
-      if (r.ok) setBoard(d.messages || []);
-      return;
-    }
+    if (!id || id === BOARD) { setThread(null); return; }
     const r = await fetch(`/api/admin/messages?id=${encodeURIComponent(id)}`);
     const d = await r.json().catch(() => ({}));
     if (r.ok) setThread(d as Thread);
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { void loadThread(openId); }, [openId, loadThread]);
-  /* Replies land without a refresh. */
-  usePulse(() => { void load(); if (openId) void loadThread(openId); });
+  useEffect(() => { void loadThread(openId).then(() => { if (openId && openId !== BOARD) void load(); }); }, [openId, loadThread, load]);
+  usePulse(() => { void load(); if (openId && openId !== BOARD) void loadThread(openId); });
+  useEffect(() => { if (openId === BOARD) markBoardSeen(); }, [openId, board.length, markBoardSeen]);
 
-  /* Keep the thread scrolled to the newest message. */
   const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [thread?.messages.length, board?.length, openId]);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [thread?.messages.length, board.length, openId]);
 
   const open = (id: string) => {
-    if (id !== BOARD) setBoard(null);
+    if (id !== openId) setThread(null);
     setOpenId(id);
-    setSubject(""); setBody(""); setLastText(null); setReceiptsFor("");
+    setText(""); setLastText(null); setReceiptsFor("");
   };
 
-  const sendHere = async () => {
-    if (!body.trim() || !openId) return;
+  const send = async () => {
+    const body = text.trim();
+    if (!body || busy || !openId) return;
     setBusy(true);
-    if (openId === BOARD) {
-      try {
-        const r = await fetch("/api/admin/messages", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "board-post", body: body.trim() }),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) { toast.error("Didn't post", String(d.error || "")); return; }
-        setBody("");
-        void loadThread(BOARD);
-      } finally { setBusy(false); }
-      return;
-    }
     try {
       const r = await fetch("/api/admin/messages", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "send", conversationId: openId, subject: subject.trim(), body: body.trim(), push, email }),
+        body: JSON.stringify(openId === BOARD
+          ? { action: "board-post", body }
+          : { action: "send", conversationId: openId, body, push: true, email }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast.error("Didn't send", String(d.error || "")); return; }
-      toast.success("Sent", `${d.pushed} notification${d.pushed === 1 ? "" : "s"}, ${d.emailed} email${d.emailed === 1 ? "" : "s"}${d.emailFailed?.length ? ` — email failed for ${d.emailFailed.join(", ")}` : ""}.`);
-      setLastText({ phones: d.phones || [], text: `Community Harvest: ${subject.trim() ? `${subject.trim()} — ` : ""}${body.trim()}` });
-      setSubject(""); setBody("");
-      void loadThread(openId); void load();
+      if (!r.ok) { toast.error("Didn't send", String(d.error || "Try again in a moment.")); return; }
+      setText("");
+      if (openId !== BOARD) {
+        if (email) toast.success("Sent", `${d.emailed} email${d.emailed === 1 ? "" : "s"}${d.emailFailed?.length ? ` — email failed for ${d.emailFailed.join(", ")}` : ""}.`);
+        setLastText({ phones: d.phones || [], text: `Community Harvest: ${body}` });
+        setEmail(false);
+        await loadThread(openId);
+      }
+      await load();
     } finally { setBusy(false); }
   };
 
@@ -148,99 +140,81 @@ export default function MessagesPage() {
     return { read, unread };
   };
 
-  const current = convs.find((c) => c.id === openId);
+  const boardUnread = boardSeen ? board.filter((m) => !m.fromOffice && new Date(m.createdAt).getTime() > boardSeen).length : 0;
+  const lastBoard = board[board.length - 1];
+  const readOnly = thread?.conversation.kind === "VENDOR";
+  const title = openId === BOARD ? "Vendor chat" : thread?.conversation.title || "";
+  const sub = openId === BOARD
+    ? "Every vendor reads this. You post as Community Harvest."
+    : thread ? `${KIND_LABEL[thread.conversation.kind] || ""} · ${thread.members.map((m) => m.name).join(", ") || "Nobody yet"}` : "";
 
   return (
     <main className="content" style={{ maxWidth: 1180 }}>
       <style>{CSS}</style>
       <div className="row between wrap g-2 mb-3" style={{ alignItems: "center" }}>
         <LinkButton href="/admin" variant="ghost" size="sm" icon="arrowLeft">Admin</LinkButton>
-        <div className="row g-2">
-          <Button variant="secondary" icon="users" onClick={() => setGroupsOpen(true)}>Groups</Button>
-          <Button variant="primary" icon="plus" onClick={() => setNewOpen(true)}>New message</Button>
-        </div>
+        <Button variant="secondary" size="sm" icon="users" onClick={() => setGroupsOpen(true)}>Groups</Button>
       </div>
       {err ? <Note tone="error">{err}</Note> : null}
 
       <div className={`msg-shell${openId ? " has-open" : ""}`}>
-        {/* ------------------------------------------------ conversation list */}
         <aside className="msg-list">
-          <button type="button" className={`msg-item msg-board${openId === BOARD ? " on" : ""}`} onClick={() => open(BOARD)}>
-            <b>Vendor chat</b>
-            <span className="t-xs t-muted">The vendors&rsquo; own board · no notifications</span>
+          <div className="msg-list-head">
+            <b>Messages</b>
+            <Button size="sm" variant="primary" icon="plus" onClick={() => setNewOpen(true)}>New</Button>
+          </div>
+          <button type="button" className={`msg-item${openId === BOARD ? " on" : ""}`} onClick={() => open(BOARD)}>
+            <span className="row between g-2" style={{ alignItems: "baseline" }}>
+              <b>Vendor chat</b>
+              {boardUnread ? <span className="msg-unread">{boardUnread}</span> : lastBoard ? <span className="t-xs t-muted">{fmtDateTime(lastBoard.createdAt)}</span> : null}
+            </span>
+            <span className="t-xs t-muted">Everyone at the market</span>
+            <span className="t-sm t-muted truncate">{lastBoard ? `${lastBoard.fromOffice ? "You" : lastBoard.name}: ${lastBoard.body}` : "No messages yet"}</span>
           </button>
-          {convs.length === 0 ? (
-            <EmptyState icon="message" title="No conversations yet" body="Tap New message to write to everyone, a group, or one vendor." />
-          ) : (
-            convs.map((c) => (
-              <button key={c.id} type="button" className={`msg-item${c.id === openId ? " on" : ""}`} onClick={() => open(c.id)}>
-                <span className="row between g-2" style={{ alignItems: "baseline" }}>
-                  <b className="truncate">{c.title}</b>
-                  {c.unread ? <span className="msg-unread">{c.unread}</span> : null}
-                </span>
-                <span className="t-xs t-muted">{KIND_LABEL[c.kind]} · {c.memberCount} vendor{c.memberCount === 1 ? "" : "s"}{c.hasMessages ? ` · ${fmtDateTime(c.lastAt)}` : ""}</span>
-                <span className="t-sm t-muted truncate">{c.hasMessages ? `${c.lastFromOffice ? "You: " : ""}${c.lastBody}` : "No messages yet"}</span>
-              </button>
-            ))
-          )}
+          {convs.map((c) => (
+            <button key={c.id} type="button" className={`msg-item${c.id === openId ? " on" : ""}`} onClick={() => open(c.id)}>
+              <span className="row between g-2" style={{ alignItems: "baseline" }}>
+                <b className="truncate">{c.title}</b>
+                {c.unread ? <span className="msg-unread">{c.unread}</span> : c.hasMessages ? <span className="t-xs t-muted">{fmtDateTime(c.lastAt)}</span> : null}
+              </span>
+              <span className="t-xs t-muted">{KIND_LABEL[c.kind]}{c.kind === "VENDOR" || c.kind === "DIRECT" ? "" : ` · ${c.memberCount} vendor${c.memberCount === 1 ? "" : "s"}`}</span>
+              <span className="t-sm t-muted truncate">{c.hasMessages ? `${c.lastFromOffice ? "You: " : ""}${c.lastBody}` : "No messages yet"}</span>
+            </button>
+          ))}
         </aside>
 
-        {/* ------------------------------------------------ open conversation */}
         <section className="msg-thread">
-          {openId === BOARD ? (
-            <>
-              <header className="msg-head">
-                <button type="button" className="msg-back" onClick={() => setOpenId("")} aria-label="Back to conversations">
-                  <Icon name="arrowLeft" size={18} />
-                </button>
-                <div className="stack" style={{ minWidth: 0 }}>
-                  <b>Vendor chat</b>
-                  <span className="t-xs t-muted">Every vendor reads this. You post as Community Harvest. Nobody gets notified.</span>
-                </div>
-              </header>
-              <div className="msg-body">
-                {!board ? (
-                  <div className="msg-empty"><span className="t-sm">Loading…</span></div>
-                ) : board.length === 0 ? (
-                  <div className="msg-empty"><span className="t-sm">Nobody has posted yet.</span></div>
-                ) : (
-                  board.map((m) => (
-                    <div key={m.id} className={`msg-row${m.fromOffice ? " mine" : ""}`}>
-                      <div className="t-xs t-muted">{m.fromOffice ? "You (Community Harvest)" : m.name} · {fmtDateTime(m.createdAt)}</div>
-                      <div className="msg-bubble">{m.body}</div>
-                    </div>
-                  ))
-                )}
-                <div ref={endRef} />
-              </div>
-              <footer className="msg-compose">
-                <div className="row g-2" style={{ alignItems: "flex-end" }}>
-                  <Textarea className="grow" rows={2} maxLength={1000} value={body} placeholder="Post in vendor chat…" onChange={(e) => setBody(e.target.value)} />
-                  <Button variant="primary" icon="message" loading={busy} disabled={busy || !body.trim()} onClick={() => void sendHere()}>Post</Button>
-                </div>
-              </footer>
-            </>
-          ) : !openId || !thread ? (
+          {!openId ? (
             <div className="msg-empty">
               <Icon name="message" size={36} />
-              <b>Pick a conversation, or start a new one.</b>
+              <b>Pick a conversation</b>
+              <span className="t-sm">Or tap New to message everyone, a group, or any vendor.</span>
             </div>
           ) : (
             <>
               <header className="msg-head">
-                <button type="button" className="msg-back" onClick={() => setOpenId("")} aria-label="Back to conversations">
+                <button type="button" className="msg-back" onClick={() => open("")} aria-label="Back to messages">
                   <Icon name="arrowLeft" size={18} />
                 </button>
                 <div className="stack" style={{ minWidth: 0 }}>
-                  <b className="truncate">{thread.conversation.title}</b>
-                  <span className="t-xs t-muted truncate">
-                    {KIND_LABEL[thread.conversation.kind]} · {thread.members.map((m) => m.name).join(", ") || "Nobody yet"}
-                  </span>
+                  <b className="truncate">{title}</b>
+                  <span className="t-xs t-muted truncate">{sub}</span>
                 </div>
               </header>
 
               <div className="msg-body">
-                {thread.messages.length === 0 ? (
+                {openId === BOARD ? (
+                  board.length === 0 ? (
+                    <div className="msg-empty"><span className="t-sm">No messages yet. Say hello below.</span></div>
+                  ) : board.map((m) => (
+                    <div key={m.id} className={`msg-row${m.fromOffice ? " mine" : ""}`}>
+                      <div className="t-xs t-muted">{m.fromOffice ? "You" : m.name} · {fmtDateTime(m.createdAt)}</div>
+                      <div className="msg-bubble">{m.body}</div>
+                    </div>
+                  ))
+                ) : !thread ? (
+                  <div className="msg-empty"><span className="t-sm">Loading…</span></div>
+                ) : thread.messages.length === 0 ? (
                   <div className="msg-empty"><span className="t-sm">No messages yet. Write the first one below.</span></div>
                 ) : (
                   thread.messages.map((m) => {
@@ -267,26 +241,34 @@ export default function MessagesPage() {
                 <div ref={endRef} />
               </div>
 
-              <footer className="msg-compose">
-                <Input value={subject} maxLength={120} placeholder="Subject (optional — email subject and notification title)" onChange={(e) => setSubject(e.target.value)} />
-                <Textarea rows={3} maxLength={2000} value={body} placeholder={`Message ${thread.conversation.title}…`} onChange={(e) => setBody(e.target.value)} />
-                <div className="row wrap g-3" style={{ alignItems: "center" }}>
-                  <Checkbox checked={push} onCheckedChange={setPush} label="App notification" />
-                  <Checkbox checked={email} onCheckedChange={setEmail} label="Email" />
-                  <span className="grow" />
-                  <Button variant="primary" icon="message" loading={busy} disabled={busy || !body.trim()} onClick={() => void sendHere()}>
-                    Send{current ? ` to ${current.memberCount}` : ""}
-                  </Button>
-                </div>
-                {lastText && lastText.phones.length ? (
-                  <Note tone="info" title="Also send it as a text?">
-                    <span className="row wrap g-2" style={{ alignItems: "center" }}>
-                      <a className="btn btn-secondary btn-sm" href={smsLink(lastText.phones, lastText.text)}>Text {lastText.phones.length} vendor{lastText.phones.length === 1 ? "" : "s"} from this phone</a>
-                      <span className="t-xs t-muted">Opens Messages with the numbers and text filled in. Works from your phone, not the PC.</span>
-                    </span>
-                  </Note>
-                ) : null}
-              </footer>
+              {readOnly ? (
+                <footer className="msg-compose">
+                  <span className="t-sm t-muted">A chat between these two vendors. You can read it; only they can write in it.</span>
+                </footer>
+              ) : (
+                <footer className="msg-compose">
+                  <div className="msg-compose-row">
+                    <textarea
+                      className="textarea"
+                      rows={2}
+                      maxLength={openId === BOARD ? 1000 : 2000}
+                      value={text}
+                      placeholder={openId === BOARD ? "Message everyone…" : "Message…"}
+                      onChange={(e) => setText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
+                    />
+                    <Button variant="primary" icon="message" loading={busy} disabled={busy || !text.trim()} onClick={() => void send()}>Send</Button>
+                  </div>
+                  {openId !== BOARD ? (
+                    <div className="row wrap g-3" style={{ alignItems: "center" }}>
+                      <Checkbox checked={email} onCheckedChange={setEmail} label="Email it too" />
+                      {lastText && lastText.phones.length ? (
+                        <a className="t-sm" href={smsLink(lastText.phones, lastText.text)}>Text that to {lastText.phones.length} vendor{lastText.phones.length === 1 ? "" : "s"} from this phone</a>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </footer>
+              )}
             </>
           )}
         </section>
@@ -297,10 +279,7 @@ export default function MessagesPage() {
           tags={tags}
           vendors={vendors}
           onClose={() => setNewOpen(false)}
-          onSent={(conversationId, phones, text) => {
-            setNewOpen(false);
-            void load().then(() => { open(conversationId); setLastText({ phones, text }); });
-          }}
+          onOpened={(conversationId) => { setNewOpen(false); open(conversationId); void load(); }}
         />
       ) : null}
 
@@ -319,21 +298,16 @@ export default function MessagesPage() {
 
 /* --------------------------------------------------------- new message -- */
 
-function NewMessage({ tags, vendors, onClose, onSent }: {
+function NewMessage({ tags, vendors, onClose, onOpened }: {
   tags: Tag[];
   vendors: Vendor[];
   onClose: () => void;
-  onSent: (conversationId: string, phones: string[], text: string) => void;
+  onOpened: (conversationId: string) => void;
 }) {
   const toast = useToast();
-  const [to, setTo] = useState<"ALL" | "TAG" | "VENDORS">("ALL");
-  const [tagId, setTagId] = useState(tags[0]?.id || "");
+  const [to, setTo] = useState<"ALL" | "TAG" | "VENDORS">("VENDORS");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [q, setQ] = useState("");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [push, setPush] = useState(true);
-  const [email, setEmail] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const pickedIds = Object.keys(picked).filter((k) => picked[k]);
@@ -341,24 +315,14 @@ function NewMessage({ tags, vendors, onClose, onSent }: {
     () => vendors.filter((v) => !q.trim() || v.businessName.toLowerCase().includes(q.trim().toLowerCase()) || v.code.toLowerCase().includes(q.trim().toLowerCase())),
     [vendors, q]
   );
-  const count = to === "ALL" ? vendors.length : to === "TAG" ? tags.find((t) => t.id === tagId)?.count || 0 : pickedIds.length;
 
-  const send = async () => {
-    if (!body.trim() || count === 0) return;
+  const go = async (target: object) => {
     setBusy(true);
     try {
-      const r = await fetch("/api/admin/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "send",
-          to: to === "ALL" ? { kind: "ALL" } : to === "TAG" ? { kind: "TAG", tagId } : { kind: "VENDORS", vendorIds: pickedIds },
-          subject: subject.trim(), body: body.trim(), push, email,
-        }),
-      });
+      const r = await fetch("/api/admin/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "open", to: target }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast.error("Didn't send", String(d.error || "")); return; }
-      toast.success("Sent", `${d.pushed} notification${d.pushed === 1 ? "" : "s"}, ${d.emailed} email${d.emailed === 1 ? "" : "s"}${d.emailFailed?.length ? ` — email failed for ${d.emailFailed.join(", ")}` : ""}.`);
-      onSent(d.conversationId, d.phones || [], `Community Harvest: ${subject.trim() ? `${subject.trim()} — ` : ""}${body.trim()}`);
+      if (!r.ok || !d.conversationId) { toast.error("Couldn't open that", String(d.error || "")); return; }
+      onOpened(d.conversationId);
     } finally { setBusy(false); }
   };
 
@@ -368,32 +332,37 @@ function NewMessage({ tags, vendors, onClose, onSent }: {
       onClose={onClose}
       width="lg"
       title="New message"
-      footer={
+      footer={to === "VENDORS" ? (
         <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" icon="message" loading={busy} disabled={busy || !body.trim() || count === 0} onClick={() => void send()}>
-            Send to {count} vendor{count === 1 ? "" : "s"}
+          <Button variant="primary" icon="message" loading={busy} disabled={busy || pickedIds.length === 0} onClick={() => void go({ kind: "VENDORS", vendorIds: pickedIds })}>
+            {pickedIds.length > 1 ? `Message these ${pickedIds.length}` : "Message"}
           </Button>
         </>
-      }
+      ) : <Button variant="ghost" onClick={onClose}>Cancel</Button>}
     >
       <div className="stack g-4">
         <Segmented<"ALL" | "TAG" | "VENDORS">
           label="Who it goes to"
           value={to}
           onChange={setTo}
-          options={[{ value: "ALL", label: "Everyone" }, { value: "TAG", label: "A group" }, { value: "VENDORS", label: "Pick vendors" }]}
+          options={[{ value: "VENDORS", label: "Pick vendors" }, { value: "TAG", label: "A group" }, { value: "ALL", label: "Everyone" }]}
         />
+
+        {to === "ALL" ? (
+          <Button variant="primary" block icon="message" loading={busy} onClick={() => void go({ kind: "ALL" })}>Message all {vendors.length} vendors</Button>
+        ) : null}
 
         {to === "TAG" ? (
           tags.length === 0 ? (
             <Note tone="info">No groups yet — make one under Groups first.</Note>
           ) : (
-            <div className="row wrap g-2">
+            <div className="stack g-1">
               {tags.map((t) => (
-                <Button key={t.id} size="sm" variant={t.id === tagId ? "primary" : "secondary"} onClick={() => setTagId(t.id)}>
-                  {t.name} ({t.count})
-                </Button>
+                <button key={t.id} type="button" className="msg-item" disabled={busy} onClick={() => void go({ kind: "TAG", tagId: t.id })}>
+                  <b>{t.name}</b>
+                  <span className="t-xs t-muted">{t.count} vendor{t.count === 1 ? "" : "s"}</span>
+                </button>
               ))}
             </div>
           )
@@ -413,17 +382,9 @@ function NewMessage({ tags, vendors, onClose, onSent }: {
                 />
               ))}
             </div>
-            <span className="t-xs t-muted">One vendor opens your private conversation with them. Several start a new group conversation.</span>
+            <span className="t-xs t-muted">One vendor opens your private chat with them. Several make a group chat.</span>
           </div>
         ) : null}
-
-        <Input value={subject} maxLength={120} placeholder="Subject (optional)" onChange={(e) => setSubject(e.target.value)} />
-        <Textarea rows={5} maxLength={2000} value={body} placeholder="Write it the way you'd say it at the counter." onChange={(e) => setBody(e.target.value)} />
-        <div className="row wrap g-3">
-          <Checkbox checked={push} onCheckedChange={setPush} label="App notification" />
-          <Checkbox checked={email} onCheckedChange={setEmail} label="Email" />
-        </div>
-        <span className="t-xs t-muted">After it sends you can also text it from your phone. Vendors see it in Messages and as a banner on Home until they tap Got it.</span>
       </div>
     </Modal>
   );
@@ -508,29 +469,30 @@ function Groups({ tags, vendors, onClose, onChanged, confirm }: {
 const CSS = `
 .msg-shell { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px; height: calc(100dvh - 140px); min-height: 480px; }
 .msg-list { min-height: 0; overflow-y: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.msg-list-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--surface); border-bottom: 1px solid var(--border-subtle); }
 .msg-item { width: 100%; display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; text-align: left; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: var(--text); cursor: pointer; }
 .msg-item:hover { background: var(--surface-hover); }
 .msg-item.on { background: var(--accent-soft); }
 .msg-unread { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .msg-thread { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
-.msg-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
+.msg-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
 .msg-back { display: none; border: 0; background: none; color: var(--text); padding: 4px; }
 .msg-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; background: var(--bg-sunken); display: flex; flex-direction: column; gap: 12px; }
-.msg-row { max-width: 78%; display: flex; flex-direction: column; gap: 3px; align-self: flex-start; }
+.msg-row { max-width: 80%; display: flex; flex-direction: column; gap: 3px; align-self: flex-start; }
 .msg-row.mine { align-self: flex-end; align-items: flex-end; }
 .msg-bubble { padding: 9px 12px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); white-space: pre-wrap; word-break: break-word; font-size: var(--fs-md); }
 .msg-row.mine .msg-bubble { background: var(--accent); border-color: var(--accent); color: #fff; }
 .msg-receipt { border: 0; background: none; padding: 0; font-size: var(--fs-xs); color: var(--text-secondary); text-decoration: underline; cursor: pointer; }
 .msg-receipts { font-size: var(--fs-xs); color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; max-width: 100%; }
-.msg-compose { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); background: var(--surface); }
-.msg-board { background: var(--bg-sunken); }
+.msg-compose { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.msg-compose-row { display: flex; gap: 8px; align-items: flex-end; }
+.msg-compose textarea { flex: 1 1 auto; min-height: 44px; max-height: 140px; resize: vertical; }
 .msg-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); padding: 24px; text-align: center; }
 .msg-pick { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
 @media (max-width: 820px) {
-  .msg-shell { grid-template-columns: 1fr; height: auto; }
+  .msg-shell { grid-template-columns: 1fr; height: calc(100dvh - 120px); }
   .msg-shell.has-open .msg-list { display: none; }
   .msg-shell:not(.has-open) .msg-thread { display: none; }
-  .msg-thread { height: calc(100dvh - 120px); }
   .msg-back { display: inline-flex; }
 }
 `;

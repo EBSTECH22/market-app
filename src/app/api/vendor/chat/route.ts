@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
+import { pushToVendors, pushToAdmin } from "@/lib/push";
+import { afterResponse } from "@/lib/after";
 
 export const dynamic = "force-dynamic";
 
@@ -22,5 +24,15 @@ export async function POST(req: NextRequest) {
   const body = String((await req.json()).body || "").trim().slice(0, 1000);
   if (!body) return NextResponse.json({ error: "Empty message." }, { status: 400 });
   const msg = await db.vendorChatMsg.create({ data: { vendorId, body } });
+  /* Everyone else at the market hears about it — the office too. */
+  const [me, others] = await Promise.all([
+    db.vendor.findUnique({ where: { id: vendorId }, select: { businessName: true } }),
+    db.vendor.findMany({ where: { active: true, id: { not: vendorId } }, select: { id: true } }),
+  ]);
+  const who = me?.businessName || "A vendor";
+  await afterResponse(Promise.all([
+    pushToVendors(others.map((v) => v.id), `Vendor chat · ${who}`, body.slice(0, 180), { url: "/vendor#messages", tag: "board" }),
+    pushToAdmin(`Vendor chat · ${who}`, body.slice(0, 180), { url: "/admin/messages", tag: "board" }),
+  ]));
   return NextResponse.json({ message: msg });
 }

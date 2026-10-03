@@ -109,7 +109,7 @@ export async function sendOfficeMessage(opts: {
 
   let pushed = 0;
   if (opts.push) {
-    const results = await Promise.allSettled(vendors.map((v) => pushToVendor(v.id, title, opts.body.slice(0, 180))));
+    const results = await Promise.allSettled(vendors.map((v) => pushToVendor(v.id, title, opts.body.slice(0, 180), { url: "/vendor#messages", tag: conv.id })));
     pushed = results.filter((r) => r.status === "fulfilled" && (r.value as number) > 0).length;
   }
 

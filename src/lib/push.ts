@@ -12,7 +12,9 @@ function setup(): boolean {
 }
 
 // Sends to every device the vendor enabled. Returns how many pushes went out.
-export async function pushToVendor(vendorId: string, title: string, body: string): Promise<number> {
+export type PushExtra = { url?: string; tag?: string };
+
+export async function pushToVendor(vendorId: string, title: string, body: string, extra: PushExtra = {}): Promise<number> {
   if (!setup()) return 0;
   const subs = await db.pushSub.findMany({ where: { vendorId } });
   let sent = 0;
@@ -20,7 +22,7 @@ export async function pushToVendor(vendorId: string, title: string, body: string
     try {
       await webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        JSON.stringify({ title, body })
+        JSON.stringify({ title, body, ...extra })
       );
       sent++;
     } catch (err: unknown) {
@@ -36,6 +38,15 @@ export async function pushToVendor(vendorId: string, title: string, body: string
 }
 
 // Admin/staff devices subscribe under the "ADMIN" channel
-export async function pushToAdmin(title: string, body: string): Promise<number> {
-  return pushToVendor("ADMIN", title, body);
+export async function pushToAdmin(title: string, body: string, extra: PushExtra = {}): Promise<number> {
+  return pushToVendor("ADMIN", title, body, extra);
+}
+
+/** The same notification to many vendors at once, in parallel. Returns how
+    many vendors got it on at least one device. */
+export async function pushToVendors(vendorIds: string[], title: string, body: string, extra: PushExtra = {}): Promise<number> {
+  const ids = [...new Set(vendorIds)].filter((v) => v && v !== "ADMIN");
+  if (!ids.length || !setup()) return 0;
+  const results = await Promise.allSettled(ids.map((id) => pushToVendor(id, title, body, extra)));
+  return results.filter((r) => r.status === "fulfilled" && r.value > 0).length;
 }
