@@ -1200,7 +1200,7 @@ const NAV: { group: string; items: { id: string; label: string; icon: IconName; 
       { id: "kiosk", label: "Kiosk mode", icon: "lock", href: "/register", cap: "ops" as Capability },
       { id: "time", label: "Time clock", icon: "clock" },
       { id: "calendar", label: "Calendar", icon: "calendar" },
-      { id: "floor", label: "Floor stock", icon: "grid" },
+      { id: "floor", label: "Floor stock", icon: "grid" }, { id: "messages", label: "Messages", icon: "message", href: "/admin/messages", cap: "market" as Capability },
     ],
   },
   {
