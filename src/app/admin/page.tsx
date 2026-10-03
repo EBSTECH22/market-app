@@ -2950,7 +2950,7 @@ export default function AdminPage() {
       title: `Close ${d.employee}'s drawer?`,
       body: <p>Count what&rsquo;s in their till and enter it. The difference from what it should hold is recorded against their drawer.</p>,
       label: "Counted cash",
-      confirmLabel: "Close their drawer",
+      confirmLabel: "Close their drawer", allowZero: true,
     });
     if (counted === null) return;
     setBusy(true);

@@ -65,6 +65,8 @@ export type MoneyOptions = {
   confirmLabel?: string;
   /** Allow negatives — used by ledger adjustments. */
   allowNegative?: boolean;
+  /** Allow $0.00 — counting out an empty till. */
+  allowZero?: boolean;
   tone?: Tone;
 };
 
@@ -187,7 +189,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       const n = Number(raw);
       if (!Number.isFinite(n)) { setError("That isn't a valid amount."); return; }
       if (n < 0 && !state.opts.allowNegative) { setError("Amount can't be negative."); return; }
-      if (n === 0) { setError("Amount can't be zero."); return; }
+      if (n === 0 && !state.opts.allowZero) { setError("Amount can't be zero."); return; }
       finish(Math.round(n * 100));
       return;
     }
