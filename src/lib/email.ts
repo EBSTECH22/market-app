@@ -896,3 +896,26 @@ export async function sendSpaceHeldEmail(opts: {
     </div>`;
   return send(opts.to, `We\u2019re holding a ${opts.spaceName.toLowerCase()} for you \u2014 Community Harvest`, shell(inner));
 }
+
+/**
+ * A message from the market office. Line breaks kept, and a button back into
+ * the vendor's Messages tab where they can reply and where it's marked read.
+ */
+export async function sendVendorMessageEmail(
+  to: string,
+  contactName: string,
+  title: string,
+  message: string
+): Promise<boolean> {
+  const greeting = contactName ? `Hi ${esc(contactName.split(" ")[0])},` : "Hi,";
+  const body = esc(message).replace(/\r?\n/g, "<br>");
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 12px;letter-spacing:-0.02em;">${esc(title || "A message from the market")}</h2>
+    <div style="text-align:left;font-size:14.5px;line-height:1.6;color:#374151;margin:0 0 18px;">
+      <p style="margin:0 0 10px;">${greeting}</p>
+      <p style="margin:0;">${body}</p>
+    </div>
+    <a href="${baseUrl()}/vendor#messages" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">Read and reply</a>
+    <p style="font-size:12px;color:#9ca3af;margin:16px 0 0;">From the Community Harvest office. Reply in your vendor portal under Messages.</p>`;
+  return send(to, title ? `${title} — Community Harvest` : "A message from Community Harvest", shell(inner));
+}

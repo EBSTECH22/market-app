@@ -974,3 +974,67 @@ model TerminalCharge {
 
   @@index([status, createdAt])
 }
+
+// ------------------------------------------------------------ messaging ---
+// The office talking to vendors: everyone, a group (tag), hand-picked vendors,
+// or one vendor. Separate from VendorChatMsg, which is the vendors' own board
+// and never notifies anyone.
+
+/// A group of vendors the office can message at once — "Bakers", "Food trucks".
+model VendorTag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
+model VendorTagMember {
+  id       String @id @default(cuid())
+  tagId    String
+  vendorId String
+
+  @@unique([tagId, vendorId])
+  @@index([vendorId])
+}
+
+/// ALL (every active vendor), TAG (a group, kept in step with the tag),
+/// DIRECT (one vendor), CUSTOM (a fixed hand-picked set).
+model Conversation {
+  id           String    @id @default(cuid())
+  kind         String
+  title        String    @default("")
+  tagId        String    @default("")
+  createdAt    DateTime  @default(now())
+  lastAt       DateTime  @default(now())
+  /// When the office last looked — drives the office's unread count.
+  officeReadAt DateTime?
+
+  @@index([lastAt])
+}
+
+model ConversationMember {
+  id             String    @id @default(cuid())
+  conversationId String
+  vendorId       String
+  joinedAt       DateTime  @default(now())
+  /// Read receipts: every message up to this moment has been seen.
+  lastReadAt     DateTime?
+  /// The Home banner was dismissed up to this moment.
+  dismissedAt    DateTime?
+
+  @@unique([conversationId, vendorId])
+  @@index([vendorId])
+}
+
+model ConversationMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  fromOffice     Boolean  @default(false)
+  /// The vendor who wrote it, when it isn't from the office.
+  vendorId       String   @default("")
+  /// Who at the office wrote it, for the office's own view.
+  senderName     String   @default("")
+  body           String
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+}

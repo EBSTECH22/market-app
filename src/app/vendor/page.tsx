@@ -116,7 +116,7 @@ type VOrder = {
 /* Tabs live in the URL hash so refresh, back/forward and shared links all work.
    They used to sit in plain useState, so a reload always dumped a vendor back
    on Home and there was no way to link anyone to a section. */
-const VENDOR_TABS = ["home", "items", "orders", "insights", "inbox", "page", "money", "chat", "settings"] as const;
+const VENDOR_TABS = ["home", "items", "orders", "insights", "inbox", "messages", "page", "money", "chat", "settings"] as const;
 type VendorTab = (typeof VENDOR_TABS)[number];
 
 const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }> = {
@@ -125,6 +125,7 @@ const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }
   orders: { label: "Online orders", icon: "receipt", sub: "What people have bought from your page — pack it, send it, hand it over" },
   insights: { label: "What's working", icon: "chart", sub: "What sells, what's stuck, and what's about to run out" },
   inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
+  messages: { label: "Messages", icon: "mail", sub: "From the market office — read them and reply" },
   page: { label: "My page", icon: "star", sub: "Your public page, photos, and market feed posts" },
   money: { label: "Money", icon: "dollar", sub: "Balance, rent, card on file, and your full statement" },
   chat: { label: "Vendor chat", icon: "message", sub: "Every vendor and staff member at the market" },
@@ -143,7 +144,7 @@ const CATEGORY_SUGGESTIONS = [
 ];
 
 const PRIMARY_MOBILE: VendorTab[] = ["home", "items", "orders", "money"];
-const MORE_MOBILE: VendorTab[] = ["insights", "page", "chat", "settings"];
+const MORE_MOBILE: VendorTab[] = ["messages", "insights", "page", "chat", "settings"];
 
 const LEDGER_ICON = (type: string): IconName =>
   type === "SALE" ? "receipt" : type === "PAYOUT" ? "cash" : type === "RENT" ? "store" : "edit";
@@ -300,6 +301,16 @@ export default function VendorDashboard() {
   const [chatMe, setChatMe] = useState("");
   const [chatBody, setChatBody] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  /* Messages from the market office (separate from vendor chat). */
+  type OfficeConv = { id: string; kind: string; title: string; lastAt: string; lastBody: string; lastFromOffice: boolean; unread: number };
+  type OfficeBanner = { conversationId: string; title: string; body: string; createdAt: string };
+  type OfficeMsg = { id: string; fromOffice: boolean; mine: boolean; name: string; body: string; createdAt: string };
+  const [officeConvs, setOfficeConvs] = useState<OfficeConv[]>([]);
+  const [officeBanner, setOfficeBanner] = useState<OfficeBanner[]>([]);
+  const [officeOpen, setOfficeOpen] = useState("");
+  const [officeThread, setOfficeThread] = useState<{ conversation: { id: string; title: string; kind: string }; messages: OfficeMsg[] } | null>(null);
+  const [officeReply, setOfficeReply] = useState("");
+  const [officeBusy, setOfficeBusy] = useState(false);
   const [postBody, setPostBody] = useState("");
   const [notifyFollowers, setNotifyFollowers] = useState(false);
   const [itemCategory, setItemCategory] = useState("");
@@ -364,7 +375,21 @@ export default function VendorDashboard() {
     if (r.ok) { const d = await r.json(); setStatement(d); setStatementYear(d.year); }
   }, []);
 
-  useEffect(() => { loadChat(); loadPosts(); }, [loadChat, loadPosts]);
+  const loadOffice = useCallback(async () => {
+    const r = await fetch("/api/vendor/messages");
+    if (!r.ok) return;
+    const d = await r.json();
+    setOfficeConvs(d.conversations || []);
+    setOfficeBanner(d.banner || []);
+  }, []);
+  const loadOfficeThread = useCallback(async (id: string) => {
+    if (!id) { setOfficeThread(null); return; }
+    const r = await fetch(`/api/vendor/messages?id=${encodeURIComponent(id)}`);
+    if (r.ok) setOfficeThread(await r.json());
+  }, []);
+  useEffect(() => { loadChat(); loadPosts(); void loadOffice(); }, [loadChat, loadPosts, loadOffice]);
+  /* Opening a conversation marks it read, so the list and banner refresh after. */
+  useEffect(() => { if (officeOpen) void loadOfficeThread(officeOpen).then(() => loadOffice()); }, [officeOpen, loadOfficeThread, loadOffice]);
 
   /* Loaded on demand rather than up front — both scan a vendor's whole sales
      history, and most visits to the portal are "did anything sell". */
@@ -460,7 +485,7 @@ export default function VendorDashboard() {
   useEffect(() => {
     load();
   }, [load]);
-  usePulse(() => { load(); loadChat(); loadPosts(); });
+  usePulse(() => { load(); loadChat(); loadPosts(); void loadOffice(); if (officeOpen && tab === "messages") void loadOfficeThread(officeOpen); });
 
   const loadInbox = useCallback(async () => {
     try {
@@ -1109,7 +1134,7 @@ export default function VendorDashboard() {
   const onSale = activeItems.filter((it) => (it.salePercent || 0) > 0).length;
   const meta = TAB_META[tab];
   const editing = activeItems.find((it) => it.id === editItem) || null;
-  const navBadge: Partial<Record<VendorTab, number>> = { inbox: needsReply };
+  const navBadge: Partial<Record<VendorTab, number>> = { inbox: needsReply, messages: officeConvs.reduce((n, c) => n + c.unread, 0) };
 
   const go = (t: VendorTab) => { setTab(t); setMoreOpen(false); window.scrollTo({ top: 0 }); };
 
@@ -1310,6 +1335,37 @@ export default function VendorDashboard() {
           {/* ------------------------------------------------------------ home */}
           {tab === "home" && (
             <div className="stack g-4">
+              {/* New messages from the office, until "Got it" — which also
+                  marks them read for the office's read receipts. */}
+              {officeBanner.map((bn) => {
+                const [first, ...rest] = bn.body.split("\n");
+                return (
+                  <Note
+                    key={bn.conversationId}
+                    tone="info"
+                    title={`📣 From Community Harvest${rest.length ? ` — ${first}` : ""}`}
+                    action={
+                      <span className="row g-2">
+                        <Button size="sm" variant="secondary" onClick={() => { setOfficeOpen(bn.conversationId); setTab("messages"); }}>Reply</Button>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={async () => {
+                            setOfficeBanner((b) => b.filter((x) => x.conversationId !== bn.conversationId));
+                            await fetch("/api/vendor/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "dismiss", conversationId: bn.conversationId }) }).catch(() => {});
+                            void loadOffice();
+                          }}
+                        >
+                          Got it
+                        </Button>
+                      </span>
+                    }
+                  >
+                    <span style={{ whiteSpace: "pre-wrap" }}>{rest.length ? rest.join("\n") : first}</span>
+                    <span className="t-xs t-muted" style={{ display: "block", marginTop: 4 }}>{fmtDateTime(bn.createdAt)} · {bn.title}</span>
+                  </Note>
+                );
+              })}
               {booths && booths.length > 0 ? <BoothMap spots={booths} /> : null}
               <div className="grid-auto" style={{ ["--min" as string]: "200px" }}>
                 <Stat feature label="Your balance" value={money(me.balance)} sub={me.balance >= 0 ? "Paid out monthly" : "Rent due"} icon="dollar" />
@@ -2530,6 +2586,96 @@ export default function VendorDashboard() {
                 />
               </Card>
             </div>
+          )}
+
+          {/* -------------------------------------------------------- messages */}
+          {tab === "messages" && (
+            <Card
+              title={officeThread && officeOpen ? officeThread.conversation.title : "Messages from the market"}
+              subtitle={officeThread && officeOpen ? undefined : "Messages from the Community Harvest office. Reply right here — in a group conversation, everyone in the group sees replies."}
+              actions={officeOpen ? <Button size="sm" variant="ghost" icon="arrowLeft" onClick={() => { setOfficeOpen(""); setOfficeThread(null); }}>All messages</Button> : undefined}
+            >
+              {!officeOpen ? (
+                officeConvs.length === 0 ? (
+                  <EmptyState icon="mail" title="No messages yet" body="When the market office writes to you, it shows up here." />
+                ) : (
+                  <div className="stack g-2">
+                    {officeConvs.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setOfficeOpen(c.id)}
+                        style={{
+                          textAlign: "left", width: "100%", padding: "var(--sp-3)", borderRadius: "var(--r-md)",
+                          border: "1px solid var(--border)", background: c.unread ? "var(--accent-soft)" : "var(--surface)",
+                          color: "inherit", cursor: "pointer",
+                        }}
+                      >
+                        <span className="row between g-2" style={{ alignItems: "baseline" }}>
+                          <b className="truncate">{c.title}</b>
+                          {c.unread ? <Badge tone="success">{c.unread} new</Badge> : <span className="t-xs t-muted">{fmtDateTime(c.lastAt)}</span>}
+                        </span>
+                        <span className="t-sm t-muted truncate" style={{ display: "block" }}>{c.lastBody}</span>
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : !officeThread ? (
+                <span className="t-sm t-muted">Loading…</span>
+              ) : (
+                <div className="stack g-4">
+                  <div
+                    className="stack g-3"
+                    style={{ maxHeight: 460, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-md)", background: "var(--bg-sunken)", padding: "var(--sp-3)" }}
+                  >
+                    {officeThread.messages.map((mg) => (
+                      <div key={mg.id} style={{ textAlign: mg.mine ? "right" : "left" }}>
+                        <div className="t-xs t-muted">{mg.fromOffice ? "📣 " : ""}{mg.mine ? "You" : mg.name} · {fmtDateTime(mg.createdAt)}</div>
+                        <div
+                          className="t-sm"
+                          style={{
+                            display: "inline-block", textAlign: "left", maxWidth: "85%", marginTop: 2,
+                            padding: "var(--sp-2) var(--sp-3)", borderRadius: "var(--r-md)", whiteSpace: "pre-wrap",
+                            border: `1px solid ${mg.fromOffice ? "var(--accent)" : "var(--border)"}`,
+                            background: mg.mine ? "var(--accent-soft)" : mg.fromOffice ? "var(--accent-soft)" : "var(--surface)",
+                          }}
+                        >
+                          {mg.body}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="row g-2">
+                    <Input
+                      className="grow"
+                      placeholder={officeThread.conversation.kind === "DIRECT" ? "Reply to the office…" : "Reply to the group…"}
+                      value={officeReply}
+                      onChange={(e) => setOfficeReply(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (document.getElementById("office-send") as HTMLButtonElement | null)?.click(); } }}
+                    />
+                    <Button
+                      id="office-send"
+                      variant="primary"
+                      icon="message"
+                      loading={officeBusy}
+                      disabled={!officeReply.trim()}
+                      onClick={async () => {
+                        const text = officeReply.trim();
+                        if (!text || officeBusy) return;
+                        setOfficeBusy(true);
+                        try {
+                          const r = await fetch("/api/vendor/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "reply", conversationId: officeOpen, body: text }) });
+                          if (r.ok) { setOfficeReply(""); await loadOfficeThread(officeOpen); }
+                          else toast.error("Didn't send", "Try again in a moment.");
+                        } finally { setOfficeBusy(false); }
+                      }}
+                    >
+                      Send
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </Card>
           )}
 
           {/* ------------------------------------------------------------ chat */}

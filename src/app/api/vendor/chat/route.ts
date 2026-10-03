@@ -7,7 +7,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const vendorId = currentVendorId();
   if (!vendorId) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  const msgs = await db.vendorChatMsg.findMany({ orderBy: { createdAt: "asc" }, take: 200 });
+  /* The NEWEST 200, shown oldest-first. (Taking the first 200 ascending meant
+     that once the board passed 200 messages, new ones never appeared.) */
+  const msgs = (await db.vendorChatMsg.findMany({ orderBy: { createdAt: "desc" }, take: 200 })).reverse();
   const vendors = await db.vendor.findMany({ select: { id: true, businessName: true } });
   const vmap = Object.fromEntries(vendors.map((v) => [v.id, v.businessName]));
   return NextResponse.json({ me: vendorId, messages: msgs.map((m) => ({ id: m.id, vendorId: m.vendorId, name: vmap[m.vendorId] || "Vendor", body: m.body, createdAt: m.createdAt })) });
