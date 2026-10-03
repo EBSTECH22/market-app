@@ -28,6 +28,9 @@ model Vendor {
   lowStockThreshold Int      @default(0)
   lastRestockAlertAt DateTime?
   portalLocked     Boolean @default(false)
+  // Booth rent waived: the monthly run and the first-month charge skip them.
+  // Sales commission and the service fee are untouched.
+  rentFree         Boolean @default(false)
   stripeCustomerId String  @default("")
   stripePmId       String  @default("")
   cardLast4        String  @default("")

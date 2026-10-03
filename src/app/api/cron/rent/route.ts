@@ -32,7 +32,10 @@ export async function GET(req: NextRequest) {
     const now = new Date();
     const ym = monthKey(now);
 
-    const contracts = await db.contract.findMany({ where: { status: { in: ["ACTIVE", "TERMINATING"] } } });
+    const contracts = await db.contract.findMany({
+      where: { status: { in: ["ACTIVE", "TERMINATING"] } },
+      include: { vendor: { select: { rentFree: true } } },
+    });
 
     /* One query for the month's rent entries rather than one per contract. */
     const posted = await db.ledgerEntry.findMany({
@@ -58,7 +61,7 @@ export async function GET(req: NextRequest) {
     const rows: RentContract[] = contracts.map((c) => ({
       id: c.id, vendorId: c.vendorId, boothLabel: c.boothLabel,
       monthlyRentCents: c.monthlyRentCents, status: c.status,
-      endDate: c.endDate, paidThrough: c.paidThrough,
+      endDate: c.endDate, paidThrough: c.paidThrough, free: c.vendor.rentFree,
     }));
 
     const plan = planRentRun(rows, ym, now, isCharged);

@@ -62,7 +62,7 @@ export async function GET() {
     /* ----------------------------------------------------------- rent run -- */
     const contracts = await db.contract.findMany({
       where: { status: { in: ["ACTIVE", "TERMINATING"] } },
-      include: { vendor: { select: { businessName: true, code: true } } },
+      include: { vendor: { select: { businessName: true, code: true, rentFree: true } } },
       orderBy: { boothLabel: "asc" },
     });
 
@@ -83,7 +83,7 @@ export async function GET() {
     const rows: RentContract[] = contracts.map((c) => ({
       id: c.id, vendorId: c.vendorId, boothLabel: c.boothLabel,
       monthlyRentCents: c.monthlyRentCents, status: c.status,
-      endDate: c.endDate, paidThrough: c.paidThrough,
+      endDate: c.endDate, paidThrough: c.paidThrough, free: c.vendor.rentFree,
     }));
     const plan = planRentRun(rows, ym, runAt, isCharged);
 

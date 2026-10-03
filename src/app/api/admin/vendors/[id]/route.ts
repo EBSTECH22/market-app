@@ -11,7 +11,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return runRoute("admin/vendors/[id] PATCH", async () => {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json();
-    const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean } = {};
+    const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean; rentFree?: boolean } = {};
     if (typeof body.businessName === "string" && body.businessName.trim()) data.businessName = body.businessName.trim();
     if (typeof body.contactName === "string") data.contactName = body.contactName.trim();
     if (typeof body.phone === "string") data.phone = body.phone.trim();
@@ -29,6 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
     if (typeof body.active === "boolean") data.active = body.active;
     if (typeof body.allowSelfCheckout === "boolean") data.allowSelfCheckout = body.allowSelfCheckout;
+    if (typeof body.rentFree === "boolean") data.rentFree = body.rentFree;
 
     let tempPassword: string | undefined;
     if (body.resetPassword) {

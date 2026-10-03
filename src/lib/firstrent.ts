@@ -27,7 +27,8 @@ export async function postFirstMonthRent(contractId: string) {
      different month. */
   const paidThrough = new Date(Date.UTC(y, mo - 1 + 1, d, 12, 0, 0));
   await db.contract.update({ where: { id: c.id }, data: { paidThrough } });
-  if (amount <= 0) return;
+  /* Rent-free vendors are never charged booth rent. */
+  if (amount <= 0 || c.vendor.rentFree) return;
 
   let token = c.signToken;
   if (!token) {

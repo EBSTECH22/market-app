@@ -14,7 +14,7 @@ export async function GET() {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const vendors = await db.vendor.findMany({
       orderBy: { code: "asc" },
-      select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true },
+      select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true, rentFree: true },
     });
     const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
     const map = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));

@@ -25,6 +25,8 @@ export type RentContract = {
   status: string;
   endDate: Date | null;
   paidThrough: Date | null;
+  /** The vendor is rent-free — nothing is ever charged. */
+  free?: boolean;
 };
 
 export type RentPlanRow = {
@@ -36,7 +38,7 @@ export type RentPlanRow = {
   /** The full monthly rate, for showing what a prorated charge is a slice of. */
   monthlyRentCents: number;
   note: string;
-  action: "CHARGE" | "PRORATE" | "FINAL_MONTH" | "SKIP_PREPAID" | "SKIP_DONE" | "END";
+  action: "CHARGE" | "PRORATE" | "FINAL_MONTH" | "SKIP_PREPAID" | "SKIP_DONE" | "SKIP_FREE" | "END";
   /** One line a human can read, for the preview table. */
   reason: string;
   /** Set when the contract's paidThrough should be cleared as part of posting. */
@@ -149,6 +151,10 @@ export function planContract(
      Month keys are "YYYY-MM", so a string compare is a date compare. */
   if (c.endDate && monthKey(c.endDate) < ym) {
     return { ...base, amountCents: 0, note: "", action: "END", reason: "Agreement already ended — nothing to charge." };
+  }
+
+  if (c.free) {
+    return { ...base, amountCents: 0, note: "", action: "SKIP_FREE", reason: "Rent-free — no booth rent charged." };
   }
 
   if (alreadyCharged) {

@@ -20,7 +20,7 @@ import { auditLabel, actorLabel } from "@/lib/auditkinds";
 import { newSaleKey } from "@/lib/offline";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string };
@@ -7276,6 +7276,7 @@ export default function AdminPage() {
                     <Badge tone={v.allowSelfCheckout ? "info" : "neutral"} dot>
                       {v.allowSelfCheckout ? "Self-checkout on" : "Self-checkout off"}
                     </Badge>
+                    {v.rentFree ? <Badge tone="success" icon="check">Rent free</Badge> : null}
                   </div>
 
                   {v.holdReleased ? (
@@ -7364,6 +7365,24 @@ export default function AdminPage() {
                         )}
                       >
                         {v.allowSelfCheckout ? "Turn off self-checkout" : "Turn on self-checkout"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        icon="dollar"
+                        disabled={busy}
+                        onClick={async () => {
+                          const yes = await dialog.confirm({
+                            title: v.rentFree ? `Start charging ${v.businessName} booth rent?` : `Make ${v.businessName} rent free?`,
+                            body: v.rentFree
+                              ? "Their booth rent goes back on the monthly rent run from the next 1st."
+                              : "They won't be charged booth rent — not on the 1st of the month and not for a first month. Sales commission and the service fee are unchanged. Rent already on their account stays there.",
+                            confirmLabel: v.rentFree ? "Charge rent" : "Make rent free",
+                          });
+                          if (!yes) return;
+                          patchVendor(v.id, { rentFree: !v.rentFree }, v.rentFree ? "Booth rent turned back on" : "Now rent free");
+                        }}
+                      >
+                        {v.rentFree ? "Charge booth rent" : "Make rent free"}
                       </Button>
                       <Button
                         size="sm"
