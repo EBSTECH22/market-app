@@ -8,12 +8,8 @@
  * were you working for, why here.
  */
 import { useState } from "react";
-import { Button, Card, Checkbox, Field, Input, LinkButton, Note, Segmented, Textarea } from "@/components/ui";
-
-const DAYS = [
-  { v: "Mon", label: "Monday" }, { v: "Tue", label: "Tuesday" }, { v: "Wed", label: "Wednesday" },
-  { v: "Thu", label: "Thursday" }, { v: "Fri", label: "Friday" }, { v: "Sat", label: "Saturday" }, { v: "Sun", label: "Sunday" },
-];
+import { Badge, Button, Card, Checkbox, Field, Input, LinkButton, Note, Segmented, Textarea } from "@/components/ui";
+import { JOB, SHIFTS } from "@/lib/jobs";
 
 const looksLikeEmail = (v: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim());
 
@@ -36,7 +32,7 @@ export default function JobsPage() {
     if (!(f.name || "").trim()) e.name = "Your name, please.";
     if (!looksLikeEmail(f.email || "")) e.email = "A real email address, please.";
     if ((f.phone || "").replace(/\D/g, "").length < 10) e.phone = "A phone number with area code.";
-    if (!days.length) e.days = "Pick at least one day.";
+    if (!days.length) e.days = "Pick at least one shift.";
     if (!over18) e.over18 = "Pick one.";
     setErrors(e);
     if (Object.values(e).some(Boolean)) { setMsg("A few things need filling in — they're marked below."); return; }
@@ -44,7 +40,7 @@ export default function JobsPage() {
     try {
       const r = await fetch("/api/public/jobs", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...f, days, over18, position: "Cashier" }),
+        body: JSON.stringify({ ...f, shifts: days, over18 }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg(String(d.error || "That didn't send. Try again in a moment.")); return; }
@@ -94,12 +90,26 @@ export default function JobsPage() {
         <div className="hero">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" style={{ width: 110, margin: "0 auto var(--sp-3)", display: "block" }} />
-          <h1 className="hero-title">Work at Community Harvest</h1>
+          <h1 className="hero-title">Now hiring: {JOB.position}</h1>
           <p className="hero-sub">
-            We&rsquo;re hiring <b>cashiers</b> for our indoor market in Noble — ringing up sales, handling cash and cards,
-            and helping shoppers find what they&rsquo;re after. Fill this in and we&rsquo;ll be in touch.
+            Ring up sales, handle cash and cards, and help shoppers find what they&rsquo;re after at our indoor market in Noble.
           </p>
         </div>
+
+        <Card title="The job" className="mb-4">
+          <div className="stack g-3">
+            <div className="row wrap g-2">
+              <Badge tone="success">{JOB.pay}</Badge>
+              <Badge tone="info">{JOB.type}</Badge>
+              <Badge tone="neutral">Hiring {JOB.openings} people</Badge>
+            </div>
+            <div className="stack g-1">
+              <b className="t-sm">Shifts</b>
+              <span className="t-sm">Weekdays: Monday–Friday, 4:00–6:30 PM</span>
+              <span className="t-sm">Weekends: choose 8:00 AM–2:00 PM or 12:30–6:30 PM</span>
+            </div>
+          </div>
+        </Card>
 
         <Card title="About you" className="mb-4">
           <div className="stack g-4">
@@ -127,21 +137,22 @@ export default function JobsPage() {
 
         <Card title="When you can work" className="mb-4">
           <div className="stack g-4">
-            <Field label="Days you're available" error={errors.days} required>
+            <Field label="Which shifts can you work? Tick all that fit." error={errors.days} required>
               {() => (
-                <div className="grid-auto" style={{ ["--min" as string]: "140px" }}>
-                  {DAYS.map((d) => (
+                <div className="stack g-2">
+                  {SHIFTS.map((d) => (
                     <Checkbox
-                      key={d.v}
+                      key={d.code}
                       label={d.label}
-                      checked={days.includes(d.v)}
-                      onCheckedChange={(on) => { setDays((x) => (on ? [...x, d.v] : x.filter((y) => y !== d.v))); setErrors((x) => ({ ...x, days: "" })); }}
+                      hint={d.detail}
+                      checked={days.includes(d.code)}
+                      onCheckedChange={(on) => { setDays((x) => (on ? [...x, d.code] : x.filter((y) => y !== d.code))); setErrors((x) => ({ ...x, days: "" })); }}
                     />
                   ))}
                 </div>
               )}
             </Field>
-            <Field label="Hours" hint="e.g. Saturdays 9–3, any time after school, 20 hours a week">
+            <Field label="Anything about your schedule?" hint="Optional — e.g. not the first Saturday of the month, done with school at 3:30">
               {(p) => <Input {...p} value={f.hours || ""} onChange={set("hours")} />}
             </Field>
             <Field label="When could you start?">

@@ -5,11 +5,10 @@ import { enforceRateLimit } from "@/lib/ratelimit";
 import { pushToAdmin } from "@/lib/push";
 import { sendJobApplicationReceivedEmail, sendJobApplicationNotifyEmail } from "@/lib/email";
 import { afterResponse } from "@/lib/after";
+import { JOB, SHIFT_CODES, shiftsLabel } from "@/lib/jobs";
 
 export const dynamic = "force-dynamic";
 
-const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const POSITIONS = ["Cashier"];
 
 /** The public job application. Anyone can send one; nobody can read them back here. */
 export async function POST(req: NextRequest) {
@@ -26,15 +25,15 @@ export async function POST(req: NextRequest) {
     const limited = await enforceRateLimit(req, "job-apply", email, { limit: 5, windowMs: 60 * 60 * 1000 }, "Too many applications from here — try again in an hour.");
     if (limited) return limited;
 
-    const days = (Array.isArray(b.days) ? b.days : []).map(String).filter((d: string) => DAYS.includes(d));
-    if (!days.length) return NextResponse.json({ error: "Pick at least one day you can work." }, { status: 400 });
-    const position = POSITIONS.includes(String(b.position)) ? String(b.position) : "Cashier";
+    const shifts = (Array.isArray(b.shifts) ? b.shifts : []).map(String).filter((d: string) => SHIFT_CODES.includes(d));
+    if (!shifts.length) return NextResponse.json({ error: "Pick at least one shift you can work." }, { status: 400 });
+    const position = JOB.position;
 
     const app = await db.jobApplication.create({
       data: {
         position, name, email, phone,
         over18: b.over18 === "YES" || b.over18 === "NO" ? b.over18 : "",
-        days: DAYS.filter((d) => days.includes(d)).join(","),
+        days: SHIFT_CODES.filter((d) => shifts.includes(d)).join(","),
         hours: t(b.hours, 200),
         startDate: t(b.startDate, 30),
         experience: t(b.experience, 2000),
@@ -49,8 +48,8 @@ export async function POST(req: NextRequest) {
 
     await afterResponse(Promise.all([
       sendJobApplicationReceivedEmail(email, name, position).catch(() => false),
-      sendJobApplicationNotifyEmail({ name, position, email, phone, days: app.days.replace(/,/g, ", "), hours: app.hours, startDate: app.startDate, experience: app.experience }).catch(() => false),
-      pushToAdmin(`New ${position.toLowerCase()} applicant`, `${name} · ${app.days.replace(/,/g, ", ")}`, { url: "/admin/jobs" }).catch(() => 0),
+      sendJobApplicationNotifyEmail({ name, position, email, phone, days: shiftsLabel(app.days), hours: app.hours, startDate: app.startDate, experience: app.experience }).catch(() => false),
+      pushToAdmin(`New ${position.toLowerCase()} applicant`, `${name} · ${shiftsLabel(app.days)}`, { url: "/admin/jobs" }).catch(() => 0),
     ]));
 
     return NextResponse.json({ ok: true });

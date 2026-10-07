@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { fmtDateTime } from "@/lib/format";
 import { usePulse } from "@/lib/usePulse";
+import { shiftsLabel } from "@/lib/jobs";
 
 type App = {
   id: string; position: string; name: string; email: string; phone: string; over18: string;
@@ -27,7 +28,6 @@ const STATUS: Record<string, { label: string; tone: "info" | "warn" | "success" 
   HIRED: { label: "Hired", tone: "success" },
   DECLINED: { label: "Declined", tone: "neutral" },
 };
-const DAY_NAME: Record<string, string> = { Mon: "Mon", Tue: "Tue", Wed: "Wed", Thu: "Thu", Fri: "Fri", Sat: "Sat", Sun: "Sun" };
 
 function Line({ label, value }: { label: string; value: string }) {
   if (!value) return null;
@@ -112,7 +112,7 @@ export default function JobsAdminPage() {
           {shown.map((a) => {
             const open = openId === a.id;
             const st = STATUS[a.status] || STATUS.NEW;
-            const dayList = a.days ? a.days.split(",").map((d) => DAY_NAME[d] || d).join(", ") : "";
+            const dayList = a.days ? shiftsLabel(a.days) : "";
             const tel = a.phone.replace(/[^\d+]/g, "");
             return (
               <Card key={a.id}>
@@ -125,7 +125,7 @@ export default function JobsAdminPage() {
                   <div className="row between wrap g-2" style={{ alignItems: "center" }}>
                     <div className="stack g-1" style={{ minWidth: 0 }}>
                       <b>{a.name}</b>
-                      <span className="t-sm t-muted">{a.position} · {dayList || "No days given"}{a.hours ? ` · ${a.hours}` : ""}</span>
+                      <span className="t-sm t-muted">{a.position} · {dayList || "No shifts given"}</span>
                     </div>
                     <div className="row g-2" style={{ alignItems: "center" }}>
                       {a.over18 === "NO" ? <Badge tone="warn">Under 18</Badge> : null}
@@ -146,8 +146,8 @@ export default function JobsAdminPage() {
                     <div className="grid-auto" style={{ ["--min" as string]: "220px" }}>
                       <Line label="Email" value={a.email} />
                       <Line label="18 or older" value={a.over18 === "YES" ? "Yes" : a.over18 === "NO" ? "No" : ""} />
-                      <Line label="Days" value={dayList} />
-                      <Line label="Hours" value={a.hours} />
+                      <Line label="Shifts they can work" value={dayList} />
+                      <Line label="Schedule notes" value={a.hours} />
                       <Line label="Can start" value={a.startDate} />
                       <Line label="Heard about us" value={a.heardFrom} />
                     </div>

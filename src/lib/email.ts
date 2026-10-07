@@ -940,7 +940,7 @@ export async function sendJobApplicationNotifyEmail(a: {
     <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 12px;">New ${esc(a.position.toLowerCase())} applicant</h2>
     <table style="width:100%;font-size:14px;border-collapse:collapse;">
       ${row("Name", a.name)}${row("Phone", a.phone)}${row("Email", a.email)}
-      ${row("Days", a.days)}${row("Hours", a.hours)}${row("Can start", a.startDate)}${row("Experience", a.experience.slice(0, 400))}
+      ${row("Shifts", a.days)}${row("Hours", a.hours)}${row("Can start", a.startDate)}${row("Experience", a.experience.slice(0, 400))}
     </table>
     <a href="${baseUrl()}/admin/jobs" style="display:inline-block;margin-top:18px;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">Open the application</a>`;
   return send(to, `New ${a.position.toLowerCase()} applicant: ${a.name}`, shell(inner));
