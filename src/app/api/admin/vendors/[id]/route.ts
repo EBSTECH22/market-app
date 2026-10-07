@@ -6,6 +6,7 @@ import { runRoute } from "@/lib/handler";
 import { VENDOR_PUBLIC_SELECT, TEMP_PASSWORD_BYTES } from "@/lib/vendor";
 import { randomBytes } from "crypto";
 import { denyUnless } from "@/lib/perm";
+import { unlockIfRentPaid } from "@/lib/unlock";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   return runRoute("admin/vendors/[id] PATCH", async () => {
@@ -47,6 +48,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       data: { ...data, ...(tempPassword ? { passwordHash: hashPassword(tempPassword), mustChangePassword: true } : {}) },
       select: VENDOR_PUBLIC_SELECT,
     });
+    /* Made rent-free after both signed: nothing is owed, so open the portal
+       now (it only opens if the agreement is fully signed). */
+    if (data.rentFree === true) {
+      try { await unlockIfRentPaid(params.id); } catch (err) { console.error("unlock after rent-free failed", err); }
+    }
     if (tempPassword) {
       try { await sendPasswordResetEmail(vendor, tempPassword); } catch (err) { console.error("reset email failed", err); }
     }

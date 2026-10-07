@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { TZ } from "@/lib/time";
 import { sendFirstRentEmail } from "@/lib/email";
 import { randomBytes } from "crypto";
+import { unlockIfRentPaid } from "@/lib/unlock";
 
 // Posts the prorated first-month rent when a contract becomes fully executed.
 // Idempotent — checks for the marker note so double-signing paths can't double-charge.
@@ -27,8 +28,13 @@ export async function postFirstMonthRent(contractId: string) {
      different month. */
   const paidThrough = new Date(Date.UTC(y, mo - 1 + 1, d, 12, 0, 0));
   await db.contract.update({ where: { id: c.id }, data: { paidThrough } });
-  /* Rent-free vendors are never charged booth rent. */
-  if (amount <= 0 || c.vendor.rentFree) return;
+  /* Rent-free vendors (or a $0 agreement) have nothing to pay, so nothing
+     would ever open their portal — open it now, with the welcome email and
+     setup guide, exactly as a first payment would. */
+  if (amount <= 0 || c.vendor.rentFree) {
+    try { await unlockIfRentPaid(c.vendorId); } catch {}
+    return;
+  }
 
   let token = c.signToken;
   if (!token) {
