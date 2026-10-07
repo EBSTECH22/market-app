@@ -1045,3 +1045,33 @@ model ConversationMessage {
 
   @@index([conversationId, createdAt])
 }
+
+/// Someone applying to work at the market (cashier and the like) — not a
+/// vendor. Taken from the public /jobs form.
+model JobApplication {
+  id         String   @id @default(cuid())
+  position   String   @default("Cashier")
+  name       String
+  email      String
+  phone      String
+  /// YES | NO
+  over18     String   @default("")
+  /// Days they can work, comma-separated: "Fri,Sat,Sun".
+  days       String   @default("")
+  hours      String   @default("")
+  startDate  String   @default("")
+  experience String   @default("")
+  history    String   @default("")
+  why        String   @default("")
+  references String   @default("")
+  resumeUrl  String   @default("")
+  heardFrom  String   @default("")
+  notes      String   @default("")
+  /// NEW | CONTACTED | INTERVIEW | HIRED | DECLINED
+  status     String   @default("NEW")
+  adminNotes String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status, createdAt])
+}

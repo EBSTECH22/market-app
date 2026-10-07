@@ -919,3 +919,29 @@ export async function sendVendorMessageEmail(
     <p style="font-size:12px;color:#9ca3af;margin:16px 0 0;">From the Community Harvest office. Reply in your vendor portal under Messages.</p>`;
   return send(to, title ? `${title} — Community Harvest` : "A message from Community Harvest", shell(inner));
 }
+
+/** "We got your application" to someone applying for a job at the market. */
+export async function sendJobApplicationReceivedEmail(to: string, name: string, position: string) {
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 8px;letter-spacing:-0.02em;">Application received ✅</h2>
+    <p style="font-size:14px;color:#6b7280;">Hi ${esc(name)} &mdash; thanks for applying to be a <b>${esc(position.toLowerCase())}</b> at Community Harvest.</p>
+    <p style="font-size:14px;color:#6b7280;">We read every application ourselves. If it looks like a fit, we&rsquo;ll call or email you to set up a time to talk.</p>`;
+  return send(to, `We got your application — Community Harvest`, shell(inner));
+}
+
+/** The owner's copy of a new job application, so it isn't only in the app. */
+export async function sendJobApplicationNotifyEmail(a: {
+  name: string; position: string; email: string; phone: string; days: string; hours: string; startDate: string; experience: string;
+}) {
+  const to = process.env.MARKET_NOTIFY_EMAIL || "";
+  if (!to) return false;
+  const row = (k: string, v: string) => v ? `<tr><td style="padding:5px 0;color:#6b7280;text-align:left;vertical-align:top;width:120px;">${k}</td><td style="padding:5px 0;text-align:left;">${esc(v)}</td></tr>` : "";
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 12px;">New ${esc(a.position.toLowerCase())} applicant</h2>
+    <table style="width:100%;font-size:14px;border-collapse:collapse;">
+      ${row("Name", a.name)}${row("Phone", a.phone)}${row("Email", a.email)}
+      ${row("Days", a.days)}${row("Hours", a.hours)}${row("Can start", a.startDate)}${row("Experience", a.experience.slice(0, 400))}
+    </table>
+    <a href="${baseUrl()}/admin/jobs" style="display:inline-block;margin-top:18px;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">Open the application</a>`;
+  return send(to, `New ${a.position.toLowerCase()} applicant: ${a.name}`, shell(inner));
+}

@@ -121,6 +121,7 @@ export default function MarketDirectory() {
         <div className="row g-2 wrap mb-4">
           <LinkButton href="/tents" variant="primary" size="lg" icon="tent" className="grow">Book a tent day</LinkButton>
           <LinkButton href="/apply" variant="secondary" size="lg" icon="store" className="grow">Become a vendor</LinkButton>
+          <LinkButton href="/jobs" variant="secondary" size="lg" icon="users" className="grow">Work here</LinkButton>
         </div>
 
         {feed.length > 0 && (
