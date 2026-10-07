@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import { fmtDateTime } from "@/lib/format";
 import { usePulse } from "@/lib/usePulse";
+import { AdminPushButton } from "@/components/AdminPushButton";
 
 type Conv = {
   id: string; kind: "ALL" | "TAG" | "DIRECT" | "CUSTOM" | "VENDOR"; title: string; tagId: string; lastAt: string;
@@ -153,7 +154,10 @@ export default function MessagesPage() {
       <style>{CSS}</style>
       <div className="row between wrap g-2 mb-3" style={{ alignItems: "center" }}>
         <LinkButton href="/admin" variant="ghost" size="sm" icon="arrowLeft">Admin</LinkButton>
-        <Button variant="secondary" size="sm" icon="users" onClick={() => setGroupsOpen(true)}>Groups</Button>
+        <div className="row g-2">
+          <AdminPushButton />
+          <Button variant="secondary" size="sm" icon="users" onClick={() => setGroupsOpen(true)}>Groups</Button>
+        </div>
       </div>
       {err ? <Note tone="error">{err}</Note> : null}
 

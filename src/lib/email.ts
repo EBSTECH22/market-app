@@ -933,8 +933,15 @@ export async function sendJobApplicationReceivedEmail(to: string, name: string, 
 export async function sendJobApplicationNotifyEmail(a: {
   name: string; position: string; email: string; phone: string; days: string; hours: string; startDate: string; experience: string;
 }) {
-  const to = process.env.MARKET_NOTIFY_EMAIL || "";
-  if (!to) return false;
+  /* The notify address, plus every owner and office manager with an email on
+     their staff account — hiring isn't only the owner's job. */
+  const { db } = await import("@/lib/db");
+  const staff = await db.employee.findMany({
+    where: { active: true, role: { in: ["OWNER", "MANAGER"] }, email: { not: "" } },
+    select: { email: true },
+  }).catch(() => [] as { email: string }[]);
+  const to = [...new Set([process.env.MARKET_NOTIFY_EMAIL || "", ...staff.map((s) => s.email)].map((e) => e.trim().toLowerCase()).filter(Boolean))];
+  if (!to.length) return false;
   const row = (k: string, v: string) => v ? `<tr><td style="padding:5px 0;color:#6b7280;text-align:left;vertical-align:top;width:120px;">${k}</td><td style="padding:5px 0;text-align:left;">${esc(v)}</td></tr>` : "";
   const inner = `
     <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 12px;">New ${esc(a.position.toLowerCase())} applicant</h2>
@@ -943,5 +950,7 @@ export async function sendJobApplicationNotifyEmail(a: {
       ${row("Shifts", a.days)}${row("Hours", a.hours)}${row("Can start", a.startDate)}${row("Experience", a.experience.slice(0, 400))}
     </table>
     <a href="${baseUrl()}/admin/jobs" style="display:inline-block;margin-top:18px;background:#111827;color:#ffffff;font-weight:600;font-size:14px;padding:13px 26px;border-radius:10px;text-decoration:none;">Open the application</a>`;
-  return send(to, `New ${a.position.toLowerCase()} applicant: ${a.name}`, shell(inner));
+  let ok = false;
+  for (const t of to) ok = (await send(t, `New ${a.position.toLowerCase()} applicant: ${a.name}`, shell(inner))) || ok;
+  return ok;
 }

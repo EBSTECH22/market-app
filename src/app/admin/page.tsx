@@ -1221,7 +1221,7 @@ const NAV: { group: string; items: { id: string; label: string; icon: IconName; 
       { id: "customers", label: "Customers", icon: "star" },
       { id: "tents", label: "Tent days", icon: "tent" },
       { id: "team", label: "Team & payroll", icon: "users" },
-      { id: "jobs", label: "Job applicants", icon: "user", href: "/admin/jobs", cap: "people" as Capability },
+      { id: "jobs", label: "Job applicants", icon: "user", href: "/admin/jobs", cap: "market" as Capability },
     ],
   },
   {

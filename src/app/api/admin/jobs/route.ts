@@ -7,10 +7,10 @@ export const dynamic = "force-dynamic";
 
 const STATUSES = ["NEW", "CONTACTED", "INTERVIEW", "HIRED", "DECLINED"];
 
-/** Job applicants — the people who run the team see them. */
+/** Job applicants — owners and office managers. */
 export async function GET() {
   return runRoute("admin/jobs GET", async () => {
-    { const denied = await denyUnless("people"); if (denied) return denied; }
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const apps = await db.jobApplication.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
     return NextResponse.json({ applications: apps });
   });
@@ -19,7 +19,7 @@ export async function GET() {
 /** PATCH { id, status?, adminNotes? } */
 export async function PATCH(req: NextRequest) {
   return runRoute("admin/jobs PATCH", async () => {
-    { const denied = await denyUnless("people"); if (denied) return denied; }
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const b = await req.json().catch(() => ({}));
     const id = String(b.id || "");
     const data: { status?: string; adminNotes?: string } = {};
@@ -38,7 +38,7 @@ export async function PATCH(req: NextRequest) {
 /** DELETE ?id= */
 export async function DELETE(req: NextRequest) {
   return runRoute("admin/jobs DELETE", async () => {
-    { const denied = await denyUnless("people"); if (denied) return denied; }
+    { const denied = await denyUnless("market"); if (denied) return denied; }
     const id = req.nextUrl.searchParams.get("id") || "";
     await db.jobApplication.deleteMany({ where: { id } });
     return NextResponse.json({ ok: true });

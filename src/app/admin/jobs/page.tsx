@@ -13,6 +13,7 @@ import {
 import { fmtDateTime } from "@/lib/format";
 import { usePulse } from "@/lib/usePulse";
 import { shiftsLabel } from "@/lib/jobs";
+import { AdminPushButton } from "@/components/AdminPushButton";
 
 type App = {
   id: string; position: string; name: string; email: string; phone: string; over18: string;
@@ -79,7 +80,12 @@ export default function JobsAdminPage() {
       <PageHeader
         title="Job applicants"
         subtitle="Cashier applications from your public jobs page."
-        actions={<LinkButton href="/jobs" variant="secondary" size="sm" icon="link" external>Open the jobs page</LinkButton>}
+        actions={
+          <>
+            <AdminPushButton />
+            <LinkButton href="/jobs" variant="secondary" size="sm" icon="link" external>Open the jobs page</LinkButton>
+          </>
+        }
       />
       {err ? <Note tone="error">{err}</Note> : null}
 
