@@ -526,7 +526,7 @@ export default function VendorDashboard() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "accept", description: poDesc, subtotalDollars: poAmt, expectedDate: poDate }),
     });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
     if (!r.ok) { setPoErr(d.error || "Couldn't accept."); return; }
     toast.success("Pre-order accepted", "The payment link is on its way to the customer by email.");
     await openInboxThread(openThread.id);
@@ -552,7 +552,7 @@ export default function VendorDashboard() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "decline", reason }),
     });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
     if (!r.ok) { setPoErr(d.error || "Couldn't decline."); return; }
     toast.info("Pre-order declined", "Your reason has been emailed to the customer.");
     await openInboxThread(openThread.id);
@@ -566,7 +566,7 @@ export default function VendorDashboard() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ body: replyBody }),
     });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
     if (!r.ok) { setInboxMsg(d.error || "Couldn't send."); return; }
     setReplyBody("");
     toast.success("Reply sent", "They get it by email with a private link back to you.");
@@ -633,7 +633,7 @@ export default function VendorDashboard() {
     try {
       const { data, mime } = await compressImage(file);
       const r = await fetch("/api/vendor/photos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data, mime, kind: "ITEM", itemId }) });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       if (!r.ok) { toast.error("Couldn't add that photo", d.error || "Try a JPEG or PNG from your phone."); return; }
       toast.success("Photo added", "The first photo is the one shoppers see in the grid.");
       await loadPhotos();
@@ -651,7 +651,7 @@ export default function VendorDashboard() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data, mime, kind }),
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       if (!r.ok) { toast.error("Couldn't upload that photo", d.error || "Try again."); return; }
       toast.success(kind === "LOGO" ? "Logo updated" : kind === "COVER" ? "Cover photo updated" : "Photo added", "Customers see it on your public page.");
       await loadPhotos();
@@ -817,7 +817,7 @@ export default function VendorDashboard() {
     });
     setBusy(false);
     if (!res.ok) {
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       setErr(data.error || "Couldn't add it.");
       return;
     }
@@ -886,7 +886,7 @@ export default function VendorDashboard() {
     setBusy(true);
     try {
       const r = await fetch("/api/vendor/items/sale-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ percent: v }) });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       if (!r.ok) { toast.error("Couldn't start the sale", d.error || "Try again."); return; }
       toast.success(
         Math.round(Number(v)) === 0 ? "Sales ended" : `${Math.round(Number(v))}% off everything`,
@@ -937,7 +937,7 @@ export default function VendorDashboard() {
     setBusy(true);
     try {
       const r = await fetch(`/api/vendor/items/${it.id}`, { method: "DELETE" });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       if (!r.ok) { toast.error("Couldn't delete it", d.error || "Try again."); return; }
       if (d.retired) {
         await dialog.alert({
@@ -998,7 +998,7 @@ export default function VendorDashboard() {
     setBusy(true);
     try {
       const r = await fetch("/api/vendor/rent-checkout", { method: "POST" });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       if (!r.ok) { toast.error("Couldn't start the payment", d.error || "Try again."); return; }
       window.location.href = d.url;
     } finally { setBusy(false); }
@@ -1008,7 +1008,7 @@ export default function VendorDashboard() {
     setBusy(true);
     try {
       const r = await fetch("/api/vendor/card", { method: "POST" });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
       if (!r.ok) { toast.error("Couldn't start card setup", d.error || "Try again."); return; }
       window.location.href = d.url;
     } finally { setBusy(false); }
@@ -1055,7 +1055,7 @@ export default function VendorDashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ currentPassword: pwCur, newPassword: pwNew }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({} as { error?: string; url?: string; retired?: boolean }));
     setPwBusy(false);
     if (!res.ok) { setPwErr(data.error || "Couldn't change your password."); return; }
     toast.success("Password changed", "Use the new one next time you sign in.");
