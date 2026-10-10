@@ -21,7 +21,10 @@ const BARCODE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsB
 // SMALL:    2/3" x 1-3/4", 60/sheet (Avery 5195 class — "return address labels")
 const FORMATS = {
   STANDARD: { cols: 3, rows: 10, labelW: "2.625in", labelH: "1in", padTop: "0.5in", padSide: "0.1875in", colGap: "0.125in", perSheet: 30, bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8 },
-  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.6667in", padTop: "0.5in", padSide: "0.3in", colGap: "0.3125in", perSheet: 60, bar: { width: 1.15, height: 22, fontSize: 8 }, nameSize: 8, priceSize: 10, bizSize: 0 },
+  /* 0.28125in side, 0.25in gap — Avery's own 2in horizontal pitch. The old
+     numbers (0.3 / 0.3125) needed 7.9375in of room inside an 7.9in box, so
+     the fourth column was pushed off the right-hand edge of the paper. */
+  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.6667in", padTop: "0.5in", padSide: "0.28125in", colGap: "0.25in", perSheet: 60, bar: { width: 1.15, height: 22, fontSize: 8 }, nameSize: 8, priceSize: 10, bizSize: 0 },
 } as const;
 type FormatKey = keyof typeof FORMATS;
 
@@ -109,6 +112,20 @@ export default function LabelsPage() {
   const selectedCount = items.filter((it) => selected[it.id]).length;
   const sheets = Math.ceil(sheet.length / f.perSheet);
 
+  /* ONE BLOCK PER PHYSICAL SHEET.
+     
+     All the labels used to sit in a single run with the half-inch top margin
+     applied once, at the very start. That is correct for the first sheet and
+     wrong for every sheet after it: the browser breaks the run at the bottom
+     of the paper, so sheet two begins its labels hard against the top edge —
+     half an inch high, and the first row past what most printers can even
+     reach. Splitting the run into sheets gives each one its own margin. */
+  const pages = useMemo(() => {
+    const out: { item: Item; n: number }[][] = [];
+    for (let i = 0; i < sheet.length; i += f.perSheet) out.push(sheet.slice(i, i + f.perSheet));
+    return out;
+  }, [sheet, f.perSheet]);
+
   return (
     <main className="content">
       <style>{`
@@ -132,11 +149,26 @@ export default function LabelsPage() {
           @page { size: letter; margin: 0; }
           .no-print { display: none !important; }
           main { padding: 0 !important; max-width: none !important; margin: 0 !important; }
-          .print-area { width: 8.5in; padding: ${f.padTop} ${f.padSide} 0; border: none !important; border-radius: 0 !important; }
+          /* The spacing class on this element is for the screen. Left alone it
+             survives into print as a sixth of an inch at the top of the first
+             sheet, which is enough to walk every label off its sticker. */
+          .print-area { width: 8.5in; margin: 0 !important; padding: 0 !important; border: none !important; border-radius: 0 !important; }
+          .sheet-page {
+            width: 8.5in;
+            padding: ${f.padTop} ${f.padSide} 0;
+            break-after: page; page-break-after: always;
+          }
+          .sheet-page:last-child { break-after: auto; page-break-after: auto; }
           .lbl { border: none; }
         }
         @media screen {
-          .print-area { border: 1px solid var(--border); border-radius: var(--r-lg); background: #fff; padding: 14px; overflow-x: auto; }
+          .print-area { overflow-x: auto; }
+          .sheet-page {
+            width: 8.5in;
+            padding: ${f.padTop} ${f.padSide} 0.5in;
+            border: 1px solid var(--border); border-radius: var(--r-lg);
+            background: #fff; margin-bottom: var(--sp-4);
+          }
         }
       `}</style>
 
@@ -273,18 +305,22 @@ export default function LabelsPage() {
       </div>
 
       <div className="print-area mt-4">
-        <div className="label-sheet">
-          {sheet.map(({ item, n }) => (
-            <div className="lbl" key={`${item.id}-${n}`}>
-              <div className="nm">{item.name}</div>
-              {/* The TAG price: the vendor's price plus the card percentage.
-                  Card pays this; cash gets the percentage off at the register. */}
-              <div className="pr">${(() => { const c = labelCents(item.priceCents); return (c / 100) % 1 === 0 ? (c / 100).toFixed(0) : (c / 100).toFixed(2); })()}</div>
-              <svg className="barcode" data-code={item.sku}></svg>
-              <div className="biz">{business}</div>
+        {pages.map((page, pageIndex) => (
+          <div className="sheet-page" key={pageIndex}>
+            <div className="label-sheet">
+              {page.map(({ item, n }) => (
+                <div className="lbl" key={`${item.id}-${n}`}>
+                  <div className="nm">{item.name}</div>
+                  {/* The TAG price: the vendor's price plus the card percentage.
+                      Card pays this; cash gets the percentage off at the register. */}
+                  <div className="pr">${(() => { const c = labelCents(item.priceCents); return (c / 100) % 1 === 0 ? (c / 100).toFixed(0) : (c / 100).toFixed(2); })()}</div>
+                  <svg className="barcode" data-code={item.sku}></svg>
+                  <div className="biz">{business}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </main>
   );
