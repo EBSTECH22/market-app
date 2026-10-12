@@ -31,7 +31,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     role: who.role,
     contract: {
       id: contract.id, boothLabel: contract.boothLabel, monthlyRentCents: contract.monthlyRentCents,
-      startDate: contract.startDate, status: contract.status,
+      startDate: contract.startDate, status: contract.status, termsVersion: contract.termsVersion,
       vendorSignedName: contract.vendorSignedName, vendorSignatureData: contract.vendorSignatureData, vendorSignedAt: contract.vendorSignedAt,
       marketSignedName: contract.marketSignedName, marketSignatureData: contract.marketSignatureData, marketSignedAt: contract.marketSignedAt,
     },

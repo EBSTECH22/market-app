@@ -141,6 +141,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
            space it is — that's what the invoice reads later to work out
            whether there is still one to sell them. */
         spaceKey: app.spaceKey,
+        /* Eggs and dairy carry their own section. Picked when the office
+           approves the application; anything unrecognised gets the standard
+           agreement. */
+        termsVersion: body.termsVersion === "EGGS_DAIRY" ? "EGGS_DAIRY" : "STANDARD",
       },
     });
     const token = randomBytes(16).toString("hex");

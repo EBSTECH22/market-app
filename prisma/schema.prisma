@@ -314,6 +314,17 @@ model Contract {
   /// The agreement is NOT ended — they can still pay and be re-held — but the
   /// space is available to let in the meantime, and both sides know it.
   spaceReleasedAt DateTime?
+  /// WHICH SET OF TERMS THIS AGREEMENT IS WRITTEN ON.
+  ///
+  /// STANDARD is the agreement every vendor has always signed. EGGS_DAIRY
+  /// adds a section covering shell eggs and dairy — compliance, cartons,
+  /// temperature, recalls — because those are regulated under their own
+  /// statutes rather than the homemade food rules.
+  ///
+  /// Chosen when the agreement is created and NOT changed after it is signed:
+  /// a signed agreement has to go on rendering the words that were on the
+  /// screen when somebody put their name to it.
+  termsVersion String @default("STANDARD")
   createdAt        DateTime  @default(now())
 }
 

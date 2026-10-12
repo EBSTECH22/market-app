@@ -72,7 +72,7 @@ function DeliveryCell({ d }: { d: Delivery | undefined }) {
   );
 }
 
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean }; spaceReleasedAt?: string | null; spaceKey?: string };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean }; spaceReleasedAt?: string | null; spaceKey?: string; termsVersion?: string };
 
 /** One recorded open of a vendor's invoice — /api/admin/contracts/{id}/views. */
 type InvoiceView = { id: string; viewedAt: string; userAgent: string | null };
@@ -1509,6 +1509,9 @@ export default function AdminPage() {
   // contract form
   const [cVendor, setCVendor] = useState(""); const [cBooth, setCBooth] = useState("");
   const [cRent, setCRent] = useState("150"); const [cStart, setCStart] = useState("");
+  /* Which agreement this vendor signs. Fixed when the agreement is created —
+     eggs and dairy carry a section the standard agreement doesn't have. */
+  const [cTerms, setCTerms] = useState<"STANDARD" | "EGGS_DAIRY">("STANDARD");
   const [cW, setCW] = useState("5"); const [cD, setCD] = useState("5");
   const [cMode, setCMode] = useState<"standard" | "custom">("standard");
   const [rentPerSqft, setRentPerSqft] = useState(6);
@@ -3238,7 +3241,7 @@ export default function AdminPage() {
     try {
       const { ok, data } = await safeFetch("/api/admin/contracts", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vendorId: cVendor, boothLabel: cBooth, monthlyRentDollars: cRent, startDate: cStart }),
+        body: JSON.stringify({ vendorId: cVendor, boothLabel: cBooth, monthlyRentDollars: cRent, startDate: cStart, termsVersion: cTerms }),
       });
       if (!ok) { setCMsg(String(data.error || "Couldn't create it.")); return; }
       setCMsg("");
@@ -3246,7 +3249,7 @@ export default function AdminPage() {
         "Agreement created",
         `First month prorates to ${money(Number(data.firstMonthCents) || 0)} and is on their balance. Full rent auto-charges every 1st after that.`
       );
-      setCBooth(""); setCStart("");
+      setCBooth(""); setCStart(""); setCTerms("STANDARD");
       await loadAll();
     } finally { setBusy(false); }
   };
@@ -8929,7 +8932,12 @@ export default function AdminPage() {
                   sortBy: (c) => c.boothLabel,
                   cell: (c) => (
                     <div className="stack g-1" style={{ minWidth: 0 }}>
-                      <b className="truncate">Booth {c.boothLabel}</b>
+                      <div className="row g-2" style={{ alignItems: "center", minWidth: 0 }}>
+                        <b className="truncate">Booth {c.boothLabel}</b>
+                        {/* Only flagged when it isn't the standard agreement —
+                            a badge on every row says nothing. */}
+                        {c.termsVersion === "EGGS_DAIRY" ? <Badge tone="info">Eggs/dairy</Badge> : null}
+                      </div>
                       <span className="t-xs t-muted truncate">{c.vendor.businessName}</span>
                     </div>
                   ),
@@ -9478,6 +9486,23 @@ export default function AdminPage() {
               <Field label="Monthly rent" hint="Auto-filled from the size — change it freely for deals.">
                 {(p) => <Input {...p} value={cRent} onChange={(e) => setCRent(e.target.value)} type="number" min="0" step="5" />}
               </Field>
+
+              <div className="stack g-2">
+                <Segmented
+                  label="Which agreement"
+                  value={cTerms}
+                  onChange={(v) => setCTerms(v)}
+                  options={[
+                    { value: "STANDARD", label: "Standard" },
+                    { value: "EGGS_DAIRY", label: "Eggs or dairy" },
+                  ]}
+                />
+                <p className="t-xs t-muted">
+                  Eggs and dairy aren&rsquo;t homemade foods — they have their own law, so that agreement adds a
+                  section covering compliance, cartons, refrigeration and recalls. Everyone else gets the standard
+                  one. This can&rsquo;t be changed once it&rsquo;s signed.
+                </p>
+              </div>
 
               <Field label="Lease start date" hint="The first month prorates from this day." required>
                 {(p) => <Input {...p} value={cStart} onChange={(e) => setCStart(e.target.value)} type="date" />}

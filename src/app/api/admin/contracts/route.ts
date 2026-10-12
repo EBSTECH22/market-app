@@ -83,7 +83,11 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   { const denied = await denyUnless("market"); if (denied) return denied; }
-  const { vendorId, boothLabel, monthlyRentDollars, startDate } = await req.json();
+  const { vendorId, boothLabel, monthlyRentDollars, startDate, termsVersion } = await req.json();
+  /* Which agreement they sign. Anything we don't recognise falls back to the
+     agreement everybody has always had, so a stray value can never quietly
+     put somebody on terms the office didn't choose. */
+  const terms = termsVersion === "EGGS_DAIRY" ? "EGGS_DAIRY" : "STANDARD";
   const rent = Math.round(Number(monthlyRentDollars) * 100);
   if (!vendorId || !boothLabel?.trim() || !startDate) {
     return NextResponse.json({ error: "Vendor, booth, and start date are required." }, { status: 400 });
@@ -101,6 +105,7 @@ export async function POST(req: NextRequest) {
       boothLabel: boothLabel.trim(),
       monthlyRentCents: rent,
       startDate: start,
+      termsVersion: terms,
     },
   });
   // first month's rent posts automatically when the contract is FULLY EXECUTED (both signatures) — not at creation
