@@ -6,7 +6,7 @@ import { usePulse } from "@/lib/usePulse";
 import {
   Icon, Button, LinkButton, Field, Input, MoneyInput, Textarea, Segmented,
   DataTable, Badge, Card, EmptyState, Note, Stat, SkeletonCard, SkeletonStats,
-  PageHeader, useDialog, useToast, type Column, type BadgeTone,
+  PageHeader, Modal, useDialog, useToast, type Column, type BadgeTone,
 } from "@/components/ui";
 import { fmtDate, fmtPhone, money, plural, relTime } from "@/lib/format";
 import { PHASE_LABEL, type Phase, type DeliveryState } from "@/lib/agreement";
@@ -499,6 +499,13 @@ export default function ApplicationsPage() {
   const [busy, setBusy] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [form, setForm] = useState<{ id: string; booth: string; rent: string; start: string } | null>(null);
+  /* Giving a booth to somebody on the waiting list. The NEW cards open their
+     agreement form inline, but the waiting list is a table — there is no card
+     to open it inside — so this one is a modal and carries the application
+     with it. */
+  const [booth, setBooth] = useState<
+    { app: App; booth: string; rent: string; start: string; terms: "STANDARD" | "EGGS_DAIRY" } | null
+  >(null);
   const [phase, setPhase] = useState<Phase>("NEW");
 
   /* Land on the list that actually has someone in it, preferring the new
@@ -603,6 +610,65 @@ export default function ApplicationsPage() {
       setSpacesKey((k) => k + 1);
       await load();
     } finally { setBusy(false); }
+  };
+
+  /**
+   * Off the waiting list and into the pipeline.
+   *
+   * Accepting is what takes them off: the moment they are no longer waiting
+   * they are an ordinary applicant, and they appear under New applications
+   * with every action available to anyone else. Accepting also claims the
+   * space, which is the whole point of the queue.
+   */
+  const offWaitlist = async (a: App) => {
+    const yes = await dialog.confirm({
+      title: `Take ${a.businessName} off the waiting list?`,
+      body: `They stop waiting and move to New applications, and the space they were waiting for is counted as theirs. They're emailed that they're in.${
+        a.waitPosition && a.waitPosition > 1
+          ? ` They're number ${a.waitPosition} in that queue — anyone ahead of them stays where they are.`
+          : ""
+      }`,
+      confirmLabel: "Take them off the list",
+    });
+    if (!yes) return;
+    const d = await act(a.id, { action: "accept" });
+    if (d) {
+      toast.success(
+        `${a.businessName} is off the waiting list`,
+        `They're in New applications now.${claimLine(d)}${d.emailed === false ? " The acceptance email didn't send — tell them yourself." : ""}`
+      );
+      setSpacesKey((k) => k + 1);
+    }
+  };
+
+  /** Straight from the waiting list into a booth, in one step. */
+  const submitBooth = async () => {
+    if (!booth) return;
+    const a = booth.app;
+    const d = await act(a.id, {
+      action: "create_contract",
+      boothLabel: booth.booth,
+      rentDollars: Number(booth.rent),
+      startDate: booth.start,
+      termsVersion: booth.terms,
+    });
+    if (!d) return;
+    setBooth(null);
+    setSpacesKey((k) => k + 1);
+    if (d.emailErrors && d.emailErrors.length > 0) {
+      await dialog.alert({
+        title: "Agreement created — but the email didn't send",
+        tone: "warn",
+        body: <>Send this signing link to <b>{a.email}</b> yourself.</>,
+        copyable: d.signUrl,
+        confirmLabel: "Done",
+      });
+    } else {
+      toast.success(
+        `Booth ${booth.booth} is ${a.businessName}'s`,
+        `Off the waiting list, agreement created, signing link emailed to ${a.email} — vendor ${d.vendor.code}.${claimLine(d)}`
+      );
+    }
   };
 
   /* Said out loud every time, because a count quietly going down is exactly
@@ -951,6 +1017,30 @@ export default function ApplicationsPage() {
               Hold it for them
             </Button>
           ) : null}
+          {/* The two ways somebody leaves this list. Taking them off puts
+              them back in the ordinary pipeline; giving them a booth skips
+              straight to the agreement, because that is usually what a space
+              coming free actually means. */}
+          <Button size="sm" variant="secondary" icon="check" disabled={busy} onClick={() => void offWaitlist(a)}>
+            Off the list
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            icon="contract"
+            disabled={busy}
+            onClick={() =>
+              setBooth({
+                app: a,
+                booth: a.boothRequest || "",
+                rent: "",
+                start: new Date().toISOString().slice(0, 10),
+                terms: "STANDARD",
+              })
+            }
+          >
+            Give them a booth
+          </Button>
         </span>
       ),
     },
@@ -1289,6 +1379,69 @@ export default function ApplicationsPage() {
       <div className="mb-3">
         <LinkButton href="/admin" variant="ghost" size="sm" icon="arrowLeft">Admin</LinkButton>
       </div>
+
+      {/* Booth + agreement, straight off the waiting list. */}
+      <Modal
+        open={!!booth}
+        onClose={() => setBooth(null)}
+        title={booth ? `Give ${booth.app.businessName} a booth` : ""}
+        description="They come off the waiting list, the vendor account is made, and the agreement goes out for signature."
+      >
+        {booth ? (
+          <div className="stack g-4">
+            {booth.app.boothRequest ? (
+              <Note tone="neutral" title="What they asked for">{booth.app.boothRequest}</Note>
+            ) : null}
+
+            <Field label="Booth label" required>
+              {(p) => (
+                <Input {...p} value={booth.booth} placeholder="A3"
+                  onChange={(e) => setBooth((b) => b && ({ ...b, booth: e.target.value }))} />
+              )}
+            </Field>
+
+            <Field label="Monthly rent" hint="Dollars. Billed on the first of each month." required>
+              {(p) => (
+                <MoneyInput {...p} value={booth.rent} placeholder="96"
+                  onChange={(e) => setBooth((b) => b && ({ ...b, rent: e.target.value }))} />
+              )}
+            </Field>
+
+            <Field label="Start date" required>
+              {(p) => (
+                <Input {...p} type="date" value={booth.start}
+                  onChange={(e) => setBooth((b) => b && ({ ...b, start: e.target.value }))} />
+              )}
+            </Field>
+
+            <div className="stack g-2">
+              <Segmented
+                label="Which agreement"
+                value={booth.terms}
+                onChange={(v) => setBooth((b) => b && ({ ...b, terms: v }))}
+                options={[
+                  { value: "STANDARD", label: "Standard" },
+                  { value: "EGGS_DAIRY", label: "Eggs or dairy" },
+                ]}
+              />
+              <p className="t-xs t-muted">Eggs and dairy get the agreement with the section covering compliance, cartons, refrigeration and recalls.</p>
+            </div>
+
+            <div className="row wrap g-2">
+              <Button
+                variant="primary"
+                icon="mail"
+                loading={busy}
+                disabled={!booth.booth.trim() || !(Number(booth.rent) > 0) || !booth.start}
+                onClick={() => void submitBooth()}
+              >
+                Create &amp; send for signature
+              </Button>
+              <Button variant="ghost" onClick={() => setBooth(null)}>Cancel</Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
 
       <PageHeader
         title="Vendor applications"
