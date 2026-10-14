@@ -213,6 +213,10 @@ model Employee {
   email        String  @default("")
   passwordHash String  @default("")
   mustChangePassword Boolean @default(false)
+  /// When the kiosk PIN was last set. The PIN itself is a one-way hash and
+  /// cannot be read back by anyone, so this is the only honest thing the
+  /// roster can say about it: whether there is one, and how old it is.
+  pinSetAt    DateTime?
   createdAt   DateTime @default(now())
 }
 

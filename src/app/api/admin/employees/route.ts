@@ -25,8 +25,8 @@ export async function POST(req: NextRequest) {
     // new/changed PINs are always stored salted (scrypt) — see verifyPin in lib/auth
     const employee = await db.employee.upsert({
       where: { name: name.trim() },
-      create: { name: name.trim(), pinHash: hashPin(pin) },
-      update: { pinHash: hashPin(pin), active: true },
+      create: { name: name.trim(), pinHash: hashPin(pin), pinSetAt: new Date() },
+      update: { pinHash: hashPin(pin), active: true, pinSetAt: new Date() },
     });
     return NextResponse.json({ employee: { id: employee.id, name: employee.name } });
   });

@@ -1037,7 +1037,7 @@ type OpenDrawerRow = {
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[]; drawerId?: string };
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
-type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[] };
+type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[]; hasPin?: boolean; pinSetAt?: string | null };
 type PayrollRow = { id: string; name: string; payRateCents: number; hours: number; grossCents: number; dedCents: number; netCents: number; deductions: { name: string; amountCents: number }[]; openEntries: number };
 type Report = {
   start: string; end: string; gross: number; tax: number; cash: number; card: number; tickets: number; refundTotal?: number;
@@ -3011,6 +3011,56 @@ export default function AdminPage() {
           : count
       );
       await loadDrawer();
+    } finally { setBusy(false); }
+  };
+
+  /**
+   * Set somebody's kiosk code, and show it once.
+   *
+   * The code itself is a one-way hash the moment it is saved — nobody can
+   * read it back, which is the point. So the only way it "never gets lost" is
+   * that setting a new one takes five seconds and the new one is put on the
+   * screen big enough to write down.
+   */
+  const setKioskCode = async (m: { id: string; name: string; hasPin?: boolean }) => {
+    const suggested = String(Math.floor(1000 + Math.random() * 9000));
+    const code = await dialog.prompt({
+      title: `${m.hasPin ? "New" : "New"} kiosk code for ${m.name}`,
+      body: (
+        <p>
+          4 to 6 digits. {m.hasPin
+            ? "This replaces their current code — the old one stops working straight away."
+            : "This is what they'll type at the register to sign in and open a drawer."}
+        </p>
+      ),
+      label: "Kiosk code",
+      defaultValue: suggested,
+      required: true,
+      confirmLabel: "Set the code",
+      validate: (v) => (/^\d{4,6}$/.test(v.trim()) ? null : "4 to 6 digits, numbers only."),
+    });
+    if (!code) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/employees", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: m.name, pin: code.trim() }),
+      });
+      if (!ok) { toast.error("Couldn't set it", String(data.error || "")); return; }
+      await dialog.alert({
+        title: `${m.name}'s kiosk code`,
+        body: (
+          <>
+            <p style={{ fontSize: 34, fontWeight: 800, letterSpacing: "0.12em", margin: "6px 0 10px" }} className="num">
+              {code.trim()}
+            </p>
+            <p>Write it down or print this now — once you close this, nobody can read it back. If it&rsquo;s lost, set a new one.</p>
+          </>
+        ),
+        copyable: code.trim(),
+        confirmLabel: "Got it",
+      });
+      await loadTeam();
     } finally { setBusy(false); }
   };
 
@@ -5635,6 +5685,58 @@ export default function AdminPage() {
 
       {tab === "team" && allowed("people") && (
         <>
+          {/* KIOSK CODES.
+              
+              Sits above everything else on this tab because it is the thing
+              somebody comes here for in a hurry: a cashier standing at the
+              till who can't get in. There is no list of codes to read — they
+              are one-way hashes — so the fix is that setting a new one takes
+              five seconds. */}
+          <Card
+            className="mb-4"
+            title="Kiosk codes"
+            subtitle="What each person types at the register to sign in and open a drawer."
+          >
+            <div className="stack g-3">
+              <Note tone="neutral">
+                Codes can&rsquo;t be read back — they&rsquo;re stored scrambled, so nobody, including the office, can
+                look one up. If somebody forgets theirs, set a new one here and it&rsquo;s shown on screen once for
+                you to write down.
+              </Note>
+
+              {team.length === 0 ? (
+                <EmptyState
+                  icon="users"
+                  title="Nobody on the team yet"
+                  body="Add people in Settings — a name and a code — and they'll show up here."
+                />
+              ) : (
+                <div className="stack g-2">
+                  {team.map((m) => (
+                    <div key={m.id} className="row between wrap g-2" style={{ alignItems: "center", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "var(--sp-2)" }}>
+                      <span className="stack g-1" style={{ minWidth: 0 }}>
+                        <b className="truncate">{m.name}</b>
+                        <span className="t-xs t-muted">
+                          {m.hasPin
+                            ? m.pinSetAt
+                              ? `Code set ${relTime(m.pinSetAt)}`
+                              : "Has a code"
+                            : "No code yet — they can't sign in at the register"}
+                        </span>
+                      </span>
+                      <div className="row g-2">
+                        {!m.hasPin ? <Badge tone="warn">No code</Badge> : null}
+                        <Button size="sm" variant={m.hasPin ? "secondary" : "primary"} icon="lock" disabled={busy} onClick={() => void setKioskCode(m)}>
+                          {m.hasPin ? "New code" : "Set a code"}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+
           <Card
             className="mb-4"
             title="Who can get in"

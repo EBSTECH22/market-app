@@ -14,6 +14,10 @@ export async function GET() {
   return NextResponse.json({
     employees: employees.map((e) => ({
       id: e.id, name: e.name, payRateCents: e.payRateCents, w4: JSON.parse(e.w4Json || "{}"),
+      /* Never the PIN — it is a one-way hash and there is nothing to send.
+         Only whether one exists and when it was last set. */
+      hasPin: !!e.pinHash,
+      pinSetAt: e.pinSetAt,
       deductions: deductions.filter((d) => d.employeeId === e.id),
       docs: docs.filter((d) => d.employeeId === e.id),
     })),
