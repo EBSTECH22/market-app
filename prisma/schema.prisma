@@ -34,6 +34,24 @@ model Vendor {
   // Booth rent waived: the monthly run and the first-month charge skip them.
   // Sales commission and the service fee are untouched.
   rentFree         Boolean @default(false)
+  /// THIS VENDOR'S MARKET SERVICE FEE, when it isn't the market's.
+  ///
+  /// The fee is added to the vendor's price to make the customer's cash price,
+  /// and the difference is the market's income. Normally every vendor carries
+  /// the same rate, set once in Settings.
+  ///
+  /// NULL means exactly that: use the market rate, and follow it when it
+  /// changes. A number overrides it for this vendor alone, and 0 waives it —
+  /// the customer pays the vendor's price and the market takes nothing on the
+  /// sale. That is the case for a vendor who pays a sales commission instead,
+  /// where the fee would be charging them twice for the same thing.
+  ///
+  /// Deliberately nullable rather than defaulting to 0: a column of zeros
+  /// could not tell "this vendor is exempt" apart from "nobody has set a
+  /// market rate yet", and the day the market rate moved, every vendor would
+  /// silently stay behind.
+  marketFeePercent Float?
+
   stripeCustomerId String  @default("")
   stripePmId       String  @default("")
   cardLast4        String  @default("")

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +26,11 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
     select: {
       id: true, code: true, businessName: true, publicBlurb: true,
       tagline: true, story: true, instagramUrl: true, facebookUrl: true, websiteUrl: true,
-      acceptsPreorders: true, acceptsRequests: true,
+      /* Needed to price the items below, and NOT part of the response: what
+         the market charges this vendor is between them and the market. The
+         object returned at the bottom is built field by field, so nothing
+         selected here reaches the page by accident. */
+      acceptsPreorders: true, acceptsRequests: true, marketFeePercent: true,
     },
   });
   if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
@@ -90,7 +95,7 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
     : new Set<string>();
 
   const pct = await getCardAdjustPercent();
-  const fee = await getMarketFeePercent();
+  const fee = marketFeeFor(vendor, await getMarketFeePercent());
   const shaped = items.map((i) => ({
     id: i.id,
     /* Two different things, kept apart on purpose:

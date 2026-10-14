@@ -57,7 +57,10 @@ export async function GET() {
       where: {
         vendorSignedAt: { not: null },
         marketSignedAt: { not: null },
-        status: { not: "SUPERSEDED" },
+        /* VOIDED can't currently reach here (voiding is refused once the
+           market has countersigned, and this query needs both signatures), but
+           it costs nothing to say so and it holds if that rule ever moves. */
+        status: { notIn: ["SUPERSEDED", "VOIDED"] },
       },
       // Explicit select: `include: { vendor: true }` would pull passwordHash and
       // the Stripe ids into the same object we're about to serialise.

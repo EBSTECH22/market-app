@@ -12,7 +12,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return runRoute("admin/vendors/[id] PATCH", async () => {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json();
-    const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean; rentFree?: boolean } = {};
+    const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean; rentFree?: boolean; marketFeePercent?: number | null } = {};
     if (typeof body.businessName === "string" && body.businessName.trim()) data.businessName = body.businessName.trim();
     if (typeof body.contactName === "string") data.contactName = body.contactName.trim();
     if (typeof body.phone === "string") data.phone = body.phone.trim();
@@ -31,6 +31,27 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (typeof body.active === "boolean") data.active = body.active;
     if (typeof body.allowSelfCheckout === "boolean") data.allowSelfCheckout = body.allowSelfCheckout;
     if (typeof body.rentFree === "boolean") data.rentFree = body.rentFree;
+
+    /* THE MARKET FEE, FOR THIS VENDOR ALONE.
+    
+       Three states, and they have to stay three. `null` — sent as an empty
+       string from the form — means "whatever the market charges", and keeps
+       following the market rate when it moves. A number pins this vendor to
+       that rate, and 0 waives the fee entirely. Collapsing null and 0 into one
+       value would lose the difference between a vendor who is exempt and a
+       market that simply hasn't set a rate yet. */
+    if (body.marketFeePercent !== undefined) {
+      const raw = body.marketFeePercent;
+      if (raw === null || String(raw).trim() === "") {
+        data.marketFeePercent = null;
+      } else {
+        const v = Number(raw);
+        if (!Number.isFinite(v) || v < 0 || v > 25) {
+          return NextResponse.json({ error: "The market fee has to be between 0 and 25% — leave it blank to use the market rate." }, { status: 400 });
+        }
+        data.marketFeePercent = v;
+      }
+    }
 
     let tempPassword: string | undefined;
     if (body.resetPassword) {

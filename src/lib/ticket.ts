@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { cardUpliftCents, cashCents, lineShares } from "@/lib/cardprice";
@@ -73,14 +74,17 @@ export async function priceTicket(
   const priced: PricedLine[] = [];
   let subtotalCents = 0;
   let saleSavingsCents = 0;
-  /* Customer cash price = vendor price + market service fee; see lib/cardprice. */
-  const fee = await getMarketFeePercent();
+  /* Customer cash price = vendor price + market service fee; see lib/cardprice.
+     The rate is the vendor's own where they have one, so a ticket holding two
+     vendors' goods charges each at the rate on their label. */
+  const marketRate = await getMarketFeePercent();
 
   for (const l of lines) {
     const item = items.find((i) => i.id === l.itemId);
     if (!item) throw new TicketError("An item on the ticket no longer exists.");
     const quantity = Math.max(1, Math.round(l.quantity));
     const vendorUnit = effectivePriceCents(item);
+    const fee = marketFeeFor(item.vendor, marketRate);
     const unit = cashCents(vendorUnit, fee);
     const cashBase = cashCents(item.priceCents, fee);
     saleSavingsCents += Math.max(0, cashBase - unit) * quantity;

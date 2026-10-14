@@ -21,7 +21,7 @@ import { newSaleKey } from "@/lib/offline";
 import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string };
@@ -1592,7 +1592,7 @@ export default function AdminPage() {
   /* Note: the per-application notes/contract form and its PATCH handler used to
      live here too. That workflow now has its own screen at /admin/applications,
      so this page only needs the read-only pipeline view. */
-  const [editF, setEditF] = useState({ businessName: "", contactName: "", email: "", phone: "" });
+  const [editF, setEditF] = useState({ businessName: "", contactName: "", email: "", phone: "", marketFee: "" });
   /* Presentation-only state for the vendor/contract/application views: which
      record the slide-over is showing, and what's typed in each search box. */
   const [vendorQ, setVendorQ] = useState("");
@@ -4053,7 +4053,29 @@ export default function AdminPage() {
      agreement's own panel, which is where somebody asking "what did they sign
      in March" is actually looking. */
   const withdrawnContracts = contracts.filter((c) => c.status === "WITHDRAWN");
-  const workingContracts = contracts.filter((c) => c.status !== "WITHDRAWN" && c.status !== "SUPERSEDED");
+
+  /* REPLACED IS REPLACED, however it was done.
+
+     Excluding SUPERSEDED alone wasn't enough, because there are two ways an
+     agreement gets replaced and only one of them was covered. "Void and start
+     over" has always marked the old one VOIDED, and VOIDED was never filtered
+     out — so a corrected agreement put a second line on the board exactly like
+     an amendment did, and had been doing it since long before amendments
+     existed.
+
+     The last clause is the one that can't go stale: whatever status it carries
+     and whenever it was written, an agreement that some LATER agreement points
+     back to has been replaced, and the replacement is the line that belongs on
+     this list. The status checks stay for agreements replaced before that link
+     was recorded. */
+  const replacedIds = new Set(contracts.map((c) => c.supersedesId).filter(Boolean));
+  const workingContracts = contracts.filter(
+    (c) =>
+      c.status !== "WITHDRAWN" &&
+      c.status !== "SUPERSEDED" &&
+      c.status !== "VOIDED" &&
+      !replacedIds.has(c.id)
+  );
   const shownContracts =
     contractFilter === "ALL" ? contracts
     : contractFilter === "WITHDRAWN" ? withdrawnContracts
@@ -7766,6 +7788,13 @@ export default function AdminPage() {
                       {v.allowSelfCheckout ? "Self-checkout on" : "Self-checkout off"}
                     </Badge>
                     {v.rentFree ? <Badge tone="success" icon="check">Rent free</Badge> : null}
+                    {/* Only when it differs from the market's rate — a badge on
+                        every vendor would say nothing. */}
+                    {v.marketFeePercent === 0 ? (
+                      <Badge tone="success" icon="check">No market fee</Badge>
+                    ) : typeof v.marketFeePercent === "number" ? (
+                      <Badge tone="info">{v.marketFeePercent}% market fee</Badge>
+                    ) : null}
                   </div>
 
                   {v.holdReleased ? (
@@ -7897,7 +7926,7 @@ export default function AdminPage() {
                         onClick={() => {
                           if (editV === v.id) { setEditV(null); return; }
                           setEditV(v.id);
-                          setEditF({ businessName: v.businessName, contactName: v.contactName || "", email: v.email, phone: v.phone || "" });
+                          setEditF({ businessName: v.businessName, contactName: v.contactName || "", email: v.email, phone: v.phone || "", marketFee: v.marketFeePercent === null || v.marketFeePercent === undefined ? "" : String(v.marketFeePercent) });
                         }}
                       >
                         {editV === v.id ? "Cancel editing" : "Edit details"}
@@ -7961,12 +7990,32 @@ export default function AdminPage() {
                       <Field label="Phone">
                         {(p) => <Input {...p} type="tel" value={editF.phone} onChange={(e) => setEditF((f) => ({ ...f, phone: e.target.value }))} />}
                       </Field>
+                      {/* Blank is a real answer here, and the only one that
+                          keeps following the market rate when it changes. */}
+                      <Field
+                        label="Market fee for this vendor"
+                        hint={`Leave blank to charge the market rate (${marketFee || 0}%). Put 0 to waive it — customers then pay their price with nothing added, and the market takes nothing on their sales.`}
+                      >
+                        {(p) => (
+                          <Input
+                            {...p}
+                            type="number"
+                            min="0"
+                            max="25"
+                            step="0.5"
+                            inputMode="decimal"
+                            placeholder={`${marketFee || 0}`}
+                            value={editF.marketFee}
+                            onChange={(e) => setEditF((f) => ({ ...f, marketFee: e.target.value }))}
+                          />
+                        )}
+                      </Field>
                       <div className="row g-2">
                         <Button
                           variant="primary"
                           loading={busy}
                           onClick={async () => {
-                            await patchVendor(v.id, { businessName: editF.businessName.trim(), contactName: editF.contactName.trim(), email: editF.email.trim(), phone: editF.phone.trim() }, "Vendor details saved");
+                            await patchVendor(v.id, { businessName: editF.businessName.trim(), contactName: editF.contactName.trim(), email: editF.email.trim(), phone: editF.phone.trim(), marketFeePercent: editF.marketFee.trim() === "" ? null : editF.marketFee.trim() }, "Vendor details saved");
                             setEditV(null);
                           }}
                         >

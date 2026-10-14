@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { denyUnless } from "@/lib/perm";
 import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
 
   const vendor = await db.vendor.findUnique({
     where: { id: vendorId },
-    select: { id: true, code: true, businessName: true },
+    select: { id: true, code: true, businessName: true, marketFeePercent: true },
   });
   if (!vendor) return NextResponse.json({ error: "No such vendor." }, { status: 404 });
 
@@ -61,6 +62,6 @@ export async function GET(req: NextRequest) {
     vendor,
     items,
     cardPercent: await getCardAdjustPercent(),
-    feePercent: await getMarketFeePercent(),
+    feePercent: marketFeeFor(vendor, await getMarketFeePercent()),
   });
 }

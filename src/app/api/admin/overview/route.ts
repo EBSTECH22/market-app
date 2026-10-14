@@ -5,6 +5,7 @@ import { denyUnless, currentRole, can } from "@/lib/perm";
 import { centralDayStart, centralMonthStart } from "@/lib/time";
 import { cashCents } from "@/lib/cardprice";
 import { getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 
 export const dynamic = "force-dynamic";
 
@@ -13,8 +14,12 @@ export const dynamic = "force-dynamic";
    top for the tag. vendorPriceCents is what the vendor set. */
 function floorRow(i: {
   id: string; sku: string; name: string; priceCents: number; salePercent: number; quantity: number; taxClass: string;
-  vendor: { businessName: string; code: string; lowStockThreshold: number };
-}, fee: number) {
+  vendor: { businessName: string; code: string; lowStockThreshold: number; marketFeePercent?: number | null };
+}, marketRate: number) {
+  /* The vendor's own rate where they have one. The register reads this list,
+     so a row priced at the market rate for a fee-exempt vendor would ring up
+     more than their label says. */
+  const fee = marketFeeFor(i.vendor, marketRate);
   return {
     id: i.id, sku: i.sku, name: i.name, priceCents: cashCents(effectivePriceCents(i), fee), basePriceCents: cashCents(i.priceCents, fee),
     vendorPriceCents: effectivePriceCents(i),
@@ -35,11 +40,11 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get("only") === "floor") {
     const floor = await db.item.findMany({
       where: { active: true, vendor: { active: true } },
-      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true } } },
+      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } } },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     });
-    const fee = await getMarketFeePercent();
-    return NextResponse.json({ floor: floor.map((i) => floorRow(i, fee)) });
+    const marketRate = await getMarketFeePercent();
+    return NextResponse.json({ floor: floor.map((i) => floorRow(i, marketRate)) });
   }
   /* Takings are financials, not ops: a cashier and a manager both need the
      floor list, and neither needs to see what the market made today. */
@@ -55,13 +60,13 @@ export async function GET(req: NextRequest) {
     db.refund.findMany({ where: { createdAt: { gte: monthStart }, note: { not: { startsWith: "VOID" } } } }),
     db.item.findMany({
       where: { active: true, vendor: { active: true } },
-      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true } } },
+      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } } },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     }),
     db.vendor.count({ where: { active: true } }),
   ]);
 
-  const fee = await getMarketFeePercent();
+  const marketRate = await getMarketFeePercent();
   const sum = (arr: { totalCents: number }[]) => arr.reduce((n, s) => n + s.totalCents, 0);
   const tax = (arr: { taxCents: number }[]) => arr.reduce((n, s) => n + s.taxCents, 0);
   const refundBack = (arr: { amountCents: number; taxCents: number }[]) => arr.reduce((n, r) => n + r.amountCents + r.taxCents, 0);
@@ -71,6 +76,6 @@ export async function GET(req: NextRequest) {
     today: { count: todaySales.length, totalCents: sum(todaySales) - refundBack(todayRefunds), taxCents: tax(todaySales) - refundTax(todayRefunds) },
     month: admin ? { count: monthSales.length, totalCents: sum(monthSales) - refundBack(monthRefunds), taxCents: tax(monthSales) - refundTax(monthRefunds) } : { count: 0, totalCents: 0, taxCents: 0 },
     vendors,
-    floor: floor.map((i) => floorRow(i, fee)),
+    floor: floor.map((i) => floorRow(i, marketRate)),
   });
 }

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { effectivePriceCents } from "@/lib/pricing";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export async function GET() {
   });
   const items = await db.item.findMany({
     where: { active: true, quantity: { gt: 0 }, vendor: PUBLIC_VENDOR_WHERE },
-    select: { name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { code: true } } },
+    select: { name: true, priceCents: true, salePercent: true, quantity: true, vendor: { select: { code: true, marketFeePercent: true } } },
     orderBy: { name: "asc" },
   });
   const logos = await db.vendorPhoto.findMany({ where: { kind: "LOGO" }, select: { id: true, vendorId: true } });
@@ -38,11 +39,12 @@ export async function GET() {
     if (code) logoByCode[code] = lg.id;
   }
   const pct = await getCardAdjustPercent();
-  const fee = await getMarketFeePercent();
+  const marketRate = await getMarketFeePercent();
+  const feeOf = (i: { vendor: { marketFeePercent?: number | null } }) => marketFeeFor(i.vendor, marketRate);
   return NextResponse.json({
     vendors: vendors.map((v) => ({
       ...v,
-      items: items.filter((i) => i.vendor.code === v.code).map((i) => ({ name: i.name, quantity: i.quantity, priceCents: tagCents(cashCents(effectivePriceCents(i), fee), pct), basePriceCents: tagCents(cashCents(i.priceCents, fee), pct), salePercent: Math.max(0, Math.min(90, i.salePercent || 0)) })),
+      items: items.filter((i) => i.vendor.code === v.code).map((i) => ({ name: i.name, quantity: i.quantity, priceCents: tagCents(cashCents(effectivePriceCents(i), feeOf(i)), pct), basePriceCents: tagCents(cashCents(i.priceCents, feeOf(i)), pct), salePercent: Math.max(0, Math.min(90, i.salePercent || 0)) })),
       rating: ratings[v.code] || null,
       logoId: logoByCode[v.code] || null,
     })),

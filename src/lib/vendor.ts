@@ -13,6 +13,8 @@ export const VENDOR_PUBLIC_SELECT = {
   email: true,
   phone: true,
   commissionPercent: true,
+  marketFeePercent: true,
+  rentFree: true,
   mustChangePassword: true,
   acceptsPreorders: true,
   acceptsRequests: true,

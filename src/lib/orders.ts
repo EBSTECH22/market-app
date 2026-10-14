@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
@@ -78,7 +79,7 @@ export async function priceCart(
 ): Promise<PriceResult> {
   const vendor = await db.vendor.findFirst({
     where: { code: vendorCode.toUpperCase(), active: true, portalLocked: false },
-    select: { id: true, code: true, businessName: true, commissionPercent: true },
+    select: { id: true, code: true, businessName: true, commissionPercent: true, marketFeePercent: true },
   });
   if (!vendor) return { ok: false, error: "That vendor isn't taking orders." };
 
@@ -96,7 +97,7 @@ export async function priceCart(
   const cardPercent = await getCardAdjustPercent();
   /* ...on top of the cash price, which is the vendor's price plus the market
      service fee. */
-  const feePercent = await getMarketFeePercent();
+  const feePercent = marketFeeFor(vendor, await getMarketFeePercent());
   for (const w of wanted) {
     const item = items.find((i) => i.id === w.itemId);
     if (!item) return { ok: false, error: "Something in your basket isn't available online any more." };

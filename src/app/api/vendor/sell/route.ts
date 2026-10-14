@@ -7,6 +7,7 @@ import { runRoute } from "@/lib/handler";
 import { randomBytes, randomInt } from "crypto";
 import { priceCardCart, type CartLine } from "@/lib/selfcheckout";
 import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 import { cashCents } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest) {
 
     const vendor = await db.vendor.findUnique({
       where: { id: vendorId },
-      select: { id: true, businessName: true, code: true, portalLocked: true, active: true },
+      select: { id: true, businessName: true, code: true, portalLocked: true, active: true, marketFeePercent: true },
     });
     if (!vendor || !vendor.active) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
     if (vendor.portalLocked) {
@@ -89,7 +90,7 @@ export async function GET(req: NextRequest) {
     const rates = await getTaxRates();
     /* Items go out at the customer's CASH price (vendor's price + the market
        service fee); the page adds the card percentage for the tag. */
-    const fee = await getMarketFeePercent();
+    const fee = marketFeeFor(vendor, await getMarketFeePercent());
 
     return NextResponse.json({
       vendor: { businessName: vendor.businessName, code: vendor.code },
@@ -135,7 +136,7 @@ export async function POST(req: NextRequest) {
     }
 
     const lines: CartLine[] = [];
-    const fee = await getMarketFeePercent();
+    const fee = marketFeeFor(vendor, await getMarketFeePercent());
     for (const rl of reqLines) {
       const qty = Math.max(1, Math.min(99, Math.round(Number(rl.qty) || 1)));
       const item = await db.item.findUnique({ where: { id: String(rl.itemId || "") } });

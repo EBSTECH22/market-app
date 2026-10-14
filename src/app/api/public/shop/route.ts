@@ -7,6 +7,7 @@ import { priceCardCart, type CartLine } from "@/lib/selfcheckout";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
+import { marketFeeFor } from "@/lib/marketfee";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 
 export const dynamic = "force-dynamic";
@@ -25,17 +26,20 @@ export async function GET() {
   const photoMap = new Map(itemPhotos.map((x) => [x.itemId, x.id]));
   const items = await db.item.findMany({
     where: sellable,
-    select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, taxClass: true, vendor: { select: { businessName: true } } },
+    select: { id: true, sku: true, name: true, priceCents: true, salePercent: true, quantity: true, taxClass: true, vendorId: true, vendor: { select: { businessName: true, marketFeePercent: true } } },
     orderBy: { name: "asc" },
   });
   const rates = await getTaxRates();
   /* Self-checkout is card-only, so shoppers see and pay the TAG price. */
   const pct = await getCardAdjustPercent();
-  const fee = await getMarketFeePercent();
+  /* One rate per vendor, not one for the shop: a fee-exempt vendor's items
+     have to show the same price here as on their label. */
+  const marketRate = await getMarketFeePercent();
+  const feeOf = (i: { vendor: { marketFeePercent?: number | null } }) => marketFeeFor(i.vendor, marketRate);
   return NextResponse.json({
     taxRatePercent: rates.standardPercent,
     foodTaxRatePercent: rates.foodPercent,
-    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: tagCents(cashCents(effectivePriceCents(i), fee), pct), basePriceCents: tagCents(cashCents(i.priceCents, fee), pct), salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, taxClass: normalizeTaxClass(i.taxClass), vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
+    items: items.map((i) => ({ id: i.id, sku: i.sku, name: i.name, priceCents: tagCents(cashCents(effectivePriceCents(i), feeOf(i)), pct), basePriceCents: tagCents(cashCents(i.priceCents, feeOf(i)), pct), salePercent: Math.max(0, Math.min(90, i.salePercent || 0)), quantity: i.quantity, taxClass: normalizeTaxClass(i.taxClass), vendorName: i.vendor.businessName, photoId: photoMap.get(i.id) || null })),
   });
 }
 
@@ -47,7 +51,7 @@ export async function POST(req: NextRequest) {
   if (b.action === "lookup") {
     const sku = String(b.sku || "").trim().toUpperCase();
     if (!sku) return NextResponse.json({ error: "No code." }, { status: 400 });
-    const item = await db.item.findUnique({ where: { sku }, include: { vendor: { select: { businessName: true, active: true, portalLocked: true, allowSelfCheckout: true } } } });
+    const item = await db.item.findUnique({ where: { sku }, include: { vendor: { select: { businessName: true, active: true, portalLocked: true, allowSelfCheckout: true, marketFeePercent: true } } } });
     // portalLocked: the vendor is still onboarding — their goods aren't on the
     // floor yet, so a scanned code shouldn't resolve.
     if (!item || !item.active || !item.vendor.active || item.vendor.portalLocked) {
@@ -56,7 +60,7 @@ export async function POST(req: NextRequest) {
     if (!item.vendor.allowSelfCheckout) return NextResponse.json({ error: `${item.vendor.businessName} items go through the register — take this one up front. 😊` }, { status: 400 });
     if (item.quantity <= 0) return NextResponse.json({ error: `${item.name} shows sold out — grab a staff member if you're holding one.` }, { status: 400 });
     const pct = await getCardAdjustPercent();
-    const fee = await getMarketFeePercent();
+    const fee = marketFeeFor(item.vendor, await getMarketFeePercent());
     return NextResponse.json({ item: { id: item.id, sku: item.sku, name: item.name, priceCents: tagCents(cashCents(effectivePriceCents(item), fee), pct), basePriceCents: tagCents(cashCents(item.priceCents, fee), pct), salePercent: Math.max(0, Math.min(90, item.salePercent || 0)), quantity: item.quantity, taxClass: normalizeTaxClass(item.taxClass), vendorName: item.vendor.businessName } });
   }
 
@@ -68,7 +72,9 @@ export async function POST(req: NextRequest) {
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return NextResponse.json({ error: "That email doesn't look right — fix it or leave it blank." }, { status: 400 });
 
     const lines: CartLine[] = [];
-    const fee = await getMarketFeePercent();
+    /* Per line, because a basket can hold two vendors' goods and only one of
+       them may carry the fee. */
+    const marketRate = await getMarketFeePercent();
     for (const rl of reqLines) {
       const sku = String(rl.sku || "").trim().toUpperCase();
       const qty = Math.max(1, Math.min(99, Math.round(Number(rl.qty) || 1)));
@@ -77,7 +83,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `${sku} isn't available for self-checkout — remove it or pay at the register.` }, { status: 400 });
       }
       if (item.quantity < qty) return NextResponse.json({ error: `Only ${item.quantity} of ${item.name} left in the system — adjust your quantity.` }, { status: 400 });
-      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: cashCents(effectivePriceCents(item), fee), vendorCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName, taxClass: normalizeTaxClass(item.taxClass) });
+      lines.push({ itemId: item.id, sku: item.sku, name: item.name, priceCents: cashCents(effectivePriceCents(item), marketFeeFor(item.vendor, marketRate)), vendorCents: effectivePriceCents(item), quantity: qty, vendorId: item.vendorId, vendorName: item.vendor.businessName, taxClass: normalizeTaxClass(item.taxClass) });
     }
 
     /* Card pays the tag prices; the cart keeps the vendors' own prices. */

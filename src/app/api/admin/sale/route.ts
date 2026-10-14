@@ -9,6 +9,7 @@ import type { PrintNow } from "@/lib/printqueue";
 import { printForSale } from "@/lib/receiptjob";
 import { afterResponse } from "@/lib/after";
 import { cardUpliftCents, tagCents, cashCents, lineShares } from "@/lib/cardprice";
+import { marketFeeFor } from "@/lib/marketfee";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -177,7 +178,10 @@ export async function POST(req: NextRequest) {
        price is that plus the market service fee (lib/cardprice); card adds the
        card percentage on top of the cash price. Lines carry the cash price;
        the fee is booked as the market's share of each line. */
-    const fee = cfg.marketFeePercent;
+    /* This vendor's rate, not the market's. `include: { vendor: true }` above
+       carries the override, and a ticket mixing an exempt vendor's goods with
+       everyone else's has to charge each line the price on its own label. */
+    const fee = marketFeeFor(item.vendor, cfg.marketFeePercent);
     const vendorNow = effectivePriceCents(item);
     const cashBase = cashCents(item.priceCents, fee);
     const sentPrice = Math.round(Number(l.priceCents));
