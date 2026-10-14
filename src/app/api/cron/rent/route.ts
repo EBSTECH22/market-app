@@ -46,9 +46,40 @@ export async function GET(req: NextRequest) {
     const contractsPerVendor = new Map<string, number>();
     for (const c of contracts) contractsPerVendor.set(c.vendorId, (contractsPerVendor.get(c.vendorId) || 0) + 1);
 
+    /* THE AGREEMENTS AN AMENDMENT REPLACES.
+
+       "Already charged" is keyed to the contract id, which is what stops one
+       booth's rent being skipped because another booth's was posted. But an
+       amended agreement has a NEW id, so a rent change signed halfway through
+       the month looked like an agreement that had never been billed — and the
+       run would post the month a second time, on top of the charge the
+       superseded agreement had already taken.
+
+       A charge against any agreement in the chain therefore counts as this
+       month settled. The chain is walked rather than read one level deep,
+       because a vendor can be amended twice in a month. */
+    const ancestors = new Map<string, string[]>();
+    for (const c of contracts) {
+      if (!c.supersedesId) continue;
+      const ids: string[] = [];
+      let cursor = c.supersedesId;
+      for (let hops = 0; cursor && hops < 20; hops++) {
+        ids.push(cursor);
+        const prev: { supersedesId: string } | null = await db.contract.findUnique({
+          where: { id: cursor },
+          select: { supersedesId: true },
+        });
+        cursor = prev?.supersedesId || "";
+      }
+      if (ids.length) ancestors.set(c.id, ids);
+    }
+
     const legacy = legacyRentMarker(ym);
     const isCharged = (c: RentContract): boolean => {
       if (posted.some((p) => p.note.includes(rentMarker(ym, c.id)))) return true;
+      for (const prevId of ancestors.get(c.id) || []) {
+        if (posted.some((p) => p.note.includes(rentMarker(ym, prevId)))) return true;
+      }
       /* A pre-existing entry from the old scheme covers this contract only when
          the vendor has exactly one — otherwise it's the OTHER booth's charge and
          skipping on it is the bug being fixed. */

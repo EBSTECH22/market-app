@@ -13,6 +13,34 @@ export async function postFirstMonthRent(contractId: string) {
   const already = await db.ledgerEntry.findFirst({ where: { vendorId: c.vendorId, type: "RENT", note: { contains: marker } } });
   if (already) return;
 
+  /* AN AMENDMENT IS NOT A FIRST MONTH.
+
+     The idempotency marker above is keyed to this agreement's id, which is the
+     right thing for a signing link being used twice — and exactly the wrong
+     thing for an amended agreement, which has an id of its own. A vendor whose
+     rent went from $150 to $175 would sign the amendment and be charged a
+     whole extra month on the spot, with `paidThrough` reset underneath it.
+
+     So walk back through the agreements this one replaces. If any of them
+     already had its first month posted, this vendor is in the billing cycle
+     already: the amendment inherits `paidThrough` and the monthly run takes it
+     from there. If NONE of them did — an agreement amended after the vendor
+     signed but before it was ever executed — the first month has genuinely
+     never been charged, and it posts below as normal. */
+  let cursor = c.supersedesId;
+  for (let hops = 0; cursor && hops < 20; hops++) {
+    const prev: { id: string; supersedesId: string } | null = await db.contract.findUnique({
+      where: { id: cursor },
+      select: { id: true, supersedesId: true },
+    });
+    if (!prev) break;
+    const prevCharged = await db.ledgerEntry.findFirst({
+      where: { vendorId: c.vendorId, type: "RENT", note: { contains: `[first ${prev.id.slice(0, 8)}]` } },
+    });
+    if (prevCharged) return;
+    cursor = prev.supersedesId;
+  }
+
   const start = c.startDate;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(start);
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value || 0);
