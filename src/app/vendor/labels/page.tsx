@@ -20,8 +20,13 @@ const BARCODE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsB
 // STANDARD: 1" x 2-5/8", 30/sheet (Avery 5160 class — "address labels")
 // SMALL:    2/3" x 1-3/4", 60/sheet (Avery 5195 class — "return address labels")
 const FORMATS = {
-  /* 5160: symmetric and exact. 0.1875 + 3x2.625 + 2x0.125 + 0.1875 = 8.5 */
-  STANDARD: { cols: 3, rows: 10, labelW: "2.625in", labelH: "1in", padTop: "0.5in", padLeft: "0.1875in", padRight: "0.1875in", colGap: "0.125in", perSheet: 30, bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8, nameLines: 1, showCode: true },
+  /* 5160/8160: three straight columns, symmetric, exact.
+     0.1875 + 3x2.625 + 2x0.125 + 0.1875 = 8.5 */
+  STANDARD: {
+    cols: 3, rows: 10, labelW: 2.625, labelH: 1, perSheet: 30,
+    top: 0.5, left: 0.1875, colStep: 2.75, midStep: 2.75, rowStep: 1,
+    bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8, nameLines: 1, showCode: true,
+  },
   /* 0.28125in side, 0.25in gap — Avery's own 2in horizontal pitch. The old
      numbers (0.3 / 0.3125) needed 7.9375in of room inside an 7.9in box, so
      the fourth column was pushed off the right-hand edge of the paper. */
@@ -31,17 +36,19 @@ const FORMATS = {
      labels — and left the name so little room it truncated mid-word. So the
      code line goes, the name gets two lines instead of an ellipsis, and the
      barcode gets the height back, which is also what makes it scan. */
-  /* 5195, from the published template rather than from arithmetic.
+  /* 5195. These are a STARTING POINT, not gospel.
      
-     This sheet is NOT symmetric and its pitch is NOT a round number. The
-     columns step every 2.031in — label 1.75 plus a 0.281 gap — starting
-     0.297 from the left, which leaves 0.36 on the right. Guessing a tidy
-     2.0in pitch put the fourth column nearly four millimetres left of its
-     stickers, and the top margin is 0.531 rather than the half inch that
-     looks obvious.
-     
-     0.297 + 4x1.75 + 3x0.281 + 0.36 = 8.5 exactly. */
-  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.666in", padTop: "0.531in", padLeft: "0.297in", padRight: "0.36in", colGap: "0.281in", perSheet: 60, bar: { width: 1.2, height: 30, fontSize: 0 }, nameSize: 7.5, priceSize: 11, bizSize: 0, nameLines: 2, showCode: false },
+     Three published templates disagreed with each other and all three
+     disagreed with the sheet in the office — wrong margins, wrong pitch, and
+     an even spacing on stock that is visibly split down the middle. So the
+     numbers below are only defaults, and every one of them can be measured
+     off the real sheet and saved (see the geometry controls). A ruler beats a
+     specification every time. */
+  SMALL: {
+    cols: 4, rows: 15, labelW: 1.75, labelH: 0.666, perSheet: 60,
+    top: 0.531, left: 0.297, colStep: 2.031, midStep: 2.031, rowStep: 0.666,
+    bar: { width: 1.2, height: 30, fontSize: 0 }, nameSize: 7.5, priceSize: 11, bizSize: 0, nameLines: 2, showCode: false,
+  },
 } as const;
 type FormatKey = keyof typeof FORMATS;
 
@@ -66,6 +73,15 @@ export default function LabelsPage() {
      out, and move the whole grid. Remembered per browser so it's set once. */
   const [nudgeX, setNudgeX] = useState(0);
   const [nudgeY, setNudgeY] = useState(0);
+  /* WHAT THE SHEET ACTUALLY MEASURES.
+     
+     Every published template for this stock has been wrong about something —
+     the margins, the pitch, or the split down the middle — and each time the
+     fix was another guess. So the geometry is data now, not a constant: five
+     numbers anybody can take off a real sheet with a ruler, saved per label
+     size. The built-in values are only where you start. */
+  type Geom = { top: number; left: number; colStep: number; midStep: number; rowStep: number };
+  const [geoms, setGeoms] = useState<Partial<Record<FormatKey, Geom>>>({});
 
   useEffect(() => {
     try {
@@ -77,6 +93,12 @@ export default function LabelsPage() {
       }
     } catch {
       /* Private window, storage off — just print with no offset. */
+    }
+    try {
+      const raw = window.localStorage.getItem("labelGeom");
+      if (raw) setGeoms(JSON.parse(raw) as Partial<Record<FormatKey, Geom>>);
+    } catch {
+      /* Fall back to the built-in numbers. */
     }
   }, []);
 
@@ -117,6 +139,43 @@ export default function LabelsPage() {
   }, [loadBarcodeScript]);
 
   const f = FORMATS[format];
+  /* Measured values win over the built-in ones, field by field, so a sheet
+     that's right in three ways and wrong in one only needs the one fixed. */
+  const g: Geom = {
+    top: geoms[format]?.top ?? f.top,
+    left: geoms[format]?.left ?? f.left,
+    colStep: geoms[format]?.colStep ?? f.colStep,
+    midStep: geoms[format]?.midStep ?? f.midStep,
+    rowStep: geoms[format]?.rowStep ?? f.rowStep,
+  };
+
+  const saveGeom = (patch: Partial<Geom>) => {
+    const next = { ...geoms, [format]: { ...g, ...patch } };
+    setGeoms(next);
+    try { window.localStorage.setItem("labelGeom", JSON.stringify(next)); } catch {}
+  };
+  const resetGeom = () => {
+    const next = { ...geoms };
+    delete next[format];
+    setGeoms(next);
+    try { window.localStorage.setItem("labelGeom", JSON.stringify(next)); } catch {}
+  };
+
+  /* Column left edges, straight from the steps. Column 3 onward carries the
+     middle step instead of the ordinary one, which is what makes a split
+     sheet come out right without pretending the spacing is even. */
+  const colLefts: number[] = [];
+  for (let i = 0; i < f.cols; i++) {
+    colLefts.push(i === 0 ? 0 : colLefts[i - 1] + (i === 2 ? g.midStep : g.colStep));
+  }
+  /* Each track is a label; the space between is a gap track of whatever is
+     left over after the label itself. */
+  const tracks = colLefts
+    .map((x, i) => (i === 0 ? `${f.labelW}in` : `${(x - colLefts[i - 1] - f.labelW).toFixed(4)}in ${f.labelW}in`))
+    .join(" ");
+  const placements = colLefts
+    .map((_, i) => `.lbl:nth-child(${f.cols}n+${i + 1 === f.cols ? f.cols : i + 1}) { grid-column: ${i * 2 + 1}; }`)
+    .join("\n        ");
 
   const sheet = useMemo(() => {
     const out: { item: Item; n: number }[] = [];
@@ -179,9 +238,12 @@ export default function LabelsPage() {
       <style>{`
         .label-sheet {
           display: grid;
-          grid-template-columns: repeat(${f.cols}, ${f.labelW});
-          grid-auto-rows: ${f.labelH};
-          column-gap: ${f.colGap};
+          /* With a split, the gaps become real columns of their own and each
+             label is told which one it sits in — the only way to make one gap
+             wider than the others and keep every edge exact. */
+          grid-template-columns: ${tracks};
+          grid-auto-rows: ${g.rowStep}in;
+          column-gap: 0;
           row-gap: 0;
           /* Hard against the left margin. Both sheets now carry their real
              margins, and 5195's are deliberately uneven — centring would
@@ -193,6 +255,10 @@ export default function LabelsPage() {
           display: flex; flex-direction: column; align-items: center; justify-content: center;
           border: 1px dashed #d1d5db; break-inside: avoid;
         }
+        ${placements}
+        /* The label is its own height inside a row track that may be taller,
+           so a sheet with a gap between rows still lands on the stickers. */
+        .lbl { height: ${f.labelH}in; }
         .lbl .nm {
           font-weight: 700; font-size: ${f.nameSize}px; line-height: 1.08;
           max-width: 96%; overflow: hidden;
@@ -212,7 +278,7 @@ export default function LabelsPage() {
           .print-area { width: 8.5in; margin: 0 !important; padding: 0 !important; border: none !important; border-radius: 0 !important; }
           .sheet-page {
             width: 8.5in;
-            padding: calc(${f.padTop} + ${nudgeY}in) ${f.padRight} 0 calc(${f.padLeft} + ${nudgeX}in);
+            padding: ${g.top + nudgeY}in 0 0 ${g.left + nudgeX}in;
             break-after: page; page-break-after: always;
             position: relative;
           }
@@ -221,7 +287,7 @@ export default function LabelsPage() {
              nothing and settles the one thing nobody can see by eye: whether
              the printer shrank the page. If it doesn't measure an inch, the
              scale is wrong and no amount of changing the layout will help. */
-          .cal { position: absolute; top: 0.16in; left: calc(${f.padLeft} + ${nudgeX}in); }
+          .cal { position: absolute; top: 0.16in; left: ${g.left + nudgeX}in; }
           .sheet-page:last-child { break-after: auto; page-break-after: auto; }
           .lbl { border: none; }
         }
@@ -237,7 +303,7 @@ export default function LabelsPage() {
           .print-area { overflow-x: auto; }
           .sheet-page {
             width: 8.5in;
-            padding: ${f.padTop} ${f.padRight} 0.5in ${f.padLeft};
+            padding: ${g.top}in 0.2in 0.5in ${g.left}in;
             border: 1px solid var(--border); border-radius: var(--r-lg);
             background: #fff; margin-bottom: var(--sp-4);
           }
@@ -350,6 +416,71 @@ export default function LabelsPage() {
                 <span className="t-xs t-muted">
                   Positive moves right and down. Printing too far left? Try 0.03.
                 </span>
+              </div>
+
+              {/* MEASURE THE SHEET.
+                  
+                  Published templates have been wrong about this stock three
+                  times running. Five numbers off a ruler settle it for good,
+                  and they're saved per label size. */}
+              <div className="stack g-2">
+                <span className="t-label">Measure your sheet</span>
+                <p className="t-xs t-muted">
+                  Lay a blank sheet on the desk with a ruler. Every number is to the <b>sticker edge</b>, not
+                  the printing. Change only what&rsquo;s wrong — anything you leave alone keeps the built-in value.
+                </p>
+
+                <div className="grid-auto" style={{ ["--min" as string]: "150px" }}>
+                  <Field label="Top margin (in)" hint="Paper edge to the top of the first sticker.">
+                    {(p) => (
+                      <Input {...p} type="number" step="0.01" min="0" max="2" inputMode="decimal"
+                        value={g.top} onChange={(e) => saveGeom({ top: Number(e.target.value) || 0 })} />
+                    )}
+                  </Field>
+                  <Field label="Left margin (in)" hint="Paper edge to the left of the first sticker.">
+                    {(p) => (
+                      <Input {...p} type="number" step="0.01" min="0" max="2" inputMode="decimal"
+                        value={g.left} onChange={(e) => saveGeom({ left: Number(e.target.value) || 0 })} />
+                    )}
+                  </Field>
+                  <Field label="Row step (in)" hint="Top of row 1 to top of row 2. Or measure row 1 to the last row and divide.">
+                    {(p) => (
+                      <Input {...p} type="number" step="0.001" min="0.2" max="3" inputMode="decimal"
+                        value={g.rowStep} onChange={(e) => saveGeom({ rowStep: Number(e.target.value) || f.rowStep })} />
+                    )}
+                  </Field>
+                  <Field label="Column step (in)" hint="Left of column 1 to left of column 2.">
+                    {(p) => (
+                      <Input {...p} type="number" step="0.001" min="0.5" max="4" inputMode="decimal"
+                        value={g.colStep} onChange={(e) => saveGeom({ colStep: Number(e.target.value) || f.colStep })} />
+                    )}
+                  </Field>
+                  {f.cols > 3 ? (
+                    <Field label="Middle step (in)" hint="Left of column 2 to left of column 3. Bigger than the column step if the sheet is split.">
+                      {(p) => (
+                        <Input {...p} type="number" step="0.001" min="0.5" max="4" inputMode="decimal"
+                          value={g.midStep} onChange={(e) => saveGeom({ midStep: Number(e.target.value) || f.midStep })} />
+                      )}
+                    </Field>
+                  ) : null}
+                </div>
+
+                <div className="row wrap g-3" style={{ alignItems: "center" }}>
+                  <span className="t-xs t-muted">
+                    Last column&rsquo;s right edge lands at{" "}
+                    <b className="num">
+                      {(g.left + (f.cols - 1 === 2 ? g.colStep + g.midStep : g.colStep * (f.cols - 1)) + (f.cols > 3 ? g.colStep : 0) + f.labelW).toFixed(3)}
+                      &quot;
+                    </b>{" "}
+                    of 8.5&quot;. Bottom row ends at{" "}
+                    <b className="num">{(g.top + g.rowStep * (f.rows - 1) + f.labelH).toFixed(3)}&quot;</b> of 11&quot;.
+                  </span>
+                  {geoms[format] ? (
+                    <Button size="sm" variant="ghost" icon="refresh" onClick={resetGeom}>
+                      Back to the built-in numbers
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </div>
           </Card>
