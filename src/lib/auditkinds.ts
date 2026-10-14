@@ -13,6 +13,7 @@ export type AuditAction =
   | "SALE_VOID"
   | "SALE_REFUND"
   | "ITEM_PRICE"
+  | "ITEM_STOCK"
   | "VENDOR_LEDGER"
   | "VENDOR_EDIT"
   | "VENDOR_PASSWORD_RESET"
@@ -35,6 +36,7 @@ export const AUDIT_LABEL: Record<AuditAction, string> = {
   SALE_VOID: "Ticket voided",
   SALE_REFUND: "Refund given",
   ITEM_PRICE: "Price changed",
+  ITEM_STOCK: "Stock count corrected",
   VENDOR_LEDGER: "Balance adjusted",
   VENDOR_EDIT: "Vendor record changed",
   VENDOR_PASSWORD_RESET: "Vendor password reset",

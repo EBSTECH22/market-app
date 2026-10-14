@@ -7576,6 +7576,7 @@ export default function AdminPage() {
           items={overview?.floor || []}
           loading={!overview}
           month={overview?.month}
+          onSaved={loadAll}
         />
       )}
 
@@ -11258,16 +11259,90 @@ function FloorStockCard({
   items,
   loading,
   month,
+  onSaved,
 }: {
   items: FloorItem[];
   loading: boolean;
   month?: { count: number; totalCents: number; taxCents: number };
+  /** Reload the overview once counts have been written. */
+  onSaved?: () => void | Promise<void>;
 }) {
   const [q, setQ] = useState("");
   const query = q.trim().toLowerCase();
   const rows = query
     ? items.filter((i) => `${i.sku} ${i.name} ${i.vendorCode} ${i.vendorName}`.toLowerCase().includes(query))
     : items;
+
+  /* ------------------------------------------------ correcting the counts --
+     A count is the one number on a vendor's settlement that staff can put
+     right without the vendor present: three jars turn up behind a crate, a
+     vendor phones in a figure, somebody rings a sale through twice. It had to
+     be done from the vendor's own login, which meant either knowing their
+     password or not doing it.
+
+     Deliberately a mode rather than always-on inputs. A table full of live
+     boxes alongside a search field invites a stray keystroke into the stock
+     figures, and the search box here is used constantly. */
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [savingCounts, setSavingCounts] = useState(false);
+  const [countErr, setCountErr] = useState("");
+
+  const startEditing = () => {
+    const next: Record<string, string> = {};
+    for (const i of items) next[i.id] = String(i.quantity);
+    setVals(next);
+    setCountErr("");
+    setEditing(true);
+  };
+
+  /** Only what moved, and only ever for items still on screen. */
+  const pending = editing
+    ? items.filter((i) => {
+        const typed = vals[i.id];
+        return typed !== undefined && String(typed).trim() !== "" && Math.round(Number(typed)) !== i.quantity;
+      })
+    : [];
+
+  const saveCounts = async () => {
+    if (pending.length === 0) { setEditing(false); return; }
+    setSavingCounts(true);
+    setCountErr("");
+    let r: Response | null = null;
+    let msg = "";
+    try {
+      r = await fetch("/api/admin/stock", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ counts: pending.map((i) => ({ id: i.id, quantity: vals[i.id] })) }),
+      });
+    } catch {
+      msg = "The counts never reached the server. Nothing was changed.";
+    }
+
+    if (r && r.ok) {
+      const d = await r.json().catch(() => ({} as { summary?: string; rejected?: { reason: string }[] }));
+      if (d.rejected?.length) {
+        setCountErr(`${d.summary || ""}. ${d.rejected.map((x) => x.reason).join(" ")}`);
+        setSavingCounts(false);
+        await onSaved?.();
+        return;
+      }
+      setSavingCounts(false);
+      setEditing(false);
+      await onSaved?.();
+      toast.success("Counts corrected", d.summary || "Saved.");
+      return;
+    }
+
+    if (r) {
+      const d = await r.json().catch(() => ({} as { error?: string }));
+      msg = d.error || `The server turned the counts down (error ${r.status}). Nothing was changed.`;
+    }
+    setCountErr(msg);
+    setSavingCounts(false);
+  };
 
   const outCount = items.filter((i) => i.quantity === 0).length;
   const lowCount = items.filter(isLow).length;
@@ -11309,14 +11384,35 @@ function FloorStockCard({
       header: "On hand",
       align: "right",
       sortBy: (i) => i.quantity,
-      cell: (i) =>
-        i.quantity === 0 ? (
-          <Badge tone="danger" dot>Out of stock</Badge>
-        ) : isLow(i) ? (
-          <Badge tone="warn" dot>Only {i.quantity} left</Badge>
-        ) : (
-          <span className="num">{i.quantity}</span>
-        ),
+      cell: (i) => {
+        if (!editing) {
+          return i.quantity === 0 ? (
+            <Badge tone="danger" dot>Out of stock</Badge>
+          ) : isLow(i) ? (
+            <Badge tone="warn" dot>Only {i.quantity} left</Badge>
+          ) : (
+            <span className="num">{i.quantity}</span>
+          );
+        }
+        const typed = vals[i.id] ?? "";
+        const moved = String(typed).trim() !== "" && Math.round(Number(typed)) !== i.quantity;
+        return (
+          <span className="row end g-2" style={{ alignItems: "center" }}>
+            {moved ? <span className="t-xs t-muted num">was {i.quantity}</span> : null}
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              aria-label={`Count on hand for ${i.name} from ${i.vendorName}`}
+              disabled={savingCounts}
+              style={{ width: 88 }}
+              value={typed}
+              onChange={(e) => setVals((f) => ({ ...f, [i.id]: e.target.value }))}
+            />
+          </span>
+        );
+      },
     },
   ];
 
@@ -11325,20 +11421,46 @@ function FloorStockCard({
       title="Everything on the floor"
       subtitle={loading ? "Loading…" : `${plural(items.length, "item")} · ${plural(unitCount, "unit")} on hand`}
       actions={
-        outCount > 0 || lowCount > 0 ? (
-          <>
-            {lowCount > 0 ? <Badge tone="warn" dot>{lowCount} running low</Badge> : null}
-            {outCount > 0 ? <Badge tone="danger" dot>{outCount} out of stock</Badge> : null}
-          </>
-        ) : undefined
+        <>
+          {editing ? (
+            <>
+              <Button variant="primary" icon="check" loading={savingCounts} onClick={saveCounts}>
+                {pending.length > 0 ? `Save ${plural(pending.length, "count")}` : "Done"}
+              </Button>
+              <Button variant="ghost" disabled={savingCounts} onClick={() => { setEditing(false); setCountErr(""); }}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button variant="secondary" icon="box" disabled={loading || items.length === 0} onClick={startEditing}>
+              Correct counts
+            </Button>
+          )}
+          {!editing && (outCount > 0 || lowCount > 0) ? (
+            <>
+              {lowCount > 0 ? <Badge tone="warn" dot>{lowCount} running low</Badge> : null}
+              {outCount > 0 ? <Badge tone="danger" dot>{outCount} out of stock</Badge> : null}
+            </>
+          ) : null}
+        </>
       }
       footer={
-        month ? (
-          <span className="t-xs t-muted">
-            This month: {money(month.totalCents)} across {plural(month.count, "sale")} · tax collected{" "}
-            <b>{money(month.taxCents)}</b>
-          </span>
-        ) : undefined
+        !countErr && !editing && !month ? undefined : (
+        <div className="stack g-2">
+          {countErr ? <Note tone="error" title="Check this">{countErr}</Note> : null}
+          {editing ? (
+            <span className="t-xs t-muted">
+              Each box is the <b>total</b> on hand, not an amount to add. Every change is recorded
+              against your name with the old number, and the vendor sees the new count straight away.
+            </span>
+          ) : month ? (
+            <span className="t-xs t-muted">
+              This month: {money(month.totalCents)} across {plural(month.count, "sale")} · tax collected{" "}
+              <b>{money(month.taxCents)}</b>
+            </span>
+          ) : null}
+        </div>
+        )
       }
     >
       <div className="toolbar">

@@ -295,6 +295,12 @@ export default function VendorDashboard() {
   /* The reason the last save was refused, kept on screen beside the button
      that was pressed rather than in a toast that has already gone. */
   const [saveErr, setSaveErr] = useState<string>("");
+
+  /* The whole sheet of floor counts, open for editing. Keyed by item id and
+     held as strings, because that is what a half-typed number is. */
+  const [counting, setCounting] = useState(false);
+  const [countIF, setCountIF] = useState<Record<string, string>>({});
+  const [countErr, setCountErr] = useState<string>("");
   const [editIF, setEditIF] = useState({
     name: "", price: "", qty: "", sale: "0", food: false, category: "",
     description: "", unitLabel: "", featured: false,
@@ -879,6 +885,76 @@ export default function VendorDashboard() {
     }
     setBusy(false);
     return !!r?.ok;
+  };
+
+  /**
+   * Save the whole count sheet.
+   *
+   * Only the rows that MOVED are sent. A vendor who opens the sheet, changes
+   * two numbers and saves should touch two items — not announce a restock of
+   * everything she sells to every customer following her.
+   */
+  const saveCounts = async () => {
+    const counts: { id: string; quantity: string }[] = [];
+    for (const it of activeItems) {
+      const typed = countIF[it.id];
+      if (typed === undefined || String(typed).trim() === "") continue;
+      if (Math.round(Number(typed)) === it.quantity) continue;
+      counts.push({ id: it.id, quantity: typed });
+    }
+
+    if (counts.length === 0) {
+      setCountErr("");
+      setCounting(false);
+      toast.info("Nothing changed", "The counts were already what's on the sheet.");
+      return;
+    }
+
+    setBusy(true);
+    setCountErr("");
+    let r: Response | null = null;
+    let msg = "";
+    try {
+      r = await fetch("/api/vendor/stock", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ counts }),
+      });
+    } catch {
+      msg = "The counts never reached the market — you may have lost signal. Nothing was changed.";
+    }
+
+    let summary = "";
+    if (r && r.ok) {
+      const d = await r.json().catch(() => ({} as { summary?: string; rejected?: { reason: string }[] }));
+      summary = d.summary || "Counts saved.";
+      /* A partial save is the dangerous one: some numbers went in and some
+         didn't, and a cheerful tick over the top of that is a lie. */
+      if (d.rejected?.length) {
+        setCountErr(`${summary}. ${d.rejected.map((x) => x.reason).join(" ")}`);
+        await load();
+        setBusy(false);
+        return;
+      }
+    } else if (r) {
+      const d = await r.json().catch(() => ({} as { error?: string }));
+      msg =
+        r.status === 401
+          ? "You've been signed out, so nothing was saved. Sign in again and put the counts in."
+          : d.error || `The market turned the counts down (error ${r.status}). Nothing was changed.`;
+    }
+
+    if (msg) {
+      setCountErr(msg);
+      if (r?.status !== 401) { try { await load(); } catch { /* the message is what matters */ } }
+      setBusy(false);
+      return;
+    }
+
+    try { await load(); } catch { /* saved either way */ }
+    setBusy(false);
+    setCounting(false);
+    toast.success("Counts saved", summary);
   };
 
   const restockItem = async (it: Item) => {
@@ -1656,6 +1732,22 @@ export default function VendorDashboard() {
                 subtitle={`${plural(activeItems.length, "item")} selling · ${plural(floorUnits, "unit")} in stock${onSale > 0 ? ` · ${onSale} on sale` : ""}`}
                 actions={
                   <>
+                    {/* First, because on a market morning it is the only one
+                        of these anybody needs. */}
+                    <Button
+                      variant="primary"
+                      icon="box"
+                      disabled={busy || activeItems.length === 0}
+                      onClick={() => {
+                        setCountErr("");
+                        const next: Record<string, string> = {};
+                        for (const it of activeItems) next[it.id] = String(it.quantity);
+                        setCountIF(next);
+                        setCounting(true);
+                      }}
+                    >
+                      Set floor counts
+                    </Button>
                     {/* Distinct icons: these sat side by side both showing a tag. */}
                     <LinkButton href="/vendor/labels" variant="secondary" icon="print">
                       Print labels
@@ -2837,6 +2929,103 @@ export default function VendorDashboard() {
       ) : null}
 
       {/* ------------------------------------------------------- item editor */}
+      {/* ------------------------------------------------ the count sheet --
+          Every item, one box each, one save. The point of it is the market
+          morning: a vendor comes in with a fresh bake of two dozen lines and
+          needs the floor counts to match what she just put out, and doing that
+          one dialog at a time is how counts end up at zero forever. */}
+      {counting ? (
+        <Panel
+          open
+          onClose={() => setCounting(false)}
+          title="What's on the floor"
+          subtitle={`${plural(activeItems.length, "item")} · type the total you've put out for each one`}
+          footer={
+            <div className="stack g-3">
+              {countErr ? <Note tone="error" title="Check this">{countErr}</Note> : null}
+              <div className="row wrap g-2">
+                <Button variant="primary" icon="check" loading={busy} onClick={saveCounts}>
+                  Save counts
+                </Button>
+                <Button variant="ghost" disabled={busy} onClick={() => setCounting(false)}>Cancel</Button>
+              </div>
+            </div>
+          }
+        >
+          <div className="stack g-4">
+            <Note tone="info">
+              These are <b>totals</b>, not additions — the number you type becomes the count. Leave a
+              box alone and that item isn&rsquo;t touched. Clearing a box also leaves it alone; type{" "}
+              <b>0</b> to say something has sold out.
+            </Note>
+
+            <div className="row wrap g-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  const next: Record<string, string> = {};
+                  for (const it of activeItems) next[it.id] = String(it.quantity);
+                  setCountIF(next);
+                }}
+              >
+                Reset to current counts
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  const next: Record<string, string> = {};
+                  for (const it of activeItems) next[it.id] = "0";
+                  setCountIF(next);
+                }}
+              >
+                Set everything to 0
+              </Button>
+            </div>
+
+            <div className="stack g-2">
+              {[...activeItems]
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((it) => {
+                  const typed = countIF[it.id] ?? "";
+                  const moved = String(typed).trim() !== "" && Math.round(Number(typed)) !== it.quantity;
+                  return (
+                    <div
+                      key={it.id}
+                      className="row g-3"
+                      style={{ alignItems: "center", justifyContent: "space-between" }}
+                    >
+                      <div className="stack g-1" style={{ minWidth: 0 }}>
+                        <b className="truncate">{it.name}</b>
+                        <span className="t-xs t-muted mono truncate">
+                          {it.sku} · {money(it.priceCents)} · {it.quantity} now
+                        </span>
+                      </div>
+                      <div className="row g-2" style={{ alignItems: "center", flexShrink: 0 }}>
+                        {moved ? <Badge tone="warn">→ {Math.round(Number(typed))}</Badge> : null}
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          aria-label={`Count on the floor for ${it.name}`}
+                          disabled={busy}
+                          style={{ width: 92 }}
+                          value={typed}
+                          onChange={(e) => setCountIF((f) => ({ ...f, [it.id]: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </Panel>
+      ) : null}
+
       {editing ? (
         <Panel
           open
