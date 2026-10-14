@@ -1021,9 +1021,19 @@ function ContractStatusBadge({ status, endDate }: { status: string; endDate?: st
 
 type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
-type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number } | null;
+type DrawerAdjustment = { at: string; by: string; cents: number; reason: string };
+type Drawer = {
+  id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number;
+  adjustTotalCents?: number; adjustments?: DrawerAdjustment[];
+} | null;
 /** Every drawer open right now — one per person working a till. */
-type OpenDrawerRow = { id: string; employee: string; openedAt: string; mine: boolean };
+/* The office sees the whole of anybody's open drawer; everyone else still
+   gets just a name and a time, so the extra fields are optional. */
+type OpenDrawerRow = {
+  id: string; employee: string; openedAt: string; mine: boolean;
+  openTotalCents?: number; cashSalesCents?: number; adjustTotalCents?: number;
+  expectedCents?: number; adjustments?: DrawerAdjustment[];
+};
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
@@ -2970,6 +2980,91 @@ export default function AdminPage() {
     } finally { setBusy(false); }
   };
 
+  /**
+   * Correct a float that was keyed wrong at open.
+   *
+   * Without this the only way to fix a fat-fingered opening amount was to let
+   * the drawer close short and argue about it afterwards.
+   */
+  const fixOpeningFloat = async (d: OpenDrawerRow) => {
+    const next = await dialog.money({
+      title: `Correct ${d.employee}'s opening amount`,
+      body: (
+        <p>
+          Currently <b>{money(d.openTotalCents || 0)}</b>. Enter what the drawer actually started with.
+          The change is recorded against this drawer with your name on it.
+        </p>
+      ),
+      label: "Opening cash",
+      defaultCents: d.openTotalCents || 0,
+      confirmLabel: "Save",
+      allowZero: true,
+    });
+    if (next === null) return;
+    const reason = await dialog.prompt({
+      title: "Why is it changing?",
+      label: "Reason",
+      placeholder: "Counted $150 but $100 was keyed",
+      required: true,
+      confirmLabel: "Save the correction",
+    });
+    if (!reason) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/drawer", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drawerId: d.id, openTotalCents: next, reason }),
+      });
+      if (!ok) { toast.error("Couldn't change it", String(data.error || "")); return; }
+      toast.success(`${d.employee}'s opening amount is now ${money(next)}`, "Recorded in the audit log.");
+      await loadDrawer();
+    } finally { setBusy(false); }
+  };
+
+  /**
+   * Cash in or out of an open drawer, by hand.
+   *
+   * A paid-out, a drop to the safe, change fetched from the office. Each one
+   * is counted towards what the till should hold, so it stops showing up as a
+   * shortage at close.
+   */
+  const moveDrawerCash = async (d: OpenDrawerRow, out: boolean) => {
+    const amount = await dialog.money({
+      title: out ? `Take cash out of ${d.employee}'s drawer` : `Put cash into ${d.employee}'s drawer`,
+      body: (
+        <p>
+          {out
+            ? "A paid-out, or a drop to the safe. It counts against what the drawer should hold, so it won't read as a shortage."
+            : "Change from the office, or money being put back. It counts towards what the drawer should hold."}
+        </p>
+      ),
+      label: out ? "Amount taken out" : "Amount put in",
+      confirmLabel: out ? "Record it out" : "Record it in",
+    });
+    if (amount === null || amount <= 0) return;
+    const reason = await dialog.prompt({
+      title: "What was it for?",
+      label: "Reason",
+      placeholder: out ? "Paid Sweet Pea for a market purchase" : "Change run from the safe",
+      required: true,
+      confirmLabel: "Save",
+    });
+    if (!reason) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/drawer", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drawerId: d.id, adjustCents: out ? -amount : amount, reason }),
+      });
+      if (!ok) { toast.error("Couldn't record that", String(data.error || "")); return; }
+      toast.success(
+        `${money(amount)} ${out ? "out of" : "into"} ${d.employee}'s drawer`,
+        "Counted in what the drawer should hold at close."
+      );
+      await loadDrawer();
+    } finally { setBusy(false); }
+  };
+
   // ---------- register ----------
   const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string; taxClass?: string }) => {
     setScanErr(""); setSearch(""); setOpenVendor(null);
@@ -4244,7 +4339,7 @@ export default function AdminPage() {
             >
               <span className="t-label" style={{ color: "inherit", opacity: 0.8 }}>Drawer opened by</span>
               <span className="t-sm truncate" style={{ fontWeight: 600 }}>{drawer.employee}</span>
-              <span className="num t-sm">{money(drawer.openTotalCents + drawer.cashSalesCents)}</span>
+              <span className="num t-sm">{money(drawer.openTotalCents + drawer.cashSalesCents + (drawer.adjustTotalCents || 0))}</span>
             </div>
           ) : null}
           {/* Everyone with a real account can change their own email and
@@ -4365,14 +4460,60 @@ export default function AdminPage() {
           title="Other drawers open"
           subtitle="Each person rings on their own drawer. These are everyone else's, not yours."
         >
-          <div className="stack g-2">
+          <div className="stack g-3">
             {openDrawerList.filter((d) => !d.mine).map((d) => (
-              <div key={d.id} className="row between wrap g-2" style={{ alignItems: "center" }}>
-                <span><b>{d.employee}</b> <span className="t-muted t-sm">· since {fmtTime(d.openedAt)}</span></span>
+              <div key={d.id} className="card card-pad-sm stack g-3" style={{ background: "var(--bg-inset)" }}>
+                <div className="row between wrap g-2" style={{ alignItems: "center" }}>
+                  <span><b>{d.employee}</b> <span className="t-muted t-sm">· since {fmtTime(d.openedAt)}</span></span>
+                  {typeof d.expectedCents === "number" ? (
+                    <span className="t-sm">Should hold <b className="num">{money(d.expectedCents)}</b></span>
+                  ) : null}
+                </div>
+
+                {/* The whole drawer, not just a name. Counting somebody out
+                    without being able to see what it opened with or what it
+                    has taken is counting blind. */}
+                {typeof d.openTotalCents === "number" ? (
+                  <div className="row wrap g-3 t-xs t-muted">
+                    <span>Opened with <span className="num">{money(d.openTotalCents)}</span></span>
+                    <span>Cash sales <span className="num">{money(d.cashSalesCents || 0)}</span></span>
+                    {d.adjustTotalCents ? (
+                      <span>
+                        By hand{" "}
+                        <span className="num">
+                          {d.adjustTotalCents > 0 ? "+" : "−"}{money(Math.abs(d.adjustTotalCents))}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {d.adjustments && d.adjustments.length > 0 ? (
+                  <div className="stack g-1">
+                    {d.adjustments.map((adj, i) => (
+                      <span key={i} className="t-xs t-muted">
+                        <span className="num">{adj.cents > 0 ? "+" : "−"}{money(Math.abs(adj.cents))}</span>
+                        {" — "}{adj.reason} <span className="t-muted">({adj.by})</span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
                 {allowed("money") ? (
-                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => void closeOthersDrawer(d)}>
-                    Count out &amp; close
-                  </Button>
+                  <div className="row wrap g-2">
+                    <Button size="sm" variant="secondary" icon="cash" disabled={busy} onClick={() => void moveDrawerCash(d, false)}>
+                      Cash in
+                    </Button>
+                    <Button size="sm" variant="secondary" icon="cash" disabled={busy} onClick={() => void moveDrawerCash(d, true)}>
+                      Cash out
+                    </Button>
+                    <Button size="sm" variant="ghost" icon="edit" disabled={busy} onClick={() => void fixOpeningFloat(d)}>
+                      Fix opening amount
+                    </Button>
+                    <Button size="sm" variant="primary" disabled={busy} onClick={() => void closeOthersDrawer(d)}>
+                      Count out &amp; close
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             ))}
@@ -4503,7 +4644,7 @@ export default function AdminPage() {
       {tab === "register" && !closeReport && drawer && closing && (
         <Card
           title="Close the drawer — count what's in it"
-          subtitle={`Opened by ${drawer.employee} · opening ${money(drawer.openTotalCents)} + cash sales ${money(drawer.cashSalesCents)} → expected ${money(drawer.openTotalCents + drawer.cashSalesCents)}`}
+          subtitle={`Opened by ${drawer.employee} · opening ${money(drawer.openTotalCents)} + cash sales ${money(drawer.cashSalesCents)}${drawer.adjustTotalCents ? ` ${drawer.adjustTotalCents > 0 ? "+" : "−"} ${money(Math.abs(drawer.adjustTotalCents))} by hand` : ""} → expected ${money(drawer.openTotalCents + drawer.cashSalesCents + (drawer.adjustTotalCents || 0))}`}
           footer={
             <div className="row end wrap g-2">
               <Button
@@ -4641,7 +4782,7 @@ export default function AdminPage() {
             <Stat
               feature
               label="In the drawer now"
-              value={money(drawer.openTotalCents + drawer.cashSalesCents)}
+              value={money(drawer.openTotalCents + drawer.cashSalesCents + (drawer.adjustTotalCents || 0))}
               sub={`${money(drawer.openTotalCents)} start + ${money(drawer.cashSalesCents)} cash sales`}
               icon="cash"
             />

@@ -4,7 +4,7 @@ import { verifyPin, pinUpgrade, currentEmployeeId } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
 import { denyUnless, currentRole, can } from "@/lib/perm";
-import { drawerForRequest, drawerCashCents, openDrawers, openDrawerFor, signedInEmployee, type DrawerRow } from "@/lib/drawer";
+import { drawerForRequest, drawerCashCents, openDrawers, openDrawerFor, signedInEmployee, expectedCents, readAdjustments, type DrawerRow } from "@/lib/drawer";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -20,10 +20,43 @@ export async function GET() {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
   const { drawer, who, ambiguous } = await drawerForRequest();
   const all = await openDrawers();
-  const open = all.map((d) => ({ id: d.id, employee: d.employee, openedAt: d.openedAt, mine: !!drawer && d.id === drawer.id }));
-  if (!drawer) return NextResponse.json({ session: null, open, me: who?.name || "", ambiguous });
+
+  /* WHAT'S ACTUALLY IN SOMEBODY ELSE'S TILL.
+     
+     This list used to be a name and a time, which is all anyone needed when
+     the only thing you could do to another person's drawer was close it. An
+     owner counting out a cashier who went home was doing it blind — no
+     opening float, no idea what it had taken, no way to tell $40 short from
+     $40 of paid-outs nobody wrote down. Anyone who can be trusted with the
+     money can see the whole drawer. */
+  const role = await currentRole();
+  const seesAll = !!role && can(role, "money");
+
+  const open = await Promise.all(
+    all.map(async (d) => {
+      const mine = !!drawer && d.id === drawer.id;
+      const base = { id: d.id, employee: d.employee, openedAt: d.openedAt, mine };
+      if (!seesAll && !mine) return base;
+      const cash = await drawerCashCents(d);
+      return {
+        ...base,
+        openTotalCents: d.openTotalCents,
+        cashSalesCents: cash,
+        adjustTotalCents: d.adjustTotalCents || 0,
+        adjustments: readAdjustments(d.adjustmentsJson),
+        expectedCents: expectedCents(d, cash),
+      };
+    })
+  );
+
+  if (!drawer) return NextResponse.json({ session: null, open, me: who?.name || "", ambiguous, canWorkOthers: seesAll });
   const cashSalesCents = await drawerCashCents(drawer);
-  return NextResponse.json({ session: { ...drawer, cashSalesCents }, open, me: who?.name || "" });
+  return NextResponse.json({
+    session: { ...drawer, cashSalesCents, adjustments: readAdjustments(drawer.adjustmentsJson) },
+    open,
+    me: who?.name || "",
+    canWorkOthers: seesAll,
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -125,7 +158,9 @@ export async function PATCH(req: NextRequest) {
 
   const cashSalesCents = await drawerCashCents(session);
   const counted = Math.max(0, Math.round(Number(countedCents) || 0));
-  const expected = session.openTotalCents + cashSalesCents;
+  /* Anything handed in or out during the shift counts towards what the till
+     should hold — otherwise a recorded paid-out reads as a shortage. */
+  const expected = expectedCents(session, cashSalesCents);
 
   const closed = await db.drawerSession.update({
     where: { id: session.id },
@@ -158,4 +193,104 @@ export async function PATCH(req: NextRequest) {
   }
 
   return NextResponse.json({ session: closed, expected });
+}
+
+/**
+ * PUT — work inside an open drawer without closing it.
+ *
+ * Two things happen in a real shift that the till otherwise has no way to
+ * record: a float keyed wrong at open, and cash going in or out by hand — a
+ * paid-out to a vendor, a drop to the safe, change fetched from the office.
+ * Both used to surface hours later as an unexplained over or short, which is
+ * the one thing a cash system must never make somebody guess about.
+ *
+ * PUT { drawerId, openTotalCents? }           — correct the opening float
+ * PUT { drawerId, adjustCents, reason }       — cash in (+) or out (-)
+ *
+ * Either on your own drawer, or on anybody's with the money capability. Both
+ * are written to the audit log every time, with a name and a reason: a
+ * correction nobody can see is indistinguishable from a hand in the till.
+ */
+export async function PUT(req: NextRequest) {
+  return runRoute("admin/drawer PUT", async () => {
+    { const denied = await denyUnless("ops"); if (denied) return denied; }
+    const body = await req.json();
+    const drawerId = String(body.drawerId || "");
+    if (!drawerId) return NextResponse.json({ error: "Which drawer?" }, { status: 400 });
+
+    const session = await db.drawerSession.findUnique({ where: { id: drawerId } });
+    if (!session || session.status !== "OPEN") {
+      return NextResponse.json({ error: "That drawer isn't open." }, { status: 400 });
+    }
+
+    const me = await signedInEmployee();
+    const isMine = !!me && (session.employeeId === me.id || (!session.employeeId && session.employee === me.name));
+    const role = await currentRole();
+    if (!isMine && !(role && can(role, "money"))) {
+      return NextResponse.json({ error: "Only an owner or manager can work in somebody else's drawer." }, { status: 403 });
+    }
+
+    const who = me?.name || "the office";
+    const reason = String(body.reason || "").trim().slice(0, 200);
+
+    /* ---- correcting the opening float ---- */
+    if (body.openTotalCents !== undefined) {
+      const next = Math.max(0, Math.round(Number(body.openTotalCents) || 0));
+      if (!reason) return NextResponse.json({ error: "Say why the opening amount is changing." }, { status: 400 });
+      const before = session.openTotalCents;
+      if (next === before) return NextResponse.json({ ok: true, session });
+
+      const updated = await db.drawerSession.update({
+        where: { id: session.id },
+        data: { openTotalCents: next },
+      });
+      await recordAudit(
+        {
+          action: "DRAWER_ADJUST",
+          targetType: "DRAWER",
+          targetId: session.id,
+          targetLabel: session.employee,
+          amountCents: next - before,
+          detail: `${who} corrected ${session.employee}'s opening float from $${(before / 100).toFixed(2)} to $${(next / 100).toFixed(2)} — ${reason}`,
+          before: { openTotalCents: before },
+          after: { openTotalCents: next },
+        },
+        req
+      );
+      return NextResponse.json({ ok: true, session: updated });
+    }
+
+    /* ---- cash in or out ---- */
+    if (body.adjustCents !== undefined) {
+      const cents = Math.round(Number(body.adjustCents) || 0);
+      if (!cents) return NextResponse.json({ error: "Enter an amount." }, { status: 400 });
+      if (!reason) return NextResponse.json({ error: "Say what the money was for." }, { status: 400 });
+
+      const rows = readAdjustments(session.adjustmentsJson);
+      rows.push({ at: new Date().toISOString(), by: who, cents, reason });
+
+      const updated = await db.drawerSession.update({
+        where: { id: session.id },
+        data: {
+          adjustTotalCents: (session.adjustTotalCents || 0) + cents,
+          adjustmentsJson: JSON.stringify(rows.slice(-200)),
+        },
+      });
+      await recordAudit(
+        {
+          action: "DRAWER_ADJUST",
+          targetType: "DRAWER",
+          targetId: session.id,
+          targetLabel: session.employee,
+          amountCents: cents,
+          detail: `${who} recorded $${(Math.abs(cents) / 100).toFixed(2)} ${cents > 0 ? "INTO" : "OUT OF"} ${session.employee}'s drawer — ${reason}`,
+          after: { adjustTotalCents: updated.adjustTotalCents },
+        },
+        req
+      );
+      return NextResponse.json({ ok: true, session: updated });
+    }
+
+    return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
+  });
 }

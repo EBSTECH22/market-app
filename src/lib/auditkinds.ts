@@ -24,6 +24,7 @@ export type AuditAction =
   | "ORDER_COLLECTED"
   | "REVIEW_DELETE"
   | "DRAWER_CLOSE"
+  | "DRAWER_ADJUST"
   | "NONPAYMENT_NOTICE"
   | "NONPAYMENT_TEXT"
   | "SPACE_RELEASED"
@@ -45,6 +46,7 @@ export const AUDIT_LABEL: Record<AuditAction, string> = {
   ORDER_COLLECTED: "Online order handed over",
   REVIEW_DELETE: "Review removed",
   DRAWER_CLOSE: "Drawer closed",
+  DRAWER_ADJUST: "Drawer adjusted",
   NONPAYMENT_NOTICE: "Non-payment notice emailed",
   NONPAYMENT_TEXT: "Non-payment text opened",
   SPACE_RELEASED: "Booth opened back up",

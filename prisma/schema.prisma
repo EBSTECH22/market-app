@@ -256,6 +256,16 @@ model DrawerSession {
   cashSalesCents Int       @default(0)
   countedCents   Int       @default(0)
   diffCents      Int       @default(0)
+  /// Cash put in or taken out of this drawer while it was open, other than
+  /// sales — a paid-out, a drop to the safe, change fetched from the office,
+  /// or a correction to a float that was keyed wrong. Positive adds, negative
+  /// takes away, and the total is part of what the drawer should hold at
+  /// close. Without it any of those movements looks like a shortage.
+  adjustTotalCents Int     @default(0)
+  /// The same movements, written down: [{at, by, cents, reason}]. The number
+  /// above is what the arithmetic uses; this is what somebody reads a month
+  /// later when they want to know why a till was $40 light at 2pm.
+  adjustmentsJson String  @default("[]")
   status         String    @default("OPEN")
 
   @@index([status, employeeId])

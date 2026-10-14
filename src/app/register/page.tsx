@@ -44,7 +44,7 @@ type CartLine = {
   itemId: string; sku: string; name: string; vendorName: string;
   priceCents: number; basePriceCents: number; quantity: number; taxClass?: string;
 };
-type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number };
+type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number; adjustTotalCents?: number };
 
 /** An online pre-order the vendor has packed and left at the counter. */
 type Pickup = {
@@ -1322,7 +1322,7 @@ export default function RegisterKiosk() {
 
   /* ----- closing out ----- */
   if (closing && drawer) {
-    const expected = drawer.openTotalCents + drawer.cashSalesCents;
+    const expected = drawer.openTotalCents + drawer.cashSalesCents + (drawer.adjustTotalCents || 0);
     const counted = dollarsToCents(closeCount) || 0;
     const diff = counted - expected;
     return frame(

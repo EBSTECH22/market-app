@@ -26,8 +26,35 @@ export type DrawerRow = {
   openedAt: Date;
   closedAt: Date | null;
   openTotalCents: number;
+  adjustTotalCents: number;
+  adjustmentsJson: string;
   status: string;
 };
+
+/** One hand in or out of the till that wasn't a sale. */
+export type DrawerAdjustment = { at: string; by: string; cents: number; reason: string };
+
+export function readAdjustments(json: string): DrawerAdjustment[] {
+  try {
+    const rows = JSON.parse(json || "[]");
+    return Array.isArray(rows) ? (rows as DrawerAdjustment[]) : [];
+  } catch {
+    /* A drawer whose note field got mangled still has to balance. */
+    return [];
+  }
+}
+
+/**
+ * What a drawer should hold right now: what it opened with, plus the cash it
+ * took, plus anything put in or taken out by hand.
+ *
+ * One function so the register, the admin screen and the close all agree.
+ * They used to each add the first two together on their own, which is how a
+ * paid-out becomes a shortage in one place and not another.
+ */
+export function expectedCents(d: { openTotalCents: number; adjustTotalCents?: number }, cashSalesCents: number): number {
+  return d.openTotalCents + cashSalesCents + (d.adjustTotalCents || 0);
+}
 
 /** The signed-in person, if the session is a person (not the shared owner password). */
 export async function signedInEmployee(): Promise<{ id: string; name: string } | null> {
