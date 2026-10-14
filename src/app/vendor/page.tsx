@@ -1770,10 +1770,17 @@ export default function VendorDashboard() {
                         <Input
                           {...p}
                           type="number"
-                          min="0.5"
-                          step="0.5"
+                          /* ANY price, to the cent.
+                             
+                             This was min 0.50 / step 0.50, which is a browser
+                             validation rule, not a hint: a vendor typing 6.75
+                             was told the nearest valid values were 6.50 and
+                             7.00 and the form refused to save. Jam is not
+                             priced in half dollars. */
+                          min="0.01"
+                          step="0.01"
                           inputMode="decimal"
-                          placeholder="14"
+                          placeholder="14.00"
                           value={price}
                           onChange={(e) => { setPrice(e.target.value); setErr(""); }}
                         />
@@ -3022,8 +3029,9 @@ export default function VendorDashboard() {
                 <Input
                   {...p}
                   type="number"
-                  min="0.5"
-                  step="0.5"
+                  /* Same as the add form: to the cent, not to the half dollar. */
+                  min="0.01"
+                  step="0.01"
                   inputMode="decimal"
                   value={editIF.price}
                   onChange={(e) => setEditIF((f) => ({ ...f, price: e.target.value }))}
@@ -3041,7 +3049,9 @@ export default function VendorDashboard() {
                   type="number"
                   min="0"
                   max="90"
-                  step="5"
+                  /* Whole percents. Fives were a nudge towards tidy sales and
+                     a wall in front of anyone who wanted 12% off. */
+                  step="1"
                   inputMode="numeric"
                   value={editIF.sale}
                   onChange={(e) => setEditIF((f) => ({ ...f, sale: e.target.value }))}
