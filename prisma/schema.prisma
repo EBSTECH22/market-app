@@ -28,6 +28,9 @@ model Vendor {
   lowStockThreshold Int      @default(0)
   lastRestockAlertAt DateTime?
   portalLocked     Boolean @default(false)
+  /// When the "you're live — here's how to set up" guide was sent. Stops it
+  /// going twice, and lets the office see whether it ever went at all.
+  setupGuideSentAt DateTime?
   // Booth rent waived: the monthly run and the first-month charge skip them.
   // Sales commission and the service fee are untouched.
   rentFree         Boolean @default(false)

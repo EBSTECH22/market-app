@@ -61,6 +61,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     } catch {
       return NextResponse.json({ error: "Email failed to send." }, { status: 500 });
     }
+    /* Stamped so the automatic send doesn't post it a second time later. */
+    await db.vendor.update({ where: { id: vendor.id }, data: { setupGuideSentAt: new Date() } }).catch(() => {});
     return NextResponse.json({ ok: true, sentTo: vendor.email });
   }
 
