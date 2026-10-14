@@ -926,7 +926,7 @@ export default function VendorDashboard() {
 
     let summary = "";
     if (r && r.ok) {
-      const d = await r.json().catch(() => ({} as { summary?: string; rejected?: { reason: string }[] }));
+      const d: { summary?: string; rejected?: { reason: string }[] } = await r.json().catch(() => ({}));
       summary = d.summary || "Counts saved.";
       /* A partial save is the dangerous one: some numbers went in and some
          didn't, and a cheerful tick over the top of that is a lie. */

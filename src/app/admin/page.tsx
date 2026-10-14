@@ -11322,7 +11322,7 @@ function FloorStockCard({
     }
 
     if (r && r.ok) {
-      const d = await r.json().catch(() => ({} as { summary?: string; rejected?: { reason: string }[] }));
+      const d: { summary?: string; rejected?: { reason: string }[] } = await r.json().catch(() => ({}));
       if (d.rejected?.length) {
         setCountErr(`${d.summary || ""}. ${d.rejected.map((x) => x.reason).join(" ")}`);
         setSavingCounts(false);

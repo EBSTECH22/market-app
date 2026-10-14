@@ -80,7 +80,7 @@ export async function setFloorCounts(vendorId: string | null, entries: CountEntr
     where: { id: { in: entries.map((e) => e.id) } },
     select: { id: true, sku: true, name: true, quantity: true, vendorId: true },
   });
-  const byId = new Map(items.map((i) => [i.id, i]));
+  const byId = new Map(items.map((i) => [i.id, i] as const));
 
   for (const e of entries) {
     const item = byId.get(e.id);
