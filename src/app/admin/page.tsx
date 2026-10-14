@@ -18,6 +18,7 @@ import { subscribeToPush } from "@/lib/pushclient";
 import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
 import { auditLabel, actorLabel } from "@/lib/auditkinds";
 import { newSaleKey } from "@/lib/offline";
+import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
@@ -1038,7 +1039,8 @@ type Ticket = { id: string; number: number; dateStr: string; timeStr: string; st
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
 type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[]; hasPin?: boolean; pinSetAt?: string | null };
-type PayrollRow = { id: string; name: string; payRateCents: number; hours: number; grossCents: number; dedCents: number; netCents: number; deductions: { name: string; amountCents: number }[]; openEntries: number };
+type Punch = { id: string; day: string; inAt: string; outAt: string; hours: number; note: string };
+type PayrollRow = { id: string; name: string; payRateCents: number; hours: number; grossCents: number; dedCents: number; netCents: number; deductions: { name: string; amountCents: number }[]; openEntries: number; punches?: Punch[] };
 type Report = {
   start: string; end: string; gross: number; tax: number; cash: number; card: number; tickets: number; refundTotal?: number;
   vGross: number; vNet: number; units: number;
@@ -1448,6 +1450,8 @@ export default function AdminPage() {
   const [payFrom, setPayFrom] = useState("");
   const [payTo, setPayTo] = useState("");
   const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
+  /* Whose punches are expanded on the payroll report. */
+  const [openPunches, setOpenPunches] = useState<string>("");
   const [teamMsg, setTeamMsg] = useState("");
   const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; phoneType?: string; notes: string; adminNotes?: string; stage?: string; viewingAt?: string; createdAt: string }[]>([]);
   const [appOpen, setAppOpen] = useState<string | null>(null);
@@ -2931,6 +2935,7 @@ export default function AdminPage() {
   const runPayroll = async () => {
     setTeamMsg("");
     if (!payFrom || !payTo) { setTeamMsg("Pick both dates first."); return; }
+    setOpenPunches("");
     const { ok, data } = await safeFetch(`/api/admin/payroll?from=${payFrom}&to=${payTo}`);
     if (!ok) { setTeamMsg(String(data.error || "Failed.")); return; }
     setPayroll(data.rows as PayrollRow[]);
@@ -5898,9 +5903,43 @@ export default function AdminPage() {
           <Card
             className="mb-4"
             title="Payroll run"
-            subtitle="Hours come straight off the time clock. Pick the period you're paying for."
+            subtitle="Monday to Sunday, paid the following Friday. Hours come straight off the time clock."
           >
             <div className="stack g-4">
+              {/* THE WEEK, NOT TWO DATES.
+                  
+                  The period here is always Monday to Sunday and always paid
+                  the Friday after. Typing both ends by hand every time is how
+                  somebody eventually pays a week that runs Sunday to Saturday
+                  and nobody notices until a cashier queries their hours. */}
+              <div className="stack g-2">
+                <span className="t-label">Pay period</span>
+                <div className="row wrap g-2">
+                  {recentPeriods(isoDate(), 6).map((per) => {
+                    const on = payFrom === per.from && payTo === per.to;
+                    const done = isComplete(per, isoDate());
+                    return (
+                      <Button
+                        key={per.from}
+                        size="sm"
+                        variant={on ? "primary" : "secondary"}
+                        disabled={busy}
+                        onClick={() => { setPayFrom(per.from); setPayTo(per.to); setPayroll(null); setTeamMsg(""); }}
+                      >
+                        {per.label}{done ? "" : " (open)"}
+                      </Button>
+                    );
+                  })}
+                </div>
+                {payFrom && payTo ? (
+                  <span className="t-xs t-muted">
+                    {periodFor(payFrom).from === payFrom && periodFor(payFrom).to === payTo
+                      ? `Monday to Sunday · ${periodFor(payFrom).payLabel}`
+                      : "Custom range — not a Monday-to-Sunday week, so no pay date is worked out."}
+                  </span>
+                ) : null}
+              </div>
+
               <div className="grid-auto" style={{ ["--min" as string]: "180px" }}>
                 <Field label="From" hint="First day of the pay period.">
                   {(p) => <Input {...p} type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} />}
@@ -5932,6 +5971,18 @@ export default function AdminPage() {
 
               {payroll ? (
                 <div className="stack g-3">
+                  {/* What week this is and when it gets paid, stated on the
+                      report itself — it is the thing somebody writes on the
+                      cheque stub, and it should not have to be worked out. */}
+                  {periodFor(payFrom).from === payFrom && periodFor(payFrom).to === payTo ? (
+                    <Note tone={isComplete(periodFor(payFrom), isoDate()) ? "neutral" : "warn"}>
+                      <b>{periodFor(payFrom).label}</b> · Monday to Sunday · <b>{periodFor(payFrom).payLabel}</b>
+                      {isComplete(periodFor(payFrom), isoDate())
+                        ? null
+                        : " — this week isn't finished yet, so these hours will still change."}
+                    </Note>
+                  ) : null}
+
                   <DataTable
                     rows={payroll}
                     columns={[
@@ -5945,6 +5996,30 @@ export default function AdminPage() {
                             <b className="truncate">{r.name}</b>
                             {r.openEntries > 0 ? (
                               <Badge tone="warn" dot>Still clocked in</Badge>
+                            ) : null}
+                            {/* The punches behind the number. A total nobody
+                                can take apart is a total nobody can argue
+                                with — including when the employee is right. */}
+                            {r.punches && r.punches.length > 0 ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ alignSelf: "flex-start", paddingLeft: 0 }}
+                                onClick={() => setOpenPunches((cur) => (cur === r.id ? "" : r.id))}
+                              >
+                                {openPunches === r.id ? "Hide" : `${plural(r.punches.length, "punch", "punches")}`}
+                              </button>
+                            ) : null}
+                            {openPunches === r.id && r.punches ? (
+                              <div className="stack g-1" style={{ paddingTop: "var(--sp-1)" }}>
+                                {r.punches.map((t) => (
+                                  <span key={t.id} className="t-xs t-muted">
+                                    <b>{t.day}</b> {t.inAt}
+                                    {t.outAt ? ` – ${t.outAt}` : " – still in"}
+                                    {t.outAt ? <span className="num"> · {t.hours.toFixed(2)} hrs</span> : null}
+                                  </span>
+                                ))}
+                              </div>
                             ) : null}
                           </div>
                         ),
