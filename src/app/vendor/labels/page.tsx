@@ -20,11 +20,17 @@ const BARCODE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsB
 // STANDARD: 1" x 2-5/8", 30/sheet (Avery 5160 class — "address labels")
 // SMALL:    2/3" x 1-3/4", 60/sheet (Avery 5195 class — "return address labels")
 const FORMATS = {
-  STANDARD: { cols: 3, rows: 10, labelW: "2.625in", labelH: "1in", padTop: "0.5in", padSide: "0.1875in", colGap: "0.125in", perSheet: 30, bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8 },
+  STANDARD: { cols: 3, rows: 10, labelW: "2.625in", labelH: "1in", padTop: "0.5in", padSide: "0.1875in", colGap: "0.125in", perSheet: 30, bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8, nameLines: 1, showCode: true },
   /* 0.28125in side, 0.25in gap — Avery's own 2in horizontal pitch. The old
      numbers (0.3 / 0.3125) needed 7.9375in of room inside an 7.9in box, so
      the fourth column was pushed off the right-hand edge of the paper. */
-  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.6667in", padTop: "0.5in", padSide: "0.28125in", colGap: "0.25in", perSheet: 60, bar: { width: 1.15, height: 22, fontSize: 8 }, nameSize: 8, priceSize: 10, bizSize: 0 },
+  /* 0.6667in is 64 dots of height for a name, a price and a barcode. The old
+     numbers spent 10 of them reprinting the SKU underneath the bars — a
+     number that is already IN the bars and is printed in full on the big
+     labels — and left the name so little room it truncated mid-word. So the
+     code line goes, the name gets two lines instead of an ellipsis, and the
+     barcode gets the height back, which is also what makes it scan. */
+  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.6667in", padTop: "0.5in", padSide: "0.28125in", colGap: "0.25in", perSheet: 60, bar: { width: 1.2, height: 30, fontSize: 0 }, nameSize: 7.5, priceSize: 11, bizSize: 0, nameLines: 2, showCode: false },
 } as const;
 type FormatKey = keyof typeof FORMATS;
 
@@ -97,6 +103,9 @@ export default function LabelsPage() {
           width: fmt.bar.width,
           height: fmt.bar.height,
           fontSize: fmt.bar.fontSize,
+          /* The readable code under the bars. Worth the room on a 1in label
+             and not on a 2/3in one. */
+          displayValue: fmt.showCode,
           margin: 0,
         });
       }
@@ -135,14 +144,30 @@ export default function LabelsPage() {
           grid-auto-rows: ${f.labelH};
           column-gap: ${f.colGap};
           row-gap: 0;
-          justify-content: flex-start;
+          /* CENTRED, NOT LEFT-ALIGNED.
+             
+             The 60-per-sheet grid doesn't fill the page exactly — four 1.75in
+             labels and three gaps leave about 3/16in spare. Left-aligning
+             dumped every bit of that on the right-hand side, so all four
+             columns sat a tenth of an inch left of where the stickers are and
+             the print looked off-centre on every single one. Centring splits
+             the slack evenly, which is where the stickers actually are. The
+             30-per-sheet grid fills the width exactly, so this changes
+             nothing there. */
+          justify-content: center;
         }
         .lbl {
           overflow: hidden; text-align: center; background: #fff; color: #000;
           display: flex; flex-direction: column; align-items: center; justify-content: center;
           border: 1px dashed #d1d5db; break-inside: avoid;
         }
-        .lbl .nm { font-weight: 700; font-size: ${f.nameSize}px; line-height: 1.1; max-width: 96%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .lbl .nm {
+          font-weight: 700; font-size: ${f.nameSize}px; line-height: 1.08;
+          max-width: 96%; overflow: hidden;
+          ${f.nameLines > 1
+            ? `display: -webkit-box; -webkit-line-clamp: ${f.nameLines}; -webkit-box-orient: vertical;`
+            : "white-space: nowrap; text-overflow: ellipsis;"}
+        }
         .lbl .pr { font-weight: 800; font-size: ${f.priceSize}px; line-height: 1.1; }
         .lbl .biz { font-size: ${f.bizSize}px; color: #6b7280; ${f.bizSize === 0 ? "display:none;" : ""} }
         @media print {
@@ -157,10 +182,25 @@ export default function LabelsPage() {
             width: 8.5in;
             padding: ${f.padTop} ${f.padSide} 0;
             break-after: page; page-break-after: always;
+            position: relative;
           }
+          /* A ruler on the liner. The half inch above the first row is bare
+             backing paper on every one of these sheets, so a mark there costs
+             nothing and settles the one thing nobody can see by eye: whether
+             the printer shrank the page. If it doesn't measure an inch, the
+             scale is wrong and no amount of changing the layout will help. */
+          .cal { position: absolute; top: 0.16in; left: ${f.padSide}; }
           .sheet-page:last-child { break-after: auto; page-break-after: auto; }
           .lbl { border: none; }
         }
+        .cal-bar { width: 1in; height: 0; border-top: 1px solid #000; position: relative; }
+        .cal-bar::before, .cal-bar::after {
+          content: ""; position: absolute; top: -4px; width: 0; height: 9px; border-left: 1px solid #000;
+        }
+        .cal-bar::before { left: 0; }
+        .cal-bar::after { right: 0; }
+        .cal-txt { font-size: 6px; color: #666; letter-spacing: 0.02em; }
+
         @media screen {
           .print-area { overflow-x: auto; }
           .sheet-page {
@@ -307,6 +347,13 @@ export default function LabelsPage() {
       <div className="print-area mt-4">
         {pages.map((page, pageIndex) => (
           <div className="sheet-page" key={pageIndex}>
+            {/* Only on the first sheet — one check per print is the point. */}
+            {pageIndex === 0 ? (
+              <div className="cal" aria-hidden="true">
+                <div className="cal-bar" />
+                <div className="cal-txt">1 inch — if this isn&rsquo;t exactly 1&quot;, your printer is scaling. Set it to 100%.</div>
+              </div>
+            ) : null}
             <div className="label-sheet">
               {page.map(({ item, n }) => (
                 <div className="lbl" key={`${item.id}-${n}`}>
