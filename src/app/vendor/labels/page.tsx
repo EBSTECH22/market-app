@@ -20,7 +20,8 @@ const BARCODE_SRC = "https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsB
 // STANDARD: 1" x 2-5/8", 30/sheet (Avery 5160 class — "address labels")
 // SMALL:    2/3" x 1-3/4", 60/sheet (Avery 5195 class — "return address labels")
 const FORMATS = {
-  STANDARD: { cols: 3, rows: 10, labelW: "2.625in", labelH: "1in", padTop: "0.5in", padSide: "0.1875in", colGap: "0.125in", perSheet: 30, bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8, nameLines: 1, showCode: true },
+  /* 5160: symmetric and exact. 0.1875 + 3x2.625 + 2x0.125 + 0.1875 = 8.5 */
+  STANDARD: { cols: 3, rows: 10, labelW: "2.625in", labelH: "1in", padTop: "0.5in", padLeft: "0.1875in", padRight: "0.1875in", colGap: "0.125in", perSheet: 30, bar: { width: 1.7, height: 34, fontSize: 11 }, nameSize: 11, priceSize: 14, bizSize: 8, nameLines: 1, showCode: true },
   /* 0.28125in side, 0.25in gap — Avery's own 2in horizontal pitch. The old
      numbers (0.3 / 0.3125) needed 7.9375in of room inside an 7.9in box, so
      the fourth column was pushed off the right-hand edge of the paper. */
@@ -30,7 +31,17 @@ const FORMATS = {
      labels — and left the name so little room it truncated mid-word. So the
      code line goes, the name gets two lines instead of an ellipsis, and the
      barcode gets the height back, which is also what makes it scan. */
-  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.6667in", padTop: "0.5in", padSide: "0.28125in", colGap: "0.25in", perSheet: 60, bar: { width: 1.2, height: 30, fontSize: 0 }, nameSize: 7.5, priceSize: 11, bizSize: 0, nameLines: 2, showCode: false },
+  /* 5195, from the published template rather than from arithmetic.
+     
+     This sheet is NOT symmetric and its pitch is NOT a round number. The
+     columns step every 2.031in — label 1.75 plus a 0.281 gap — starting
+     0.297 from the left, which leaves 0.36 on the right. Guessing a tidy
+     2.0in pitch put the fourth column nearly four millimetres left of its
+     stickers, and the top margin is 0.531 rather than the half inch that
+     looks obvious.
+     
+     0.297 + 4x1.75 + 3x0.281 + 0.36 = 8.5 exactly. */
+  SMALL: { cols: 4, rows: 15, labelW: "1.75in", labelH: "0.666in", padTop: "0.531in", padLeft: "0.297in", padRight: "0.36in", colGap: "0.281in", perSheet: 60, bar: { width: 1.2, height: 30, fontSize: 0 }, nameSize: 7.5, priceSize: 11, bizSize: 0, nameLines: 2, showCode: false },
 } as const;
 type FormatKey = keyof typeof FORMATS;
 
@@ -47,6 +58,34 @@ export default function LabelsPage() {
   const [copies, setCopies] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [format, setFormat] = useState<FormatKey>("STANDARD");
+  /* PRINTER NUDGE.
+     
+     Published label geometry gets you close; the last millimetre is the
+     printer, and every printer feeds paper slightly differently. Rather than
+     anyone chasing specifications again, print one sheet, see which way it's
+     out, and move the whole grid. Remembered per browser so it's set once. */
+  const [nudgeX, setNudgeX] = useState(0);
+  const [nudgeY, setNudgeY] = useState(0);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("labelNudge");
+      if (raw) {
+        const n = JSON.parse(raw) as { x?: number; y?: number };
+        if (Number.isFinite(n.x)) setNudgeX(Number(n.x));
+        if (Number.isFinite(n.y)) setNudgeY(Number(n.y));
+      }
+    } catch {
+      /* Private window, storage off — just print with no offset. */
+    }
+  }, []);
+
+  const saveNudge = (x: number, y: number) => {
+    const clamp = (v: number) => Math.max(-0.25, Math.min(0.25, Math.round(v * 1000) / 1000));
+    const nx = clamp(x), ny = clamp(y);
+    setNudgeX(nx); setNudgeY(ny);
+    try { window.localStorage.setItem("labelNudge", JSON.stringify({ x: nx, y: ny })); } catch {}
+  };
 
   /* The barcode library comes off a CDN. If that request fails — captive wifi
      at the market, an ad blocker, a bad connection — every label used to print
@@ -144,17 +183,10 @@ export default function LabelsPage() {
           grid-auto-rows: ${f.labelH};
           column-gap: ${f.colGap};
           row-gap: 0;
-          /* CENTRED, NOT LEFT-ALIGNED.
-             
-             The 60-per-sheet grid doesn't fill the page exactly — four 1.75in
-             labels and three gaps leave about 3/16in spare. Left-aligning
-             dumped every bit of that on the right-hand side, so all four
-             columns sat a tenth of an inch left of where the stickers are and
-             the print looked off-centre on every single one. Centring splits
-             the slack evenly, which is where the stickers actually are. The
-             30-per-sheet grid fills the width exactly, so this changes
-             nothing there. */
-          justify-content: center;
+          /* Hard against the left margin. Both sheets now carry their real
+             margins, and 5195's are deliberately uneven — centring would
+             quietly add half the difference back onto the left. */
+          justify-content: flex-start;
         }
         .lbl {
           overflow: hidden; text-align: center; background: #fff; color: #000;
@@ -180,7 +212,7 @@ export default function LabelsPage() {
           .print-area { width: 8.5in; margin: 0 !important; padding: 0 !important; border: none !important; border-radius: 0 !important; }
           .sheet-page {
             width: 8.5in;
-            padding: ${f.padTop} ${f.padSide} 0;
+            padding: calc(${f.padTop} + ${nudgeY}in) ${f.padRight} 0 calc(${f.padLeft} + ${nudgeX}in);
             break-after: page; page-break-after: always;
             position: relative;
           }
@@ -189,7 +221,7 @@ export default function LabelsPage() {
              nothing and settles the one thing nobody can see by eye: whether
              the printer shrank the page. If it doesn't measure an inch, the
              scale is wrong and no amount of changing the layout will help. */
-          .cal { position: absolute; top: 0.16in; left: ${f.padSide}; }
+          .cal { position: absolute; top: 0.16in; left: calc(${f.padLeft} + ${nudgeX}in); }
           .sheet-page:last-child { break-after: auto; page-break-after: auto; }
           .lbl { border: none; }
         }
@@ -205,7 +237,7 @@ export default function LabelsPage() {
           .print-area { overflow-x: auto; }
           .sheet-page {
             width: 8.5in;
-            padding: ${f.padTop} ${f.padSide} 0.5in;
+            padding: ${f.padTop} ${f.padRight} 0.5in ${f.padLeft};
             border: 1px solid var(--border); border-radius: var(--r-lg);
             background: #fff; margin-bottom: var(--sp-4);
           }
@@ -272,8 +304,53 @@ export default function LabelsPage() {
 
               <Note tone="warn" title="Set your printer scale to 100%">
                 In the print window choose 100% scale, never &ldquo;Fit to page&rdquo; — otherwise the
-                labels won&rsquo;t line up with the stickers.
+                labels won&rsquo;t line up with the stickers. The first sheet prints a 1-inch ruler on the
+                bare liner at the top: hold a tape to it. If it isn&rsquo;t an inch, the scale is wrong and
+                nothing below will help.
               </Note>
+
+              <div className="stack g-2">
+                <span className="t-label">Nudge the whole sheet</span>
+                <p className="t-xs t-muted">
+                  Print one sheet at 100% first. If every label is out by the same amount in the same
+                  direction, move the grid to match your printer. Hundredths of an inch; 0.01 is about a
+                  quarter of a millimetre of movement. Saved on this device.
+                </p>
+                <div className="row wrap g-2" style={{ alignItems: "flex-end" }}>
+                  <Field label="Left / right (in)" className="shrink0">
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number" step="0.01" min="-0.25" max="0.25"
+                        inputMode="decimal"
+                        style={{ width: 110 }}
+                        value={nudgeX}
+                        onChange={(e) => saveNudge(Number(e.target.value) || 0, nudgeY)}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Up / down (in)" className="shrink0">
+                    {(p) => (
+                      <Input
+                        {...p}
+                        type="number" step="0.01" min="-0.25" max="0.25"
+                        inputMode="decimal"
+                        style={{ width: 110 }}
+                        value={nudgeY}
+                        onChange={(e) => saveNudge(nudgeX, Number(e.target.value) || 0)}
+                      />
+                    )}
+                  </Field>
+                  {nudgeX || nudgeY ? (
+                    <Button size="sm" variant="ghost" icon="refresh" onClick={() => saveNudge(0, 0)}>
+                      Back to zero
+                    </Button>
+                  ) : null}
+                </div>
+                <span className="t-xs t-muted">
+                  Positive moves right and down. Printing too far left? Try 0.03.
+                </span>
+              </div>
             </div>
           </Card>
 
