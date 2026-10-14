@@ -33,10 +33,28 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number;
   } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
+  /* ONLY JUDGE WHAT SHE ACTUALLY CHANGED.
+
+     The edit form posts every field it holds, not the ones that were touched.
+     So a rule about the price got applied to a price the vendor was only
+     carrying along, and an item that was already outside the rule — priced at
+     zero, say — could never be saved again for any reason. Change the floor
+     count, get told to enter a valid price, for a box that was already filled
+     in and that she hadn't gone near.
+
+     A value identical to the one in the database is therefore not this save's
+     business. It gets left exactly as it is: not written, not judged. Anything
+     genuinely new is still checked as strictly as before, and the message now
+     names the box so it means something wherever it is read. */
   if (given(body.priceDollars)) {
     const price = Math.round(Number(body.priceDollars) * 100);
-    if (!price || price <= 0) return NextResponse.json({ error: "Enter a valid price." }, { status: 400 });
-    data.priceCents = price;
+    const unchanged = price === item.priceCents;
+    if (!unchanged) {
+      if (!Number.isFinite(price) || price <= 0) {
+        return NextResponse.json({ error: "The price has to be more than zero — check the Price box." }, { status: 400 });
+      }
+      data.priceCents = price;
+    }
   }
   if (given(body.addQuantity)) {
     const n = Math.round(Number(body.addQuantity));
@@ -53,8 +71,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if (given(body.salePercent)) {
     const pct = Math.round(Number(body.salePercent));
-    if (Number.isNaN(pct) || pct < 0 || pct > 90) return NextResponse.json({ error: "Sale must be 0–90%." }, { status: 400 });
-    data.salePercent = pct;
+    if (pct !== (item.salePercent || 0)) {
+      if (Number.isNaN(pct) || pct < 0 || pct > 90) {
+        return NextResponse.json({ error: "A sale has to be between 0 and 90% — check the Sale box." }, { status: 400 });
+      }
+      data.salePercent = pct;
+    }
   }
   if (body.taxClass !== undefined) data.taxClass = normalizeTaxClass(body.taxClass);
   if (body.category !== undefined) data.category = String(body.category || "").trim().slice(0, 40);
@@ -68,30 +90,58 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (typeof body.onlineEnabled === "boolean") data.onlineEnabled = body.onlineEnabled;
   if (given(body.onlineQuantity)) {
     const q = Math.round(Number(body.onlineQuantity));
-    if (Number.isNaN(q) || q < 0 || q > 9999) {
-      return NextResponse.json({ error: "Online quantity has to be 0 or more." }, { status: 400 });
+    if (q !== (item.onlineQuantity || 0)) {
+      if (Number.isNaN(q) || q < 0 || q > 9999) {
+        return NextResponse.json({ error: "The number set aside for online has to be 0 or more." }, { status: 400 });
+      }
+      data.onlineQuantity = q;
     }
-    data.onlineQuantity = q;
   }
   if (typeof body.onlinePickup === "boolean") data.onlinePickup = body.onlinePickup;
   if (typeof body.onlineShip === "boolean") data.onlineShip = body.onlineShip;
   if (body.shipDollars !== undefined) {
     const cents = Math.round(Number(body.shipDollars || 0) * 100);
-    if (Number.isNaN(cents) || cents < 0 || cents > 50000) {
-      return NextResponse.json({ error: "Shipping charge has to be between $0 and $500." }, { status: 400 });
+    if (cents !== (item.shipCents || 0)) {
+      if (Number.isNaN(cents) || cents < 0 || cents > 50000) {
+        return NextResponse.json({ error: "The postage charge has to be between $0 and $500." }, { status: 400 });
+      }
+      data.shipCents = cents;
     }
-    data.shipCents = cents;
   }
   /* Neither collection nor post means nobody can receive it, so it can't be
-     sold online however the boxes were left. */
-  const finalPickup = data.onlinePickup ?? item.onlinePickup;
-  const finalShip = data.onlineShip ?? item.onlineShip;
-  const finalOnline = data.onlineEnabled ?? item.onlineEnabled;
-  if (finalOnline && !finalPickup && !finalShip) {
-    return NextResponse.json(
-      { error: "Pick collection at the market, posting, or both — an online item needs a way to reach the buyer." },
-      { status: 400 }
-    );
+     sold online however the boxes were left.
+
+     This used to reject the WHOLE save, which turned a stale online setting
+     into a locked item: a vendor fixing a floor count got a refusal about
+     postage, for a section of the form she hadn't opened, and from where she
+     was standing the Save button simply did nothing. The rule still holds, but
+     it now only applies to a save that is actually CHANGING how the thing
+     reaches a buyer. Everything else — stock, price, name — goes through, and
+     the online fields are left exactly as they were. */
+  const touchedDelivery =
+    typeof body.onlineEnabled === "boolean" ||
+    typeof body.onlinePickup === "boolean" ||
+    typeof body.onlineShip === "boolean";
+  const wouldBeOnline = data.onlineEnabled ?? item.onlineEnabled;
+  const wouldBePickup = data.onlinePickup ?? item.onlinePickup;
+  const wouldBeShip = data.onlineShip ?? item.onlineShip;
+  const isNowBroken = item.onlineEnabled && !item.onlinePickup && !item.onlineShip;
+  const wouldBeBroken = wouldBeOnline && !wouldBePickup && !wouldBeShip;
+
+  if (wouldBeBroken) {
+    /* Changing it INTO that state is still refused — that is the vendor
+       standing in the online section, and the message belongs there. */
+    if (touchedDelivery && !isNowBroken) {
+      return NextResponse.json(
+        { error: "Pick collection at the market, posting, or both — an online item needs a way to reach the buyer." },
+        { status: 400 }
+      );
+    }
+    /* Already in that state and she is here for something else: don't touch
+       the online fields at all, and don't stand in her way. */
+    delete data.onlineEnabled;
+    delete data.onlinePickup;
+    delete data.onlineShip;
   }
   if (typeof body.active === "boolean") data.active = body.active;
   if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });

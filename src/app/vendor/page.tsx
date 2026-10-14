@@ -292,6 +292,9 @@ export default function VendorDashboard() {
   const [tab, setTab] = useHashTab(VENDOR_TABS, "home");
   const [moreOpen, setMoreOpen] = useState(false);
   const [editItem, setEditItem] = useState<string | null>(null);
+  /* The reason the last save was refused, kept on screen beside the button
+     that was pressed rather than in a toast that has already gone. */
+  const [saveErr, setSaveErr] = useState<string>("");
   const [editIF, setEditIF] = useState({
     name: "", price: "", qty: "", sale: "0", food: false, category: "",
     description: "", unitLabel: "", featured: false,
@@ -826,20 +829,56 @@ export default function VendorDashboard() {
     await load();
   };
 
+  /* WHY A SAVE DIDN'T SAVE, WHERE SHE'S LOOKING.
+
+     A refusal used to arrive as a toast and nothing else. A toast is a corner
+     of the screen for a few seconds; the vendor's eyes are on the number she
+     just typed and on the Save button she just pressed. So a rejected save read
+     as a button that did nothing — and "it does nothing" is the hardest kind of
+     fault to chase, because the one piece of information that would end it was
+     printed and thrown away.
+
+     The reason now stays on the screen, in the panel, until she changes
+     something. A lost connection and an expired sign-in say so in those words
+     rather than as a bare code. */
   const patchItem = async (id: string, body: object): Promise<boolean> => {
     setBusy(true);
-    const r = await fetch(`/api/vendor/items/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({} as { error?: string }));
-      toast.error("Couldn't save that change", d.error || "Try again in a moment.");
+    setSaveErr("");
+
+    let r: Response | null = null;
+    let msg = "";
+    try {
+      r = await fetch(`/api/vendor/items/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      msg = "The save never reached the market — you may have lost signal. Nothing was changed. Try again.";
     }
-    await load();
+
+    if (r && !r.ok) {
+      const d = await r.json().catch(() => ({} as { error?: string }));
+      msg =
+        r.status === 401
+          ? "You've been signed out, so nothing was saved. Sign in again and make the change."
+          : d.error || `The market turned the save down (error ${r.status}). Nothing was changed.`;
+    }
+
+    if (msg) {
+      setSaveErr(msg);
+      toast.error("Couldn't save that change", msg);
+    }
+
+    /* A signed-out reload bounces to the front page and takes the message with
+       it, so skip it and leave the reason on screen. Everything else refreshes.
+       A reload that throws must still release the button — a spinner that never
+       stops is the same dead button by another route. */
+    if (r?.status !== 401) {
+      try { await load(); } catch { /* the message on screen is what matters */ }
+    }
     setBusy(false);
-    return r.ok;
+    return !!r?.ok;
   };
 
   const restockItem = async (it: Item) => {
@@ -1667,6 +1706,7 @@ export default function VendorDashboard() {
                   caption="Your active items, prices, and floor counts"
                   onRowClick={(it) => {
                     setEditItem(it.id);
+                    setSaveErr("");
                     setEditIF({
                       name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity),
                       sale: String(it.salePercent || 0),
@@ -2809,7 +2849,9 @@ export default function VendorDashboard() {
             </Button>
           }
           footer={
-            <div className="row wrap g-2">
+            <div className="stack g-3">
+              {saveErr ? <Note tone="error" title="That didn't save">{saveErr}</Note> : null}
+              <div className="row wrap g-2">
               <Button
                 variant="primary"
                 icon="check"
@@ -2842,6 +2884,7 @@ export default function VendorDashboard() {
                 Save changes
               </Button>
               <Button variant="ghost" onClick={() => setEditItem(null)}>Cancel</Button>
+              </div>
             </div>
           }
         >
