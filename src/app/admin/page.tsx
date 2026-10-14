@@ -3429,10 +3429,25 @@ export default function AdminPage() {
       });
       if (!ok) { setCMsg(String(data.error || "Couldn't create it.")); return; }
       setCMsg("");
-      toast.success(
-        "Agreement created",
-        `First month prorates to ${money(Number(data.firstMonthCents) || 0)} and is on their balance. Full rent auto-charges every 1st after that.`
-      );
+      const prorate = `First month prorates to ${money(Number(data.firstMonthCents) || 0)} and is on their balance.`;
+      if (data.emailed) {
+        toast.success("Agreement created and sent", `Signing link emailed to ${String(data.to || "them")}. ${prorate}`);
+      } else {
+        /* The link is the only copy. Showing it beats a toast that says
+           "sent" when nothing left the building. */
+        await dialog.alert({
+          title: "Agreement created — but the email didn't send",
+          tone: "warn",
+          body: (
+            <>
+              Send this signing link to <b>{String(data.to || "the vendor")}</b> yourself.
+              {data.emailError ? <> The mailer said: {String(data.emailError)}</> : null}
+            </>
+          ),
+          copyable: String(data.signUrl || ""),
+          confirmLabel: "Done",
+        });
+      }
       setCBooth(""); setCStart(""); setCTerms("STANDARD");
       await loadAll();
     } finally { setBusy(false); }

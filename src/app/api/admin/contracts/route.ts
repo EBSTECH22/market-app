@@ -6,6 +6,8 @@ import { centralInputToDate } from "@/lib/time";
 import { deliveryFor } from "@/lib/agreement";
 import { viewTrackingSince } from "@/lib/viewlog";
 import { denyUnless } from "@/lib/perm";
+import { randomBytes } from "crypto";
+import { sendContractSignEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -106,8 +108,42 @@ export async function POST(req: NextRequest) {
       monthlyRentCents: rent,
       startDate: start,
       termsVersion: terms,
+      /* A SIGNING LINK, LIKE EVERY OTHER AGREEMENT.
+         
+         This route used to create the agreement and stop. No token, no email,
+         nothing — so an agreement raised here existed in the office and the
+         vendor was never told. The applications pipeline has always sent one;
+         raising an agreement straight from the contracts screen, which is
+         what you do for somebody who never filled in an application, quietly
+         didn't. */
+      signToken: randomBytes(16).toString("hex"),
     },
   });
+
+  const vendor = await db.vendor.findUnique({
+    where: { id: vendorId },
+    select: { email: true, businessName: true },
+  });
+
+  const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+  const signUrl = `${base}/sign/${contract.signToken}`;
+  let emailed = false;
+  let emailError = "";
+  if (vendor?.email) {
+    try {
+      await sendContractSignEmail(vendor.email, vendor.businessName, signUrl);
+      emailed = true;
+    } catch (err) {
+      /* Say so rather than reporting success. The link is handed back either
+         way so the office can send it themselves instead of discovering a
+         week later that nobody ever got it. */
+      emailError = err instanceof Error ? err.message : "The mailer refused it.";
+      console.error("contract sign email failed", err);
+    }
+  } else {
+    emailError = "That vendor has no email address on file.";
+  }
+
   // first month's rent posts automatically when the contract is FULLY EXECUTED (both signatures) — not at creation
-  return NextResponse.json({ contract, firstMonthCents });
+  return NextResponse.json({ contract, firstMonthCents, signUrl, emailed, emailError, to: vendor?.email || "" });
 }
