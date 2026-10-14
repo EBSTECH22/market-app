@@ -25,7 +25,7 @@ export async function notifyRentPaid(
     if (!vendor) return;
 
     const contract = await db.contract.findFirst({
-      where: { vendorId, status: { notIn: ["VOIDED", "ENDED", "WITHDRAWN"] } },
+      where: { vendorId, status: { notIn: ["VOIDED", "ENDED", "WITHDRAWN", "SUPERSEDED"] } },
       orderBy: { createdAt: "desc" },
       select: { boothLabel: true },
     });

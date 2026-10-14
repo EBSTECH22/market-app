@@ -6,6 +6,21 @@ import { randomBytes } from "crypto";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit } from "@/lib/audit";
 
+/**
+ * Which set of terms a replacement agreement is written on.
+ *
+ * Carried over from the agreement being replaced unless the office is
+ * deliberately changing it — a vendor who has started selling eggs is exactly
+ * the sort of thing that needs a fresh signature, so this is the right place
+ * to be able to switch it. Anything unrecognised keeps what was there rather
+ * than silently falling back to the standard terms.
+ */
+function nextTermsVersion(body: unknown, current: string): string {
+  const asked = String((body as { termsVersion?: unknown })?.termsVersion || "").toUpperCase();
+  if (asked === "EGGS_DAIRY" || asked === "STANDARD") return asked;
+  return current || "STANDARD";
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   { const denied = await denyUnless("market"); if (denied) return denied; }
   const body = await req.json();
@@ -307,13 +322,27 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     // The old one is kept, marked VOIDED, with its signature intact as a record
     // of what they agreed to. The replacement starts clean and unsigned.
+    //
+    // WHAT HAS TO COME ACROSS: the kind of space and which set of terms. These
+    // were dropped, so an eggs-and-dairy vendor whose agreement was corrected
+    // quietly got sent the standard one to sign instead — the eggs sections
+    // simply gone, and nothing on screen to say so.
     const [, replacement] = await db.$transaction([
       db.contract.update({
         where: { id: contract.id },
         data: { status: "VOIDED", endDate: new Date() },
       }),
       db.contract.create({
-        data: { vendorId: contract.vendorId, boothLabel: b, monthlyRentCents: rent, startDate: start, signToken: randomBytes(16).toString("hex") },
+        data: {
+          vendorId: contract.vendorId,
+          boothLabel: b,
+          monthlyRentCents: rent,
+          startDate: start,
+          spaceKey: contract.spaceKey,
+          termsVersion: nextTermsVersion(body, contract.termsVersion),
+          supersedesId: contract.id,
+          signToken: randomBytes(16).toString("hex"),
+        },
       }),
     ]);
 
@@ -329,6 +358,151 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       emailed,
       sentTo: vendor.email,
       signUrl: `${base}/sign/${replacement.signToken}`,
+    });
+  }
+
+  /* ---- AMEND A SIGNED AGREEMENT AND SEND IT BACK FOR SIGNATURE ------------
+
+     Terms change. A vendor moves to a bigger booth, rent is renegotiated, or
+     they start selling eggs and need the sections that cover them. Until now
+     the only route for a fully executed agreement was thirty days' notice and
+     a brand new one, which is a sledgehammer for "the rent is going up $25".
+
+     A SIGNED AGREEMENT IS NEVER REWRITTEN. The signature is evidence of what
+     was on the screen when they put their name to it, so changing the words
+     underneath it would quietly destroy the only record of what was actually
+     agreed. Instead the old row is left exactly as it stands — both
+     signatures, both dates — and marked SUPERSEDED, and the new terms go out
+     as a fresh agreement that points back at it. Nobody loses the history and
+     nothing is in force until they sign.
+
+     paidThrough comes across. Amending the rent must not re-bill a month they
+     have already paid for; that figure is about money received, not about
+     which document was in force when it arrived. */
+  if (action === "amend_and_resend") {
+    if (!contract.vendorSignedAt) {
+      return NextResponse.json(
+        { error: "Nobody has signed this one yet — just edit the terms instead." },
+        { status: 400 }
+      );
+    }
+    if (["ENDED", "WITHDRAWN", "VOIDED", "SUPERSEDED"].includes(contract.status)) {
+      return NextResponse.json(
+        { error: "This agreement is closed, so there is nothing to amend. Write a new one." },
+        { status: 400 }
+      );
+    }
+
+    const vendor = await db.vendor.findUnique({ where: { id: contract.vendorId } });
+    if (!vendor) return NextResponse.json({ error: "Vendor not found." }, { status: 404 });
+    if (!vendor.email?.trim()) {
+      return NextResponse.json({ error: "This vendor has no email address on file to send it to." }, { status: 400 });
+    }
+
+    const b = typeof boothLabel === "string" && boothLabel.trim()
+      ? boothLabel.trim().slice(0, 40)
+      : contract.boothLabel;
+
+    const rent = monthlyRentDollars !== undefined
+      ? Math.round(Number(monthlyRentDollars) * 100)
+      : contract.monthlyRentCents;
+    if (!Number.isFinite(rent) || rent < 0) {
+      return NextResponse.json({ error: "Rent has to be a number, zero or more." }, { status: 400 });
+    }
+    if (rent > 100_000_00) {
+      return NextResponse.json({ error: "That rent looks wrong — check the amount." }, { status: 400 });
+    }
+
+    const sdA = (body as { startDate?: string }).startDate;
+    let start = contract.startDate;
+    if (typeof sdA === "string" && sdA.trim()) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(sdA.trim())) {
+        return NextResponse.json({ error: "Start date must be YYYY-MM-DD." }, { status: 400 });
+      }
+      const d = new Date(`${sdA.trim()}T12:00:00`);
+      if (isNaN(d.getTime())) return NextResponse.json({ error: "That start date isn't valid." }, { status: 400 });
+      start = d;
+    }
+
+    const terms = nextTermsVersion(body, contract.termsVersion);
+
+    /* Something has to actually be different, or this is a re-signature
+       request dressed up as an amendment — and the vendor gets an email
+       asking them to sign a document identical to the one they signed. */
+    const changes: string[] = [];
+    if (b !== contract.boothLabel) changes.push(`booth ${contract.boothLabel} → ${b}`);
+    if (rent !== contract.monthlyRentCents) {
+      changes.push(`rent $${(contract.monthlyRentCents / 100).toFixed(2)} → $${(rent / 100).toFixed(2)}`);
+    }
+    if (start.getTime() !== contract.startDate.getTime()) changes.push("start date changed");
+    if (terms !== contract.termsVersion) changes.push(`terms ${contract.termsVersion} → ${terms}`);
+    if (changes.length === 0) {
+      return NextResponse.json(
+        { error: "Nothing is different, so there's nothing for them to re-sign." },
+        { status: 400 }
+      );
+    }
+
+    const [, replacement] = await db.$transaction([
+      db.contract.update({
+        where: { id: contract.id },
+        data: { status: "SUPERSEDED", endDate: new Date() },
+      }),
+      db.contract.create({
+        data: {
+          vendorId: contract.vendorId,
+          boothLabel: b,
+          monthlyRentCents: rent,
+          startDate: start,
+          spaceKey: contract.spaceKey,
+          termsVersion: terms,
+          supersedesId: contract.id,
+          paidThrough: contract.paidThrough,
+          signToken: randomBytes(16).toString("hex"),
+        },
+      }),
+    ]);
+
+    await recordAudit(
+      {
+        action: "CONTRACT_EDIT",
+        targetType: "CONTRACT",
+        targetId: replacement.id,
+        targetLabel: `Booth ${b} · ${vendor.businessName}`,
+        detail: `Amended after signing and sent back for signature: ${changes.join(", ")}`,
+        before: {
+          id: contract.id,
+          boothLabel: contract.boothLabel,
+          monthlyRentCents: contract.monthlyRentCents,
+          termsVersion: contract.termsVersion,
+          vendorSignedAt: contract.vendorSignedAt,
+        },
+        after: { id: replacement.id, boothLabel: b, monthlyRentCents: rent, termsVersion: terms },
+      },
+      req
+    );
+
+    const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${req.headers.get("host")}`;
+    const signUrl = `${base}/sign/${replacement.signToken}`;
+    let emailed = false;
+    let emailError = "";
+    try {
+      await sendContractSignEmail(vendor.email, vendor.businessName, signUrl);
+      emailed = true;
+    } catch (err) {
+      /* The amendment exists either way. Say so plainly and hand back the
+         link, rather than losing the work to a mail failure. */
+      emailError = err instanceof Error ? err.message : "The email didn't go.";
+    }
+
+    return NextResponse.json({
+      contract: replacement,
+      supersededId: contract.id,
+      changes,
+      emailed,
+      emailError,
+      sentTo: vendor.email,
+      signUrl,
     });
   }
 

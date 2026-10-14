@@ -73,7 +73,7 @@ function DeliveryCell({ d }: { d: Delivery | undefined }) {
   );
 }
 
-type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean }; spaceReleasedAt?: string | null; spaceKey?: string; termsVersion?: string };
+type Contract = { id: string; vendorId: string; boothLabel: string; monthlyRentCents: number; startDate: string; status: string; noticeGivenAt: string | null; endDate: string | null; vendorSignedAt: string | null; marketSignedAt: string | null; viewedAt?: string | null; signToken?: string | null; vendor: { businessName: string; code: string; cardLast4?: string }; vendorBalanceCents?: number; rentChargedCents?: number; rentPaidCents?: number; rentDueCents?: number; delivery?: Delivery; invoiceViews?: { count: number; lastAt: string | null; tracked?: boolean }; spaceReleasedAt?: string | null; spaceKey?: string; termsVersion?: string; supersedesId?: string };
 
 /** One recorded open of a vendor's invoice — /api/admin/contracts/{id}/views. */
 type InvoiceView = { id: string; viewedAt: string; userAgent: string | null };
@@ -684,7 +684,7 @@ function RentLedgerCards({
      table uses. Agreements already ended or withdrawn are left alone. */
   const noticeRows = (ledger?.invoices || []).filter((i) =>
     i.rentDueCents > 0 && i.outstandingCents > 0 &&
-    !["ENDED", "WITHDRAWN", "VOIDED"].includes(i.contractStatus)
+    !["ENDED", "WITHDRAWN", "VOIDED", "SUPERSEDED"].includes(i.contractStatus)
   );
   /* Filtering on the badge, not on the balance. "Still owing" used to include
      anyone whose account was negative for any reason — including a vendor who
@@ -1017,6 +1017,9 @@ function ContractStatusBadge({ status, endDate }: { status: string; endDate?: st
   }
   if (status === "WITHDRAWN") return <Badge tone="danger" dot>Backed out</Badge>;
   if (status === "VOIDED") return <Badge tone="neutral" dot>Voided</Badge>;
+  /* Superseded is NOT ended and NOT voided: it was in force, it was honoured,
+     and it was replaced by an amendment the vendor signed in its place. */
+  if (status === "SUPERSEDED") return <Badge tone="neutral" dot>Superseded</Badge>;
   return <Badge tone="neutral" dot>Ended</Badge>;
 }
 
@@ -1614,8 +1617,8 @@ export default function AdminPage() {
   /* The one modal behind both "Edit terms" and "Void and send a corrected
      agreement" — same fields, different action on save. */
   const [termsForm, setTermsForm] = useState<{
-    id: string; mode: "update_terms" | "void_and_reissue"; businessName: string;
-    boothLabel: string; rent: string; startDate: string;
+    id: string; mode: "update_terms" | "void_and_reissue" | "amend_and_resend"; businessName: string;
+    boothLabel: string; rent: string; startDate: string; terms: "STANDARD" | "EGGS_DAIRY";
   } | null>(null);
   const [termsErr, setTermsErr] = useState("");
 
@@ -3867,8 +3870,8 @@ export default function AdminPage() {
   /* One modal serves both "fix the terms" and "void it and send a corrected
      one" — the fields are identical, only the action and the warning differ. */
   const openTerms = (
-    c: { id: string; businessName: string; boothLabel: string; monthlyRentCents: number; startDate: string },
-    mode: "update_terms" | "void_and_reissue"
+    c: { id: string; businessName: string; boothLabel: string; monthlyRentCents: number; startDate: string; termsVersion?: string },
+    mode: "update_terms" | "void_and_reissue" | "amend_and_resend"
   ) => {
     setTermsErr("");
     const d = new Date(c.startDate);
@@ -3879,6 +3882,7 @@ export default function AdminPage() {
       boothLabel: c.boothLabel,
       rent: (c.monthlyRentCents / 100).toFixed(2),
       startDate: Number.isNaN(d.getTime()) ? isoDate() : isoDate(d),
+      terms: c.termsVersion === "EGGS_DAIRY" ? "EGGS_DAIRY" : "STANDARD",
     });
   };
 
@@ -3901,6 +3905,17 @@ export default function AdminPage() {
       if (!yes) return;
     }
 
+    if (termsForm.mode === "amend_and_resend") {
+      const yes = await dialog.confirm({
+        title: "Amend these terms and send it back for signature?",
+        body: `The agreement ${termsForm.businessName} signed stays on file exactly as it is — signatures, dates and all — and is marked superseded. These new terms go out as a fresh agreement for them to sign. Nothing changes for them until they do.`,
+        confirmLabel: "Send the amended agreement",
+        cancelLabel: "Leave it alone",
+        tone: "warn",
+      });
+      if (!yes) return;
+    }
+
     setBusy(true);
     try {
       const { ok, data } = await safeFetch(`/api/admin/contracts/${termsForm.id}`, {
@@ -3910,11 +3925,36 @@ export default function AdminPage() {
           boothLabel: booth,
           monthlyRentDollars: cents / 100,
           startDate: termsForm.startDate,
+          termsVersion: termsForm.terms,
         }),
       });
       if (!ok) { setTermsErr(String(data.error || "That didn't go through.")); return; }
 
-      if (termsForm.mode === "void_and_reissue") {
+      if (termsForm.mode === "amend_and_resend") {
+        if (data.emailed) {
+          toast.success(
+            "Amended agreement sent",
+            `${termsForm.businessName} has a signing link at ${String(data.sentTo || "their email")}. The old one is on file, superseded.`
+          );
+        } else {
+          /* The link is the only copy of the amendment. Never let it vanish
+             with a toast because the mail server had a bad morning. */
+          await dialog.alert({
+            title: "Amendment created — but the email didn't send",
+            tone: "warn",
+            body: (
+              <>
+                The amended agreement exists and the signed one is on file, superseded. Send this
+                signing link to <b>{String(data.sentTo || termsForm.businessName)}</b> yourself.
+              </>
+            ),
+            copyable: String(data.signUrl || ""),
+            confirmLabel: "Done",
+          });
+        }
+        setContractOpen(null);
+        setOnbOpen(null);
+      } else if (termsForm.mode === "void_and_reissue") {
         if (data.emailed) {
           toast.success(
             "Corrected agreement sent",
@@ -9540,7 +9580,29 @@ export default function AdminPage() {
                       /* Backing out stamps endDate too, but "Lease ends" would be
                          the wrong word for a lease that never began. */
                       ...(c.endDate
-                        ? [{ label: c.status === "WITHDRAWN" ? "Backed out" : "Lease ends", value: fmtDate(c.endDate) }]
+                        ? [{
+                            label: c.status === "WITHDRAWN"
+                              ? "Backed out"
+                              : c.status === "SUPERSEDED" ? "Superseded" : "Lease ends",
+                            value: fmtDate(c.endDate),
+                          }]
+                        : []),
+                      /* The thread back through an amendment. Without it,
+                         "what did they agree to in March" is unanswerable
+                         from this screen. */
+                      ...(c.supersedesId
+                        ? [{
+                            label: "Amends",
+                            value: (() => {
+                              const prev = contracts.find((x) => x.id === c.supersedesId);
+                              return prev
+                                ? `Booth ${prev.boothLabel} · ${money(prev.monthlyRentCents)}/mo${prev.vendorSignedAt ? `, signed ${fmtDate(prev.vendorSignedAt)}` : ""}`
+                                : "An earlier agreement";
+                            })(),
+                          }]
+                        : []),
+                      ...(contracts.some((x) => x.supersedesId === c.id)
+                        ? [{ label: "Replaced by", value: "A later amended agreement" }]
                         : []),
                       { label: "Vendor signed", value: c.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
                       { label: "Market signed", value: c.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
@@ -9719,23 +9781,52 @@ export default function AdminPage() {
                         <div className="row wrap g-2">
                           <Button
                             size="sm"
+                            variant="secondary"
+                            icon="edit"
+                            disabled={busy}
+                            onClick={() => openTerms(
+                              { id: c.id, businessName: c.vendor.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate, termsVersion: c.termsVersion },
+                              "amend_and_resend"
+                            )}
+                          >
+                            Amend and resend for signature
+                          </Button>
+                          <Button
+                            size="sm"
                             variant="dangerSoft"
                             icon="refresh"
                             disabled={busy}
                             onClick={() => openTerms(
-                              { id: c.id, businessName: c.vendor.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate },
+                              { id: c.id, businessName: c.vendor.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate, termsVersion: c.termsVersion },
                               "void_and_reissue"
                             )}
                           >
-                            Void and send a corrected agreement
+                            Void and start over
                           </Button>
                         </div>
                       </>
                     ) : (
-                      <p className="t-xs t-muted">
-                        Both names are on this agreement, so the terms are fixed. To change them, end it
-                        with 30-day notice and write a new one.
-                      </p>
+                      <>
+                        <Note tone="info" title="Both names are on this one">
+                          The terms as signed are fixed. If they&rsquo;ve changed — a different booth, new
+                          rent, or they&rsquo;ve started selling eggs — amend it and send it back for
+                          signature. The signed copy stays on file and what they&rsquo;ve paid carries over.
+                        </Note>
+                        <div className="row wrap g-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            icon="edit"
+                            disabled={busy}
+                            onClick={() => openTerms(
+                              { id: c.id, businessName: c.vendor.businessName, boothLabel: c.boothLabel, monthlyRentCents: c.monthlyRentCents, startDate: c.startDate, termsVersion: c.termsVersion },
+                              "amend_and_resend"
+                            )}
+                          >
+                            Amend and resend for signature
+                          </Button>
+                        </div>
+                      </>
                     )}
                   </div>
 
@@ -11039,12 +11130,20 @@ export default function AdminPage() {
       <Modal
         open={!!termsForm}
         onClose={() => { setTermsForm(null); setTermsErr(""); }}
-        title={termsForm?.mode === "void_and_reissue" ? "Send a corrected agreement" : "Edit agreement terms"}
+        title={
+          termsForm?.mode === "void_and_reissue"
+            ? "Send a corrected agreement"
+            : termsForm?.mode === "amend_and_resend"
+              ? "Amend the terms"
+              : "Edit agreement terms"
+        }
         description={
           termsForm
             ? termsForm.mode === "void_and_reissue"
               ? `${termsForm.businessName} signs the corrected agreement — the old one is voided and kept on file.`
-              : `${termsForm.businessName} hasn't signed yet, so these can still change.`
+              : termsForm.mode === "amend_and_resend"
+                ? `${termsForm.businessName} signs the amended agreement. The one they already signed is kept, superseded.`
+                : `${termsForm.businessName} hasn't signed yet, so these can still change.`
             : undefined
         }
         width="sm"
@@ -11053,11 +11152,15 @@ export default function AdminPage() {
             <Button variant="ghost" onClick={() => { setTermsForm(null); setTermsErr(""); }}>Cancel</Button>
             <Button
               variant={termsForm?.mode === "void_and_reissue" ? "danger" : "primary"}
-              icon={termsForm?.mode === "void_and_reissue" ? "mail" : "check"}
+              icon={termsForm?.mode === "update_terms" ? "check" : "mail"}
               loading={busy}
               onClick={saveTerms}
             >
-              {termsForm?.mode === "void_and_reissue" ? "Void and reissue" : "Save terms"}
+              {termsForm?.mode === "void_and_reissue"
+                ? "Void and reissue"
+                : termsForm?.mode === "amend_and_resend"
+                  ? "Send for signature"
+                  : "Save terms"}
             </Button>
           </>
         }
@@ -11095,10 +11198,40 @@ export default function AdminPage() {
               )}
             </Field>
 
+            {/* Switchable only on a replacement. On an unsigned agreement the
+                create screen already chose, and on a signed one the words have
+                to go on matching the signature. */}
+            {termsForm.mode !== "update_terms" ? (
+              <div className="stack g-2">
+                <Segmented
+                  label="Which agreement"
+                  value={termsForm.terms}
+                  onChange={(v) => setTermsForm((f) => f && ({ ...f, terms: v as "STANDARD" | "EGGS_DAIRY" }))}
+                  options={[
+                    { value: "STANDARD", label: "Standard" },
+                    { value: "EGGS_DAIRY", label: "Eggs or dairy" },
+                  ]}
+                />
+                <p className="t-xs t-muted">
+                  Carried over from the agreement being replaced. Change it if what they sell has
+                  changed — the eggs and dairy version adds the sections covering compliance, cartons,
+                  refrigeration and recalls.
+                </p>
+              </div>
+            ) : null}
+
             {termsForm.mode === "void_and_reissue" ? (
               <Note tone="warn" title="This replaces the agreement they signed">
                 Saving voids the signed agreement and emails {termsForm.businessName} a fresh one on these
                 terms. Their booth isn&rsquo;t theirs again until they sign it.
+              </Note>
+            ) : null}
+
+            {termsForm.mode === "amend_and_resend" ? (
+              <Note tone="warn" title="The signed copy is kept, not changed">
+                The agreement {termsForm.businessName} signed stays on file as it is and is marked
+                superseded. These terms go out as a fresh agreement for them to sign, and what they
+                have already paid carries across so no month gets billed twice.
               </Note>
             ) : null}
 

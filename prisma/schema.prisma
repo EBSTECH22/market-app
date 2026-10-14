@@ -342,6 +342,16 @@ model Contract {
   /// a signed agreement has to go on rendering the words that were on the
   /// screen when somebody put their name to it.
   termsVersion String @default("STANDARD")
+  /// THE AGREEMENT THIS ONE REPLACES, when it replaces one.
+  ///
+  /// Terms can change after a vendor has signed — a booth swap, a rent
+  /// change, a vendor who starts selling eggs. A signed agreement cannot be
+  /// rewritten, because the signature is evidence of what was on the screen
+  /// when they signed it, so an amendment is a NEW agreement that supersedes
+  /// the old one. The old row stays exactly as it was, signatures and all,
+  /// marked SUPERSEDED; this field is the thread back to it, so "what did
+  /// they agree to in March" always has an answer.
+  supersedesId String @default("")
   createdAt        DateTime  @default(now())
 }
 
