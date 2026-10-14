@@ -1498,6 +1498,16 @@ export default function AdminPage() {
   /* When set, the ticket list is one drawer's shift instead of the last 30
      days. Carries the name so the banner can say whose it is. */
   const [ticketDrawer, setTicketDrawer] = useState<{ id: string; employee: string } | null>(null);
+  /* The ticket list sits below the drawer panel, so switching the filter from
+     up there changes something off the bottom of the screen. Scrolling to it
+     is the difference between a button that worked and a button that looked
+     broken. */
+  const ticketsRef = useRef<HTMLDivElement | null>(null);
+  const showDrawerTickets = (d: { id: string; employee: string }) => {
+    setTicketDrawer({ id: d.id, employee: d.employee });
+    setTicketQ("");
+    requestAnimationFrame(() => ticketsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   // data
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -4521,7 +4531,7 @@ export default function AdminPage() {
                     size="sm"
                     variant="secondary"
                     icon="receipt"
-                    onClick={() => { setTicketDrawer({ id: d.id, employee: d.employee }); setTicketQ(""); }}
+                    onClick={() => showDrawerTickets(d)}
                   >
                     See its transactions
                   </Button>
@@ -5221,6 +5231,18 @@ export default function AdminPage() {
             )}
           </Card>
 
+        </div>
+      )}
+
+      {/* TICKETS AND REFUNDS, whether or not YOU have a drawer open.
+
+          These used to live inside the block that only renders when the
+          person looking at the screen has their own drawer open — which is
+          exactly the case that doesn't apply to an owner on a laptop
+          working a cashier's till. The filter was being set and the list it
+          filtered wasn't on the page, so the button looked dead. */}
+      {tab === "register" && !closeReport && !closing && !receipt && (
+        <div className="stack g-4" ref={ticketsRef}>
           {refundTarget && (
             <Modal
               open
@@ -5344,7 +5366,7 @@ export default function AdminPage() {
                   <Button
                     variant="ghost"
                     icon="receipt"
-                    onClick={() => { setTicketDrawer({ id: drawer.id, employee: drawer.employee }); setTicketQ(""); }}
+                    onClick={() => showDrawerTickets(drawer)}
                   >
                     Just my drawer
                   </Button>
