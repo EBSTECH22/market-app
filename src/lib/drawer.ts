@@ -127,3 +127,66 @@ export async function drawerIdForRefund(): Promise<string> {
   const { drawer } = await drawerForRequest();
   return drawer?.id || "";
 }
+
+/* ------------------------------------------------------ the time clock -- */
+
+/**
+ * Opening a drawer puts you on the clock; closing it takes you off.
+ *
+ * Cashiers here only ever see the register kiosk — no portal, no admin, no
+ * second screen to remember. Asking them to punch in separately means a
+ * payroll run built on whoever remembered, and the person who forgot arguing
+ * about it on payday. Opening the till is the honest start of a shift and
+ * counting it out is the honest end, so those are the two moments that move
+ * the clock.
+ *
+ * Both are deliberately forgiving:
+ *  - Already clocked in (they punched by hand first)? Leave it alone. The
+ *    earlier time is the true one and overwriting it would steal minutes.
+ *  - Not clocked in at close? Nothing to do — don't invent an entry.
+ *
+ * Neither can fail a drawer. A till that won't open because the time clock
+ * had a bad second is a worse problem than a missing punch.
+ */
+export async function clockInForDrawer(employeeId: string): Promise<"IN" | "ALREADY" | "SKIPPED"> {
+  if (!employeeId) return "SKIPPED";
+  try {
+    const open = await db.timeEntry.findFirst({
+      where: { employeeId, clockOut: null },
+      orderBy: { clockIn: "desc" },
+    });
+    if (open) return "ALREADY";
+    await db.timeEntry.create({ data: { employeeId, note: "Opened a drawer" } });
+    return "IN";
+  } catch (err) {
+    console.error("drawer clock-in failed", err);
+    return "SKIPPED";
+  }
+}
+
+export async function clockOutForDrawer(employeeId: string): Promise<{ state: "OUT" | "NONE" | "SKIPPED"; hours: number }> {
+  if (!employeeId) return { state: "SKIPPED", hours: 0 };
+  try {
+    const open = await db.timeEntry.findFirst({
+      where: { employeeId, clockOut: null },
+      orderBy: { clockIn: "desc" },
+    });
+    if (!open) return { state: "NONE", hours: 0 };
+    const done = await db.timeEntry.update({ where: { id: open.id }, data: { clockOut: new Date() } });
+    const hours = done.clockOut ? (done.clockOut.getTime() - done.clockIn.getTime()) / 3600000 : 0;
+    return { state: "OUT", hours };
+  } catch (err) {
+    console.error("drawer clock-out failed", err);
+    return { state: "SKIPPED", hours: 0 };
+  }
+}
+
+/**
+ * Whose clock a drawer belongs to. Drawers opened before ids were stored
+ * carry only a name, so fall back to that rather than silently doing nothing.
+ */
+export async function employeeIdForDrawer(d: { employeeId: string; employee: string }): Promise<string> {
+  if (d.employeeId) return d.employeeId;
+  const byName = await db.employee.findUnique({ where: { name: d.employee }, select: { id: true } });
+  return byName?.id || "";
+}

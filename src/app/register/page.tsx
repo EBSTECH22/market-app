@@ -712,7 +712,14 @@ export default function RegisterKiosk() {
       if (!r.ok) { toast.error("Couldn't open the drawer", String(d.error || "")); return; }
       setDrawer(d.session);
       setOpenFloat("");
-      toast.success("Drawer open", `Starting with ${money(cents)}.`);
+      /* Say it out loud. A cashier who is never told they were clocked in
+         has no reason to believe it on payday. */
+      toast.success(
+        "Drawer open — you're on the clock",
+        d.alreadyOnClock
+          ? `Starting with ${money(cents)}. You were already clocked in.`
+          : `Starting with ${money(cents)}. Clocked in now; counting out clocks you back off.`
+      );
     } finally { setBusy(false); }
   };
 
@@ -742,9 +749,10 @@ export default function RegisterKiosk() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { toast.error("Couldn't close the drawer", String(d.error || "")); return; }
       const over = Number(d.session?.overShortCents ?? 0);
+      const count = over === 0 ? "Counted exactly." : over > 0 ? `${money(over)} over.` : `${money(-over)} short.`;
       toast.success(
-        "Drawer closed",
-        over === 0 ? "Counted exactly." : over > 0 ? `${money(over)} over.` : `${money(-over)} short.`
+        d.clockedOut ? "Drawer closed — you're off the clock" : "Drawer closed",
+        d.clockedOut ? `${count} ${Number(d.clockHours || 0).toFixed(2)} hrs this shift.` : count
       );
       setDrawer(null); setClosing(false); setCloseCount("");
       await lock(true);

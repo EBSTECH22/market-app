@@ -4,7 +4,7 @@ import { verifyPin, pinUpgrade, currentEmployeeId } from "@/lib/auth";
 import { enforceRateLimit, LIMITS } from "@/lib/ratelimit";
 import { runRoute } from "@/lib/handler";
 import { denyUnless, currentRole, can } from "@/lib/perm";
-import { drawerForRequest, drawerCashCents, openDrawers, openDrawerFor, signedInEmployee, expectedCents, readAdjustments, type DrawerRow } from "@/lib/drawer";
+import { drawerForRequest, drawerCashCents, openDrawers, openDrawerFor, signedInEmployee, expectedCents, readAdjustments, clockInForDrawer, clockOutForDrawer, employeeIdForDrawer, type DrawerRow } from "@/lib/drawer";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -122,7 +122,12 @@ export async function POST(req: NextRequest) {
         openCounts: JSON.stringify(counts || {}),
       },
     });
-    return NextResponse.json({ session });
+    /* On the clock from the moment the till opens. Cashiers only ever see
+       the kiosk, so this is the punch — there is no second screen for them
+       to remember. */
+    const clock = await clockInForDrawer(emp.id);
+
+    return NextResponse.json({ session, clockedIn: clock === "IN", alreadyOnClock: clock === "ALREADY" });
   });
 }
 
@@ -192,7 +197,19 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ session: closed, expected });
+  /* Off the clock when the drawer is counted out — including when the office
+     closes it for somebody who went home, which is the case where a forgotten
+     punch would otherwise run all night. The clock belongs to whoever the
+     DRAWER belongs to, never to whoever pressed the button. */
+  const clockEmpId = await employeeIdForDrawer(session);
+  const clock = await clockOutForDrawer(clockEmpId);
+
+  return NextResponse.json({
+    session: closed,
+    expected,
+    clockedOut: clock.state === "OUT",
+    clockHours: Number(clock.hours.toFixed(2)),
+  });
 }
 
 /**

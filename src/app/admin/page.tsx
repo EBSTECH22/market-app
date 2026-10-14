@@ -3002,7 +3002,14 @@ export default function AdminPage() {
       });
       if (!ok) { toast.error("Couldn't close it", String(data.error || "")); return; }
       const diff = Number((data.session as { diffCents?: number } | undefined)?.diffCents || 0);
-      toast.success(`${d.employee}'s drawer closed`, diff === 0 ? "Counted exactly." : diff > 0 ? `${money(diff)} over.` : `${money(-diff)} short.`);
+      const count = diff === 0 ? "Counted exactly." : diff > 0 ? `${money(diff)} over.` : `${money(-diff)} short.`;
+      const hrs = Number((data as { clockHours?: number }).clockHours || 0);
+      toast.success(
+        `${d.employee}'s drawer closed`,
+        (data as { clockedOut?: boolean }).clockedOut
+          ? `${count} ${d.employee} clocked out — ${hrs.toFixed(2)} hrs.`
+          : count
+      );
       await loadDrawer();
     } finally { setBusy(false); }
   };
