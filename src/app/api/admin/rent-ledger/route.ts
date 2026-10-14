@@ -44,7 +44,21 @@ export async function GET() {
     { const denied = await denyUnless("collections"); if (denied) return denied; }
 
     const contracts = await db.contract.findMany({
-      where: { vendorSignedAt: { not: null }, marketSignedAt: { not: null } },
+      /* Fully signed, and still the agreement in force.
+
+         A SUPERSEDED agreement was fully signed — that is what being
+         superseded means — so it qualified here and put a second invoice row
+         on the vendor's account. Every figure on these rows is account-wide
+         rather than per-contract, so the duplicate showed the SAME money owed
+         twice, and the booth count it fed made a vendor renting one booth look
+         like they rented two. Nothing is lost by leaving it out: the charges
+         it took are in the vendor's ledger, which is where the money lives,
+         and the agreement itself is still on file. */
+      where: {
+        vendorSignedAt: { not: null },
+        marketSignedAt: { not: null },
+        status: { not: "SUPERSEDED" },
+      },
       // Explicit select: `include: { vendor: true }` would pull passwordHash and
       // the Stripe ids into the same object we're about to serialise.
       include: {

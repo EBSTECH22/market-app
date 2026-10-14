@@ -4043,9 +4043,17 @@ export default function AdminPage() {
   const sqft = Math.max(0, (Number(cW) || 0) * (Number(cD) || 0));
   const suggestedRent = Math.round(sqft * rentPerSqft * 100) / 100;
 
-  /* The agreements list, split by whether the vendor pulled out. */
+  /* The agreements list, split by whether the vendor pulled out.
+
+     SUPERSEDED agreements are out of the working list too, and for the same
+     reason: an amendment replaces the one before it, so showing both put two
+     lines on the board for one booth — the live terms and a historical copy,
+     side by side, with nothing but a badge to tell them apart. The superseded
+     copy is still kept and still reachable, under All and from the live
+     agreement's own panel, which is where somebody asking "what did they sign
+     in March" is actually looking. */
   const withdrawnContracts = contracts.filter((c) => c.status === "WITHDRAWN");
-  const workingContracts = contracts.filter((c) => c.status !== "WITHDRAWN");
+  const workingContracts = contracts.filter((c) => c.status !== "WITHDRAWN" && c.status !== "SUPERSEDED");
   const shownContracts =
     contractFilter === "ALL" ? contracts
     : contractFilter === "WITHDRAWN" ? withdrawnContracts
@@ -9426,6 +9434,10 @@ export default function AdminPage() {
                         {/* Only flagged when it isn't the standard agreement —
                             a badge on every row says nothing. */}
                         {c.termsVersion === "EGGS_DAIRY" ? <Badge tone="info">Eggs/dairy</Badge> : null}
+                        {/* The line stays the booth's one line — this says the
+                            terms on it have been amended, so nobody wonders
+                            where the version they remember went. */}
+                        {c.supersedesId ? <Badge tone="neutral">Amended</Badge> : null}
                       </div>
                       <span className="t-xs t-muted truncate">{c.vendor.businessName}</span>
                     </div>
@@ -9587,22 +9599,54 @@ export default function AdminPage() {
                             value: fmtDate(c.endDate),
                           }]
                         : []),
-                      /* The thread back through an amendment. Without it,
-                         "what did they agree to in March" is unanswerable
-                         from this screen. */
+                      /* EVERY EARLIER VERSION, newest first.
+
+                         The superseded copies are off the board on purpose, so
+                         this is the one place that answers "what did they sign
+                         in March" — and it has to answer it in full, not one
+                         hop back, because a vendor can be amended more than
+                         once. Each line is what they actually put their name
+                         to, so a dispute can be read rather than reconstructed. */
                       ...(c.supersedesId
                         ? [{
-                            label: "Amends",
+                            label: "Earlier versions",
                             value: (() => {
-                              const prev = contracts.find((x) => x.id === c.supersedesId);
-                              return prev
-                                ? `Booth ${prev.boothLabel} · ${money(prev.monthlyRentCents)}/mo${prev.vendorSignedAt ? `, signed ${fmtDate(prev.vendorSignedAt)}` : ""}`
-                                : "An earlier agreement";
+                              const chain: Contract[] = [];
+                              let cursor = c.supersedesId;
+                              for (let hops = 0; cursor && hops < 20; hops++) {
+                                const prev = contracts.find((x) => x.id === cursor);
+                                if (!prev) break;
+                                chain.push(prev);
+                                cursor = prev.supersedesId || "";
+                              }
+                              if (chain.length === 0) return "An earlier agreement, no longer on file.";
+                              return (
+                                <div className="stack g-1">
+                                  {chain.map((p) => (
+                                    <span key={p.id} className="t-sm">
+                                      Booth {p.boothLabel} · <span className="num">{money(p.monthlyRentCents)}</span>/mo
+                                      {p.termsVersion === "EGGS_DAIRY" ? " · eggs/dairy" : ""}
+                                      <span className="t-muted">
+                                        {p.vendorSignedAt ? ` — signed ${fmtDate(p.vendorSignedAt)}` : " — never signed"}
+                                        {p.endDate ? `, replaced ${fmtDate(p.endDate)}` : ""}
+                                      </span>
+                                    </span>
+                                  ))}
+                                </div>
+                              );
                             })(),
                           }]
                         : []),
                       ...(contracts.some((x) => x.supersedesId === c.id)
-                        ? [{ label: "Replaced by", value: "A later amended agreement" }]
+                        ? [{
+                            label: "Replaced by",
+                            value: (() => {
+                              const next = contracts.find((x) => x.supersedesId === c.id);
+                              return next
+                                ? `Booth ${next.boothLabel} · ${money(next.monthlyRentCents)}/mo${next.vendorSignedAt ? `, signed ${fmtDate(next.vendorSignedAt)}` : ", not signed yet"}`
+                                : "A later amended agreement";
+                            })(),
+                          }]
                         : []),
                       { label: "Vendor signed", value: c.vendorSignedAt ? fmtDate(c.vendorSignedAt) : "Not yet" },
                       { label: "Market signed", value: c.marketSignedAt ? fmtDate(c.marketSignedAt) : "Not yet" },
