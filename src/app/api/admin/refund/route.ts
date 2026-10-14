@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { drawerIdForRefund } from "@/lib/drawer";
+import { drawerIdForRefund, openDrawers, signedInEmployee } from "@/lib/drawer";
 import { currentEmployeeId, isAdmin } from "@/lib/auth";
-import { denyUnless } from "@/lib/perm";
+import { denyUnless, currentRole, can } from "@/lib/perm";
 import { recordAudit, checkApproval } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 // POST { saleId, action: "refund", lines: [{ lineId, quantity }], restock, approvalPin? } — partial/full refund with proportional tax
 export async function POST(req: NextRequest) {
   { const denied = await denyUnless("money"); if (denied) return denied; }
-  const { saleId, action, lines, restock, approvalPin } = await req.json();
+  const { saleId, action, lines, restock, approvalPin, drawerId } = await req.json();
   const sale = await db.sale.findUnique({ where: { id: saleId }, include: { lines: true } });
   if (!sale) return NextResponse.json({ error: "Sale not found." }, { status: 404 });
   if (sale.status === "VOIDED") return NextResponse.json({ error: "Already voided." }, { status: 400 });
@@ -20,9 +20,39 @@ export async function POST(req: NextRequest) {
   const empId = currentEmployeeId();
   if (empId) empName = (await db.employee.findUnique({ where: { id: empId } }))?.name || "";
   else if (isAdmin()) empName = "ADMIN";
-  /* Cash handed back comes out of the refunder's own drawer, so that till's
-     count expects it. Card refunds touch no drawer. */
-  const refundDrawerId = sale.paymentMethod === "CASH" ? await drawerIdForRefund() : "";
+  /* WHICH TILL THE CASH COMES OUT OF.
+     
+     By default the refunder's own, because that is where the notes physically
+     come from. But the office is often not standing at the till that needs to
+     give the money back — a cashier is mid-shift across the room, the
+     customer is at their counter, and the refund belongs against THEIR
+     drawer so their count still balances at close.
+     
+     So a drawer can be named. It has to be open, and charging money to
+     somebody else's till is a money decision, so it takes the money
+     capability. Card refunds touch no drawer either way. */
+  let refundDrawerId = "";
+  if (sale.paymentMethod === "CASH") {
+    const named = String(drawerId || "").trim();
+    if (named) {
+      const open = await openDrawers();
+      const target = open.find((d) => d.id === named);
+      if (!target) {
+        return NextResponse.json({ error: "That drawer isn't open, so cash can't come out of it." }, { status: 400 });
+      }
+      const me = await signedInEmployee();
+      const isMine = !!me && (target.employeeId === me.id || (!target.employeeId && target.employee === me.name));
+      if (!isMine) {
+        const role = await currentRole();
+        if (!role || !can(role, "money")) {
+          return NextResponse.json({ error: "Only an owner or manager can refund out of somebody else's drawer." }, { status: 403 });
+        }
+      }
+      refundDrawerId = target.id;
+    } else {
+      refundDrawerId = await drawerIdForRefund();
+    }
+  }
 
   if (action === "void") {
     /* Approval BEFORE anything moves. A void hands back the whole ticket, so

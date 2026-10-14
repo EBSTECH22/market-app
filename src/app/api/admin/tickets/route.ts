@@ -11,8 +11,17 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get("q") || "").trim().toLowerCase();
   const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
+  /* ONE DRAWER'S TICKETS.
+     
+     Counting somebody out, or being told a sale was rung wrong, both start
+     with "show me what went through that till". Every sale already carries
+     the drawer it was rung on; nothing was reading it back. The 30-day window
+     doesn't apply here — a drawer is one shift, and asking for it by id is
+     already as narrow as a query gets. */
+  const drawerId = (req.nextUrl.searchParams.get("drawerId") || "").trim();
+
   const sales = await db.sale.findMany({
-    where: { createdAt: { gte: cutoff } },
+    where: drawerId ? { drawerId } : { createdAt: { gte: cutoff } },
     include: { lines: { select: { vendorId: true } } },
     // (status included by default)
     orderBy: { createdAt: "desc" },
@@ -32,6 +41,7 @@ export async function GET(req: NextRequest) {
         isoDate: new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(s.createdAt),
         status: s.status, paymentMethod: s.paymentMethod, cardName: s.cardName, employee: s.employee,
         totalCents: s.totalCents, vendorCodes: codes, vendorNames: names,
+        drawerId: s.drawerId,
       };
     })
     .filter((r) => {

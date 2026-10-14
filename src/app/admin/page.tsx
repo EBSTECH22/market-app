@@ -1034,7 +1034,7 @@ type OpenDrawerRow = {
   openTotalCents?: number; cashSalesCents?: number; adjustTotalCents?: number;
   expectedCents?: number; adjustments?: DrawerAdjustment[];
 };
-type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[] };
+type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[]; drawerId?: string };
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
 type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[] };
@@ -1495,6 +1495,9 @@ export default function AdminPage() {
   // tickets
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [ticketQ, setTicketQ] = useState("");
+  /* When set, the ticket list is one drawer's shift instead of the last 30
+     days. Carries the name so the banner can say whose it is. */
+  const [ticketDrawer, setTicketDrawer] = useState<{ id: string; employee: string } | null>(null);
 
   // data
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -1668,8 +1671,10 @@ export default function AdminPage() {
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
-  const loadTickets = useCallback(async (q: string) => {
-    const res = await fetch(`/api/admin/tickets?q=${encodeURIComponent(q)}`);
+  const loadTickets = useCallback(async (q: string, drawerId = "") => {
+    const params = new URLSearchParams({ q });
+    if (drawerId) params.set("drawerId", drawerId);
+    const res = await fetch(`/api/admin/tickets?${params}`);
     if (res.ok) setTickets((await res.json()).tickets || []);
   }, []);
 
@@ -1796,7 +1801,7 @@ export default function AdminPage() {
       fetch("/api/admin/reviews").then(async (r) => { if (r.ok) setReviews((await r.json()).reviews || []); });
     }
   }, [authed, role, tab]);
-  useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ); }, [authed, tab, ticketQ, loadTickets]);
+  useEffect(() => { if (authed && tab === "register") loadTickets(ticketQ, ticketDrawer?.id || ""); }, [authed, tab, ticketQ, ticketDrawer, loadTickets]);
   useEffect(() => { if (authed && tab === "reports") loadReport(); }, [authed, tab, loadReport]);
   /* Customers used to hide behind a "load customers" button, so the tab read as
      empty until you found it. It loads on open now, like every other tab, which
@@ -2814,6 +2819,16 @@ export default function AdminPage() {
     setRefundRestock(true);
   };
 
+  /**
+   * The till a cash refund comes out of.
+   *
+   * While you're looking at one drawer's tickets, that drawer is the one
+   * giving the money back — the cashier is standing at it with the customer.
+   * Otherwise the server falls back to your own, which is where the notes
+   * come from when you're the one at the counter.
+   */
+  const refundDrawerId = () => ticketDrawer?.id || "";
+
   /** The manager-PIN prompt shown when the server asks for authorisation. */
   const askApprovalPin = async (reason: string): Promise<string | null> =>
     dialog.prompt({
@@ -2836,7 +2851,7 @@ export default function AdminPage() {
           the vendors&rsquo; credits reverse, and the ticket drops out of every report.</p>
           <p style={{ marginTop: 8, fontWeight: 580 }}>
             {t.paymentMethod === "CASH"
-              ? `Hand back ${money(t.totalCents)} in cash from the drawer.`
+              ? `Hand back ${money(t.totalCents)} in cash from ${ticketDrawer ? `${ticketDrawer.employee}'s drawer — it comes off their count` : "your drawer"}.`
               : "Reverse the charge on your card machine — this system only records it."}
           </p>
         </>
@@ -2849,7 +2864,7 @@ export default function AdminPage() {
     if (!yes) return;
     let { ok, data } = await safeFetch("/api/admin/refund", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ saleId: t.id, action: "void" }),
+      body: JSON.stringify({ saleId: t.id, action: "void", drawerId: refundDrawerId() }),
     });
     /* Over the threshold a manager has to authorise it. Asked for only when
        the server says so, so a manager or owner never types their own PIN into
@@ -2859,15 +2874,17 @@ export default function AdminPage() {
       if (pin === null) return;
       ({ ok, data } = await safeFetch("/api/admin/refund", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ saleId: t.id, action: "void", approvalPin: pin }),
+        body: JSON.stringify({ saleId: t.id, action: "void", approvalPin: pin, drawerId: refundDrawerId() }),
       }));
     }
     if (!ok) { toast.error("Void failed", String(data.error || "")); return; }
     toast.success(
       `Ticket #${t.number} voided`,
-      t.paymentMethod === "CASH" ? `Hand back ${money(t.totalCents)} cash.` : "Reverse it on the card machine."
+      t.paymentMethod === "CASH"
+        ? `Hand back ${money(t.totalCents)} cash from ${ticketDrawer ? `${ticketDrawer.employee}'s drawer` : "your drawer"}.`
+        : "Reverse it on the card machine."
     );
-    await loadTickets(ticketQ); await loadDrawer(); await loadAll();
+    await loadTickets(ticketQ, ticketDrawer?.id || ""); await loadDrawer(); await loadAll();
   };
 
   const submitRefund = async () => {
@@ -2877,14 +2894,14 @@ export default function AdminPage() {
     if (!lines.length) { setRefundMsg("Set a quantity on at least one item."); return; }
     let { ok, data } = await safeFetch("/api/admin/refund", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock }),
+      body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock, drawerId: refundDrawerId() }),
     });
     if (!ok && data.needsApproval) {
       const pin = await askApprovalPin(String(data.error || ""));
       if (pin === null) { setRefundMsg("Refund cancelled — no manager approval."); return; }
       ({ ok, data } = await safeFetch("/api/admin/refund", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock, approvalPin: pin }),
+        body: JSON.stringify({ saleId: refundTarget.ticket.id, action: "refund", lines, restock: refundRestock, approvalPin: pin, drawerId: refundDrawerId() }),
       }));
     }
     if (!ok) { setRefundMsg(String(data.error || "Refund failed.")); return; }
@@ -2895,10 +2912,10 @@ export default function AdminPage() {
     toast.success(
       `Refunded ${money(back)} on #${num}`,
       method === "CASH"
-        ? "Hand that back from the drawer."
+        ? `Hand that back from ${ticketDrawer ? `${ticketDrawer.employee}'s drawer — it's off their count` : "your drawer"}.`
         : "Reverse it on your card machine — this system only records it."
     );
-    await loadTickets(ticketQ); await loadDrawer(); await loadAll();
+    await loadTickets(ticketQ, ticketDrawer?.id || ""); await loadDrawer(); await loadAll();
   };
 
   const runPayroll = async () => {
@@ -3201,7 +3218,7 @@ export default function AdminPage() {
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
     setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });
     setCart([]); setCardName(""); setCashConfirm(false);
-    loadDrawer(); loadAll(); loadTickets(ticketQ);
+    loadDrawer(); loadAll(); loadTickets(ticketQ, ticketDrawer?.id || "");
     if (autoPrint) setTimeout(() => printSale((data.sale as { id: string }).id), 250);
   };
 
@@ -4499,6 +4516,17 @@ export default function AdminPage() {
                   </div>
                 ) : null}
 
+                <div className="row wrap g-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="receipt"
+                    onClick={() => { setTicketDrawer({ id: d.id, employee: d.employee }); setTicketQ(""); }}
+                  >
+                    See its transactions
+                  </Button>
+                </div>
+
                 {allowed("money") ? (
                   <div className="row wrap g-2">
                     <Button size="sm" variant="secondary" icon="cash" disabled={busy} onClick={() => void moveDrawerCash(d, false)}>
@@ -5215,6 +5243,17 @@ export default function AdminPage() {
               }
             >
               <div className="stack g-4">
+                {/* Whose till the notes come out of. Worth stating on the
+                    screen where the money actually moves, not only on the
+                    list behind it. */}
+                {refundTarget.ticket.paymentMethod === "CASH" ? (
+                  <Note tone={ticketDrawer ? "warn" : "neutral"}>
+                    {ticketDrawer
+                      ? <>Cash comes out of <b>{ticketDrawer.employee}&rsquo;s drawer</b> and off their count.</>
+                      : <>Cash comes out of <b>your drawer</b>. To take it from a cashier&rsquo;s till instead, open their drawer&rsquo;s transactions first.</>}
+                  </Note>
+                ) : null}
+
                 <DataTable
                   rows={refundTarget.lines}
                   rowKey={(l) => l.id}
@@ -5292,20 +5331,55 @@ export default function AdminPage() {
           )}
 
           <Card
-            title="Tickets"
-            subtitle="Every sale rung up in the last 30 days"
+            title={ticketDrawer ? `${ticketDrawer.employee}'s drawer — tickets` : "Tickets"}
+            subtitle={
+              ticketDrawer
+                ? "Everything rung on that drawer, oldest shift to newest. Refund or void from here."
+                : "Every sale rung up in the last 30 days"
+            }
             actions={
-              <Button
-                variant="ghost"
-                icon="print"
-                aria-pressed={autoPrint}
-                onClick={toggleAutoPrint}
-              >
-                Auto-print {autoPrint ? "on" : "off"}
-              </Button>
+              <>
+                {/* Your own till, without going looking for it. */}
+                {drawer && !ticketDrawer ? (
+                  <Button
+                    variant="ghost"
+                    icon="receipt"
+                    onClick={() => { setTicketDrawer({ id: drawer.id, employee: drawer.employee }); setTicketQ(""); }}
+                  >
+                    Just my drawer
+                  </Button>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  icon="print"
+                  aria-pressed={autoPrint}
+                  onClick={toggleAutoPrint}
+                >
+                  Auto-print {autoPrint ? "on" : "off"}
+                </Button>
+              </>
             }
           >
             <div className="stack g-4">
+              {/* Looking at one till rather than the whole market. Said out
+                  loud, with the way back, because a filtered list that doesn't
+                  announce itself is how somebody concludes a day's takings
+                  vanished. */}
+              {ticketDrawer ? (
+                <Note
+                  tone="info"
+                  title={`Showing only ${ticketDrawer.employee}'s drawer`}
+                  action={
+                    <Button size="sm" variant="secondary" icon="close" onClick={() => setTicketDrawer(null)}>
+                      Show all tickets
+                    </Button>
+                  }
+                >
+                  Every sale rung on this drawer, however long ago. <b>Cash refunds and voids come out of {ticketDrawer.employee}&rsquo;s
+                  drawer</b>, not yours, so their count still balances at close.
+                </Note>
+              ) : null}
+
               <Field
                 label="Search tickets"
                 hint="By receipt number, date, vendor, or the name on the card."
