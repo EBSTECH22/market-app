@@ -2815,21 +2815,26 @@ export default function VendorDashboard() {
                 icon="check"
                 loading={busy}
                 onClick={async () => {
+                  /* Blank numbers are left out entirely rather than sent
+                     as "". A number input reports an empty string whenever
+                     what's in it isn't a valid number, and sending that was
+                     zeroing the floor count. */
+                  const num = (v: string) => (String(v).trim() === "" ? undefined : v);
                   const ok = await patchItem(editing.id, {
                     name: editIF.name,
-                    priceDollars: editIF.price,
-                    quantity: editIF.qty,
-                    salePercent: editIF.sale,
+                    priceDollars: num(editIF.price),
+                    quantity: num(editIF.qty),
+                    salePercent: num(editIF.sale),
                     taxClass: editIF.food ? "FOOD" : "STANDARD",
                     category: editIF.category,
                     description: editIF.description,
                     unitLabel: editIF.unitLabel,
                     featured: editIF.featured,
                     onlineEnabled: editIF.onlineEnabled,
-                    onlineQuantity: editIF.onlineQuantity,
+                    onlineQuantity: num(editIF.onlineQuantity),
                     onlinePickup: editIF.onlinePickup,
                     onlineShip: editIF.onlineShip,
-                    shipDollars: editIF.shipDollars,
+                    shipDollars: num(editIF.shipDollars),
                   });
                   if (ok) { toast.success("Item saved", "Changed the name or price? Print fresh labels so the shelf matches the register."); setEditItem(null); }
                 }}
@@ -3072,6 +3077,9 @@ export default function VendorDashboard() {
                   inputMode="numeric"
                   value={editIF.qty}
                   onChange={(e) => setEditIF((f) => ({ ...f, qty: e.target.value }))}
+                  /* An empty box saves nothing, so show that rather than
+                     leaving a vendor looking at a gap and assuming zero. */
+                  onBlur={() => setEditIF((f) => (String(f.qty).trim() === "" ? { ...f, qty: String(editing?.quantity ?? 0) } : f))}
                 />
               )}
             </Field>

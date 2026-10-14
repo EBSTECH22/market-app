@@ -7853,6 +7853,18 @@ export default function AdminPage() {
                       >
                         {editV === v.id ? "Cancel editing" : "Edit details"}
                       </Button>
+                      {/* For the vendor who turns up with a box and no
+                          printer. Opens their labels with them already
+                          chosen. */}
+                      <LinkButton
+                        href={`/vendor/labels?vendor=${v.id}`}
+                        size="sm"
+                        variant="secondary"
+                        icon="print"
+                        external
+                      >
+                        Print labels
+                      </LinkButton>
                       {v.active ? (
                         <Button
                           size="sm"

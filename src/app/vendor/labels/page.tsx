@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import {
   Button, LinkButton, Field, Input, Checkbox, Segmented, Card, Note,
-  EmptyState, PageHeader, Skeleton,
+  EmptyState, PageHeader, Skeleton, Select,
 } from "@/components/ui";
 import { money, plural } from "@/lib/format";
 
@@ -65,6 +65,19 @@ export default function LabelsPage() {
   const [copies, setCopies] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [format, setFormat] = useState<FormatKey>("STANDARD");
+  /* STAFF PRINTING FOR A VENDOR.
+     
+     This page has always been a vendor printing their own labels, which stops
+     working the moment somebody turns up with a box of jam and no printer.
+     The office sees the same page with a vendor picker on top; everything
+     below it is identical, so there is one labels screen rather than two that
+     drift apart. */
+  const [staff, setStaff] = useState(false);
+  const [roster, setRoster] = useState<{ id: string; code: string; businessName: string; itemCount: number }[]>([]);
+  const [forVendor, setForVendor] = useState("");
+  /* Held in a ref so the one-shot loader can call it without listing it as a
+     dependency and re-running itself. */
+  const pickVendorRef = useRef<(id: string) => Promise<void>>(async () => {});
   /* PRINTER NUDGE.
      
      Published label geometry gets you close; the last millimetre is the
@@ -121,22 +134,72 @@ export default function LabelsPage() {
     document.head.appendChild(s);
   }, []);
 
+  /* Whatever came back, set the page up the same way. */
+  const takeVendorData = useCallback((data: {
+    vendor: { businessName: string };
+    items: (Item & { active?: boolean })[];
+    cardPercent?: number; feePercent?: number;
+  }) => {
+    const live = (data.items || []).filter((i) => i.active !== false);
+    setItems(live);
+    setBusiness(data.vendor.businessName);
+    setCardPercent(Number(data.cardPercent) || 0);
+    setFeePercent(Number(data.feePercent) || 0);
+    const c: Record<string, number> = {};
+    for (const it of live) c[it.id] = Math.max(1, it.quantity || 1);
+    setCopies(c);
+    setSelected({});
+  }, []);
+
   useEffect(() => {
-    fetch("/api/vendor/me").then(async (r) => {
-      if (!r.ok) { window.location.href = "/"; return; }
-      const data = await r.json();
-      setItems(data.items.filter((i: Item & { active: boolean }) => i.active));
-      setBusiness(data.vendor.businessName);
-      setCardPercent(Number(data.cardPercent) || 0);
-      setFeePercent(Number(data.feePercent) || 0);
-      const c: Record<string, number> = {};
-      for (const it of data.items) c[it.id] = Math.max(1, it.quantity || 1);
-      setCopies(c);
-      setSelected({});
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    /* Ask the office door first. A vendor gets turned away from it and falls
+       through to their own page exactly as before. */
+    (async () => {
+      try {
+        const asStaff = await fetch("/api/admin/labels");
+        if (asStaff.ok) {
+          const d = await asStaff.json();
+          setStaff(true);
+          setRoster(d.vendors || []);
+          /* ?vendor=<id> so the vendor list in admin can come straight here
+             with the right person already chosen. */
+          const wanted = new URLSearchParams(window.location.search).get("vendor") || "";
+          if (wanted) { await pickVendorRef.current(wanted); return; }
+          setLoading(false);
+          return;
+        }
+      } catch {
+        /* Not staff, or offline — try as a vendor. */
+      }
+      try {
+        const r = await fetch("/api/vendor/me");
+        if (!r.ok) { window.location.href = "/"; return; }
+        takeVendorData(await r.json());
+      } catch {
+        /* Leave the page empty rather than bouncing somebody out mid-print. */
+      } finally {
+        setLoading(false);
+      }
+    })();
     loadBarcodeScript();
-  }, [loadBarcodeScript]);
+  }, [loadBarcodeScript, takeVendorData]);
+
+  /* Switching vendor reloads the list and clears what was ticked — printing
+     one vendor's selection onto another's sheet is the one mistake here that
+     wastes a whole sheet of stickers. */
+  const pickVendor = useCallback(async (id: string) => {
+    setForVendor(id);
+    setItems([]); setSelected({}); setCopies({}); setBusiness("");
+    if (!id) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/admin/labels?vendorId=${encodeURIComponent(id)}`);
+      if (r.ok) takeVendorData(await r.json());
+    } finally {
+      setLoading(false);
+    }
+  }, [takeVendorData]);
+  pickVendorRef.current = pickVendor;
 
   const f = FORMATS[format];
   /* Measured values win over the built-in ones, field by field, so a sheet
@@ -312,11 +375,17 @@ export default function LabelsPage() {
 
       <div className="no-print">
         <PageHeader
-          title="Barcode labels"
-          subtitle="Tick the items you want labels for, set how many of each, then print. Only what's ticked prints."
+          title={staff && business ? `Barcode labels — ${business}` : "Barcode labels"}
+          subtitle={
+            staff
+              ? "Printing on a vendor's behalf. Pick whose items you're labelling, then tick what you need."
+              : "Tick the items you want labels for, set how many of each, then print. Only what's ticked prints."
+          }
           actions={
             <>
-              <LinkButton href="/vendor" variant="ghost" icon="arrowLeft">Back to the portal</LinkButton>
+              <LinkButton href={staff ? "/admin" : "/vendor"} variant="ghost" icon="arrowLeft">
+                {staff ? "Admin" : "Back to the portal"}
+              </LinkButton>
               <Button
                 variant="primary"
                 icon="print"
@@ -330,6 +399,33 @@ export default function LabelsPage() {
         />
 
         <div className="stack g-4">
+          {/* Who we're printing for. Only the office sees this; a vendor has
+              exactly one answer and shouldn't be asked. */}
+          {staff ? (
+            <Card title="Which vendor">
+              <div className="stack g-3">
+                <Field label="Vendor" hint="Everyone with items on the floor.">
+                  {(p) => (
+                    <Select {...p} value={forVendor} onChange={(e) => void pickVendor(e.target.value)}>
+                      <option value="">Choose a vendor…</option>
+                      {roster.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.code} — {v.businessName} ({plural(v.itemCount, "item")})
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+                {forVendor && business ? (
+                  <Note tone="info">
+                    These are <b>{business}</b>&rsquo;s labels. The prices are theirs, with the market fee and
+                    card percentage already on, exactly as the vendor&rsquo;s own page would print them.
+                  </Note>
+                ) : null}
+              </div>
+            </Card>
+          ) : null}
+
           {scriptFailed ? (
             <Note
               tone="error"
@@ -508,12 +604,24 @@ export default function LabelsPage() {
                 <Skeleton height={40} />
               </div>
             ) : items.length === 0 ? (
-              <EmptyState
-                icon="box"
-                title="No items to label yet"
-                body="Add your items on the dashboard first — each one gets its own barcode automatically."
-                action={<LinkButton href="/vendor" variant="primary" icon="plus">Add an item</LinkButton>}
-              />
+              staff ? (
+                <EmptyState
+                  icon="box"
+                  title={forVendor ? "That vendor has no items on the floor" : "Pick a vendor first"}
+                  body={
+                    forVendor
+                      ? "Nothing to label — they haven't entered any products yet, or everything they had has been retired."
+                      : "Choose whose labels you're printing at the top of the page."
+                  }
+                />
+              ) : (
+                <EmptyState
+                  icon="box"
+                  title="No items to label yet"
+                  body="Add your items on the dashboard first — each one gets its own barcode automatically."
+                  action={<LinkButton href="/vendor" variant="primary" icon="plus">Add an item</LinkButton>}
+                />
+              )
             ) : (
               <div className="stack g-3">
                 {items.map((it) => (

@@ -13,6 +13,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!item || item.vendorId !== vendorId) return NextResponse.json({ error: "Item not found." }, { status: 404 });
 
   const body = await req.json();
+
+  /* A BLANK BOX IS NOT A ZERO.
+     
+     `<input type="number">` hands back an EMPTY STRING whenever its contents
+     aren't a valid number — a stray comma, a space, a half-typed value. That
+     empty string arrived here, Number("") is 0, and a vendor correcting their
+     floor count watched the item silently go out of stock instead. No error,
+     because as far as this route was concerned they had asked for zero.
+     
+     Blank now means "didn't say", which is the only safe reading of it: a
+     vendor who means zero can type 0. */
+  const given = (v: unknown): boolean => v !== undefined && v !== null && String(v).trim() !== "";
+
   let restock = false;
   const data: {
     name?: string; priceCents?: number; quantity?: number; active?: boolean; salePercent?: number;
@@ -20,25 +33,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number;
   } = {};
   if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim();
-  if (body.priceDollars !== undefined) {
+  if (given(body.priceDollars)) {
     const price = Math.round(Number(body.priceDollars) * 100);
     if (!price || price <= 0) return NextResponse.json({ error: "Enter a valid price." }, { status: 400 });
     data.priceCents = price;
   }
-  if (body.addQuantity !== undefined) {
+  if (given(body.addQuantity)) {
     const n = Math.round(Number(body.addQuantity));
     if (Number.isNaN(n) || n <= 0 || n > 999) return NextResponse.json({ error: "Enter how many you're adding (1–999)." }, { status: 400 });
     const updated = await db.item.update({ where: { id: item.id }, data: { quantity: { increment: n } } });
     notifyVendorRestock(vendorId).catch(() => {});
     return NextResponse.json({ item: updated });
   }
-  if (body.quantity !== undefined) {
+  if (given(body.quantity)) {
     const q = Math.round(Number(body.quantity));
     if (Number.isNaN(q) || q < 0) return NextResponse.json({ error: "Invalid quantity." }, { status: 400 });
     data.quantity = q;
     if (q > item.quantity) restock = true;
   }
-  if (body.salePercent !== undefined) {
+  if (given(body.salePercent)) {
     const pct = Math.round(Number(body.salePercent));
     if (Number.isNaN(pct) || pct < 0 || pct > 90) return NextResponse.json({ error: "Sale must be 0–90%." }, { status: 400 });
     data.salePercent = pct;
@@ -53,7 +66,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
      directly rather than adjusted — a vendor deciding "four of these are for
      the website" is stating a total, not a delta. */
   if (typeof body.onlineEnabled === "boolean") data.onlineEnabled = body.onlineEnabled;
-  if (body.onlineQuantity !== undefined) {
+  if (given(body.onlineQuantity)) {
     const q = Math.round(Number(body.onlineQuantity));
     if (Number.isNaN(q) || q < 0 || q > 9999) {
       return NextResponse.json({ error: "Online quantity has to be 0 or more." }, { status: 400 });
