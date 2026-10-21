@@ -143,7 +143,11 @@ export async function POST(req: NextRequest) {
     let handover: { employee: string; carriedCents: number } | null = null;
 
     if (await getSingleRegister()) {
-      const others = (await openDrawers()).filter((d) => d.id !== existing?.id);
+      /* Every other open drawer. This person's own cannot be among them —
+         the guard above returned if they had one — so there is nothing to
+         filter out, and filtering on a variable TypeScript has already proved
+         falsy is what broke the build. */
+      const others = await openDrawers();
       for (const other of others) {
         const otherCash = await drawerCashCents(other);
         /* What is in the drawer right now, on the books. */
