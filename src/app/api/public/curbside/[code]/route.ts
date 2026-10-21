@@ -11,6 +11,7 @@ import { tagCents, cashCents } from "@/lib/cardprice";
 import { effectivePriceCents } from "@/lib/pricing";
 import { normalizeTaxClass } from "@/lib/tax";
 import { openState, minuteOfDay } from "@/lib/curbside";
+import { groupsByItem } from "@/lib/optiongroups";
 import { TZ } from "@/lib/time";
 import { pushToVendor } from "@/lib/push";
 
@@ -53,14 +54,11 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
     const items = await db.item.findMany({
       where: { vendorId: v.id, active: true },
       orderBy: [{ featured: "desc" }, { name: "asc" }],
-      include: {
-        optionGroups: {
-          where: { active: true },
-          include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
-          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-        },
-      },
     });
+
+    /* The vendor's menu-wide questions come back on every item, so a stand
+       types its flavour list once instead of once per drink. */
+    const optionsByItem = await groupsByItem(items.map((i) => ({ id: i.id, vendorId: v.id })));
 
     const cardPercent = await getCardAdjustPercent();
     const fee = marketFeeFor(v, await getMarketFeePercent());
@@ -80,11 +78,10 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
         taxClass: normalizeTaxClass(i.taxClass),
         /* Sold out takes the whole drink off; a single syrup running out is
            handled per option below. */
-        soldOut: i.optionGroups.length === 0 ? false : i.optionGroups.every((g) => g.required && g.options.every((o) => o.soldOut)),
-        optionGroups: i.optionGroups.map((g) => ({
-          id: g.id, name: g.name, required: g.required, minChoices: g.minChoices, maxChoices: g.maxChoices,
-          options: g.options.map((o) => ({ id: o.id, name: o.name, priceDeltaCents: o.priceDeltaCents, soldOut: o.soldOut })),
-        })),
+        /* Sold out only when a question it MUST answer has no answer left —
+           every flavour gone means no drink, one flavour gone does not. */
+        soldOut: (optionsByItem.get(i.id) || []).some((g) => g.required && g.options.every((o) => o.soldOut)),
+        optionGroups: optionsByItem.get(i.id) || [],
       })),
     });
   });

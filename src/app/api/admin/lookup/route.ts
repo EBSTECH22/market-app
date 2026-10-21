@@ -5,7 +5,8 @@ import { cashCents } from "@/lib/cardprice";
 import { getMarketFeePercent } from "@/lib/settings";
 import { marketFeeFor } from "@/lib/marketfee";
 import { denyUnless } from "@/lib/perm";
-import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
+import { validateSelection, resolveSelection, unitVendorCents, type Selection } from "@/lib/itemoptions";
+import { groupsForItem } from "@/lib/optiongroups";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest) {
     include: {
       vendor: { select: { businessName: true, code: true, active: true, marketFeePercent: true } },
       /* So the till can ask the questions before the line goes on the ticket. */
-      optionGroups: { where: { active: true }, include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+      
     },
   });
   if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
@@ -29,7 +30,10 @@ export async function GET(req: NextRequest) {
   /* The customer's cash price: vendor's price + the market service fee. */
   const fee = marketFeeFor(item.vendor, await getMarketFeePercent());
   const unit = cashCents(effectivePriceCents(item), fee);
-  return NextResponse.json({ item: { ...item, priceCents: unit, taxClass: String(item.taxClass || "STANDARD"), basePriceCents: cashCents(item.priceCents, fee), salePercent: item.salePercent } });
+  /* Its own questions AND the vendor's menu-wide ones — the till has to ask
+     everything the ordering page would. */
+  const optionGroups = await groupsForItem(item);
+  return NextResponse.json({ item: { ...item, optionGroups, priceCents: unit, taxClass: String(item.taxClass || "STANDARD"), basePriceCents: cashCents(item.priceCents, fee), salePercent: item.salePercent } });
 }
 
 /**
@@ -53,12 +57,12 @@ export async function POST(req: NextRequest) {
     where: { sku },
     include: {
       vendor: { select: { businessName: true, active: true, marketFeePercent: true } },
-      optionGroups: { where: { active: true }, include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+      
     },
   });
   if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
 
-  const groups = item.optionGroups as unknown as OptionGroup[];
+  const groups = await groupsForItem(item);
   const picked = (body.options || {}) as Selection;
   const problem = groups.length ? validateSelection(groups, picked) : null;
   if (problem) return NextResponse.json({ error: problem }, { status: 400 });

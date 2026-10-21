@@ -10,8 +10,9 @@ import { printForSale } from "@/lib/receiptjob";
 import { afterResponse } from "@/lib/after";
 import { cardUpliftCents, tagCents, cashCents, lineShares } from "@/lib/cardprice";
 import { marketFeeFor } from "@/lib/marketfee";
-import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
+import { validateSelection, resolveSelection, unitVendorCents, type Selection } from "@/lib/itemoptions";
 import { perUnitDiscounts, offersDiscount, type VendorDiscount } from "@/lib/vendordiscount";
+import { groupsByItem } from "@/lib/optiongroups";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -153,12 +154,15 @@ export async function POST(req: NextRequest) {
     where: { id: { in: effLines.map((l) => l.itemId) } },
     include: {
       vendor: true,
-      /* The menus come with the items so the SERVER prices the choices. The
-         till sends which options were tapped, never what they cost — the same
-         rule that already stops it sending its own prices. */
-      optionGroups: { include: { options: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+
     },
   });
+
+  /* The menus, so the SERVER prices the choices. The till sends which options
+     were tapped, never what they cost — the same rule that already stops it
+     sending its own prices. Includes the vendor's menu-wide questions, not
+     just the ones hanging off this item. */
+  const optionsByItem = await groupsByItem(items.map((i) => ({ id: i.id, vendorId: i.vendorId })));
 
   /* Every setting this sale needs, in one query rather than fifteen. */
   const cfg = await getTillSettings();
@@ -233,7 +237,7 @@ export async function POST(req: NextRequest) {
        percentage go on top of it afterwards, exactly as they do for a jar of
        jam. Validated as well as priced: a required question left unanswered
        has to stop the sale, or the vendor hands over a drink nobody specified. */
-    const groups = item.optionGroups as unknown as OptionGroup[];
+    const groups = optionsByItem.get(item.id) || [];
     const picked = (l.options || {}) as Selection;
     if (groups.length) {
       const problem = validateSelection(groups, picked);

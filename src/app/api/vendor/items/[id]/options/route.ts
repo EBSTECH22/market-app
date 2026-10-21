@@ -30,17 +30,25 @@ async function ownedItem(itemId: string) {
   return { item };
 }
 
-const groupsOf = (itemId: string) =>
+/**
+ * This item's questions, and the vendor's.
+ *
+ * Both lists come back together, because that is how the item behaves when
+ * somebody orders it — and a vendor editing a drink should be looking at the
+ * same questions a customer will be asked, not just the ones that happen to
+ * hang off this row.
+ */
+const groupsOf = async (itemId: string, vendorId: string) =>
   db.itemOptionGroup.findMany({
-    where: { itemId },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    where: { OR: [{ itemId }, { vendorId }] },
+    orderBy: [{ vendorId: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
     include: { options: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
   });
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const owned = await ownedItem(params.id);
   if (owned.error) return owned.error;
-  return NextResponse.json({ groups: await groupsOf(params.id) });
+  return NextResponse.json({ groups: await groupsOf(params.id, owned.item!.vendorId) });
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -52,7 +60,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!name) return NextResponse.json({ error: "Give it a name." }, { status: 400 });
 
   if (body.kind === "group") {
-    const count = await db.itemOptionGroup.count({ where: { itemId: params.id } });
+    /* THE WHOLE MENU, OR JUST THIS ITEM.
+    
+       A drinks stand's flavours belong to the menu: typing them out once per
+       drink is work nobody does twice, and the day a syrup runs out they would
+       have to remember every item it was listed on. */
+    const everything = body.appliesToAll === true;
+    const count = await db.itemOptionGroup.count({
+      where: everything ? { vendorId: owned.item!.vendorId } : { itemId: params.id },
+    });
     if (count >= 8) {
       return NextResponse.json({ error: "Eight questions per item is plenty — a longer menu than that stops people ordering." }, { status: 400 });
     }
@@ -65,15 +81,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const maxChoices = Math.max(minChoices, Math.round(Number(body.maxChoices) || 1));
 
     const group = await db.itemOptionGroup.create({
-      data: { itemId: params.id, name, required, minChoices, maxChoices, sortOrder: count },
+      data: {
+        /* One or the other, never both — a group that belonged to an item AND
+           a vendor would be asked twice on that item. */
+        ...(everything ? { vendorId: owned.item!.vendorId } : { itemId: params.id }),
+        name, required, minChoices, maxChoices, sortOrder: count,
+      },
     });
-    return NextResponse.json({ group, groups: await groupsOf(params.id) });
+    return NextResponse.json({ group, groups: await groupsOf(params.id, owned.item!.vendorId) });
   }
 
   if (body.kind === "option") {
     const groupId = String(body.groupId || "");
-    const group = await db.itemOptionGroup.findUnique({ where: { id: groupId }, select: { id: true, itemId: true } });
-    if (!group || group.itemId !== params.id) return NextResponse.json({ error: "That question isn't on this item." }, { status: 404 });
+    const group = await db.itemOptionGroup.findUnique({ where: { id: groupId }, select: { id: true, itemId: true, vendorId: true } });
+    if (!group || (group.itemId !== params.id && group.vendorId !== owned.item!.vendorId)) {
+      return NextResponse.json({ error: "That question isn't on this item." }, { status: 404 });
+    }
 
     const count = await db.itemOption.count({ where: { groupId } });
     if (count >= 25) return NextResponse.json({ error: "Twenty-five choices in one question is the most." }, { status: 400 });
@@ -86,7 +109,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const option = await db.itemOption.create({
       data: { groupId, name, priceDeltaCents: delta, sortOrder: count },
     });
-    return NextResponse.json({ option, groups: await groupsOf(params.id) });
+    return NextResponse.json({ option, groups: await groupsOf(params.id, owned.item!.vendorId) });
   }
 
   return NextResponse.json({ error: "Unknown kind." }, { status: 400 });
@@ -100,8 +123,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const id = String(body.id || "");
 
   if (body.kind === "group") {
-    const group = await db.itemOptionGroup.findUnique({ where: { id }, select: { id: true, itemId: true, required: true, minChoices: true, maxChoices: true } });
-    if (!group || group.itemId !== params.id) return NextResponse.json({ error: "That question isn't on this item." }, { status: 404 });
+    const group = await db.itemOptionGroup.findUnique({ where: { id }, select: { id: true, itemId: true, vendorId: true, required: true, minChoices: true, maxChoices: true } });
+    if (!group || (group.itemId !== params.id && group.vendorId !== owned.item!.vendorId)) {
+      return NextResponse.json({ error: "That question isn't on this item." }, { status: 404 });
+    }
 
     const data: { name?: string; required?: boolean; minChoices?: number; maxChoices?: number; sortOrder?: number; active?: boolean } = {};
     if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim().slice(0, 40);
@@ -121,12 +146,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     data.maxChoices = Math.max(data.minChoices, max);
 
     await db.itemOptionGroup.update({ where: { id }, data });
-    return NextResponse.json({ groups: await groupsOf(params.id) });
+    return NextResponse.json({ groups: await groupsOf(params.id, owned.item!.vendorId) });
   }
 
   if (body.kind === "option") {
-    const option = await db.itemOption.findUnique({ where: { id }, select: { id: true, group: { select: { itemId: true } } } });
-    if (!option || option.group.itemId !== params.id) return NextResponse.json({ error: "That choice isn't on this item." }, { status: 404 });
+    const option = await db.itemOption.findUnique({ where: { id }, select: { id: true, group: { select: { itemId: true, vendorId: true } } } });
+    if (!option || (option.group.itemId !== params.id && option.group.vendorId !== owned.item!.vendorId)) {
+      return NextResponse.json({ error: "That choice isn't on this item." }, { status: 404 });
+    }
 
     const data: { name?: string; priceDeltaCents?: number; soldOut?: boolean; sortOrder?: number; active?: boolean } = {};
     if (typeof body.name === "string" && body.name.trim()) data.name = body.name.trim().slice(0, 40);
@@ -143,7 +170,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     if (!Object.keys(data).length) return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
     await db.itemOption.update({ where: { id }, data });
-    return NextResponse.json({ groups: await groupsOf(params.id) });
+    return NextResponse.json({ groups: await groupsOf(params.id, owned.item!.vendorId) });
   }
 
   return NextResponse.json({ error: "Unknown kind." }, { status: 400 });
@@ -157,17 +184,21 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const id = String(body.id || "");
 
   if (body.kind === "group") {
-    const group = await db.itemOptionGroup.findUnique({ where: { id }, select: { id: true, itemId: true } });
-    if (!group || group.itemId !== params.id) return NextResponse.json({ error: "That question isn't on this item." }, { status: 404 });
+    const group = await db.itemOptionGroup.findUnique({ where: { id }, select: { id: true, itemId: true, vendorId: true } });
+    if (!group || (group.itemId !== params.id && group.vendorId !== owned.item!.vendorId)) {
+      return NextResponse.json({ error: "That question isn't on this item." }, { status: 404 });
+    }
     await db.itemOptionGroup.update({ where: { id }, data: { active: false } });
-    return NextResponse.json({ groups: await groupsOf(params.id) });
+    return NextResponse.json({ groups: await groupsOf(params.id, owned.item!.vendorId) });
   }
 
   if (body.kind === "option") {
-    const option = await db.itemOption.findUnique({ where: { id }, select: { id: true, group: { select: { itemId: true } } } });
-    if (!option || option.group.itemId !== params.id) return NextResponse.json({ error: "That choice isn't on this item." }, { status: 404 });
+    const option = await db.itemOption.findUnique({ where: { id }, select: { id: true, group: { select: { itemId: true, vendorId: true } } } });
+    if (!option || (option.group.itemId !== params.id && option.group.vendorId !== owned.item!.vendorId)) {
+      return NextResponse.json({ error: "That choice isn't on this item." }, { status: 404 });
+    }
     await db.itemOption.update({ where: { id }, data: { active: false } });
-    return NextResponse.json({ groups: await groupsOf(params.id) });
+    return NextResponse.json({ groups: await groupsOf(params.id, owned.item!.vendorId) });
   }
 
   return NextResponse.json({ error: "Unknown kind." }, { status: 400 });

@@ -4,7 +4,8 @@ import { marketFeeFor } from "@/lib/marketfee";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
-import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
+import { validateSelection, resolveSelection, unitVendorCents, type Selection } from "@/lib/itemoptions";
+import { groupsByItem } from "@/lib/optiongroups";
 
 /**
  * Online orders.
@@ -108,14 +109,10 @@ export async function priceCart(
       active: true,
       ...(curbside ? {} : { onlineEnabled: true }),
     },
-    include: {
-      optionGroups: {
-        where: { active: true },
-        include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
-        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      },
-    },
   });
+
+  /* Each item's own questions plus the vendor's menu-wide ones. */
+  const optionsByItem = await groupsByItem(items.map((i) => ({ id: i.id, vendorId: i.vendorId })));
 
   const lines: PricedLine[] = [];
   /* Online is always card, so the customer pays the TAG price (vendor's price
@@ -147,7 +144,7 @@ export async function priceCart(
 
     /* The choices move the vendor's price; the fee and the card percentage go
        on top afterwards, exactly as at the till. */
-    const groups = item.optionGroups as unknown as OptionGroup[];
+    const groups = optionsByItem.get(item.id) || [];
     const picked = (w.options || {}) as Selection;
     if (groups.length) {
       const problem = validateSelection(groups, picked);

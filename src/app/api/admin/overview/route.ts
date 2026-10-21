@@ -12,12 +12,22 @@ export const dynamic = "force-dynamic";
 /* Floor prices are the customer's CASH price: the vendor's price plus the
    market service fee (lib/cardprice). The till adds the card percentage on
    top for the tag. vendorPriceCents is what the vendor set. */
+/** Which vendors ask something across their whole menu. One query. */
+async function vendorsWithSharedOptions(): Promise<Set<string>> {
+  const rows = await db.itemOptionGroup.findMany({
+    where: { active: true, vendorId: { not: null }, options: { some: { active: true } } },
+    select: { vendorId: true },
+  });
+  return new Set(rows.map((r) => r.vendorId).filter((v): v is string => !!v));
+}
+
 function floorRow(i: {
   id: string; sku: string; name: string; priceCents: number; salePercent: number; quantity: number; taxClass: string;
   vendor: {
     businessName: string; code: string; lowStockThreshold: number; marketFeePercent?: number | null;
     discountEnabled?: boolean; discountLabel?: string;
   };
+  hasSharedOptions?: boolean;
   optionGroups?: { id: string }[];
 }, marketRate: number) {
   /* The vendor's own rate where they have one. The register reads this list,
@@ -33,7 +43,10 @@ function floorRow(i: {
     lowStockAt: i.vendor.lowStockThreshold,
     /* Just whether there are questions, not what they are. The till fetches
        the menu only for the item somebody actually tapped. */
-    hasOptions: (i.optionGroups?.length || 0) > 0,
+    /* Its own questions, or any its vendor asks across the whole menu. The
+       till uses this to decide whether tapping the item should ask anything,
+       and missing the shared ones would put a plain lemonade on the ticket. */
+    hasOptions: (i.optionGroups?.length || 0) > 0 || !!i.hasSharedOptions,
     /* So the till knows whether to offer the vendor's discount button for
        this line, and what to call it. */
     discountLabel: i.vendor.discountEnabled ? (i.vendor.discountLabel || "Discount") : "",
@@ -57,7 +70,8 @@ export async function GET(req: NextRequest) {
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     });
     const marketRate = await getMarketFeePercent();
-    return NextResponse.json({ floor: floor.map((i) => floorRow(i, marketRate)) });
+    const shared = await vendorsWithSharedOptions();
+    return NextResponse.json({ floor: floor.map((i) => floorRow({ ...i, hasSharedOptions: shared.has(i.vendorId) }, marketRate)) });
   }
   /* Takings are financials, not ops: a cashier and a manager both need the
      floor list, and neither needs to see what the market made today. */
@@ -83,6 +97,7 @@ export async function GET(req: NextRequest) {
   ]);
 
   const marketRate = await getMarketFeePercent();
+  const sharedOptionVendors = await vendorsWithSharedOptions();
   const sum = (arr: { totalCents: number }[]) => arr.reduce((n, s) => n + s.totalCents, 0);
   const tax = (arr: { taxCents: number }[]) => arr.reduce((n, s) => n + s.taxCents, 0);
   const refundBack = (arr: { amountCents: number; taxCents: number }[]) => arr.reduce((n, r) => n + r.amountCents + r.taxCents, 0);
@@ -92,6 +107,6 @@ export async function GET(req: NextRequest) {
     today: { count: todaySales.length, totalCents: sum(todaySales) - refundBack(todayRefunds), taxCents: tax(todaySales) - refundTax(todayRefunds) },
     month: admin ? { count: monthSales.length, totalCents: sum(monthSales) - refundBack(monthRefunds), taxCents: tax(monthSales) - refundTax(monthRefunds) } : { count: 0, totalCents: 0, taxCents: 0 },
     vendors,
-    floor: floor.map((i) => floorRow(i, marketRate)),
+    floor: floor.map((i) => floorRow({ ...i, hasSharedOptions: sharedOptionVendors.has(i.vendorId) }, marketRate)),
   });
 }

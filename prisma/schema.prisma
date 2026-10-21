@@ -65,6 +65,7 @@ model Vendor {
   /// "Back in fifteen minutes." A one-person stand needs to be able to stop
   /// the queue without closing for the day.
   curbsidePausedUntil DateTime?
+  optionGroups    ItemOptionGroup[]
   /// ---- the vendor's own discount ----------------------------------------
   /// Military, first responder, teacher, whatever this vendor wants to
   /// honour. THEIRS, in every sense: they switch it on, they set it, and the
@@ -187,8 +188,18 @@ model Item {
 /// hundred items on the floor that are simply a jar of jam.
 model ItemOptionGroup {
   id        String @id @default(cuid())
-  itemId    String
-  item      Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// SET for a question this one item asks. NULL for one the whole menu asks.
+  ///
+  /// A drinks stand sells eight things and every one of them comes in the same
+  /// flavours. Asking the vendor to type that list out eight times, and to
+  /// remember all eight the day they drop a syrup, is how the menu goes stale.
+  /// So a group belongs either to one item or to the vendor — and an item's
+  /// questions are its own plus the vendor's.
+  itemId    String?
+  item      Item?  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// Set when this group belongs to the whole menu rather than one item.
+  vendorId  String?
+  vendor    Vendor? @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   name      String
   /// A group that must be answered before the line can be added. "Size" on a
   /// drink is required; "Extras" is not.
@@ -203,6 +214,7 @@ model ItemOptionGroup {
   options   ItemOption[]
 
   @@index([itemId])
+  @@index([vendorId])
 }
 
 /// One answer, and what it does to the price.

@@ -4,7 +4,8 @@ import { marketFeeFor } from "@/lib/marketfee";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { cardUpliftCents, cashCents, lineShares } from "@/lib/cardprice";
-import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
+import { validateSelection, resolveSelection, unitVendorCents, type Selection } from "@/lib/itemoptions";
+import { groupsByItem } from "@/lib/optiongroups";
 
 /**
  * What a ticket costs, worked out once and written down.
@@ -73,10 +74,11 @@ export async function priceTicket(
     where: { id: { in: lines.map((l) => l.itemId) } },
     include: {
       vendor: true,
-      optionGroups: { include: { options: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+
     },
   });
 
+  const optionsByItem = await groupsByItem(items.map((i) => ({ id: i.id, vendorId: i.vendorId })));
   const rates = await getTaxRates();
   const priced: PricedLine[] = [];
   let subtotalCents = 0;
@@ -94,7 +96,7 @@ export async function priceTicket(
     /* Choices move the VENDOR'S price; the fee goes on top afterwards. Same
        arithmetic, same order, as api/admin/sale — the two have to agree to the
        cent or a card slip and a cash ticket for the same drink differ. */
-    const groups = item.optionGroups as unknown as OptionGroup[];
+    const groups = optionsByItem.get(item.id) || [];
     const picked = (l.options || {}) as Selection;
     if (groups.length) {
       const problem = validateSelection(groups, picked);

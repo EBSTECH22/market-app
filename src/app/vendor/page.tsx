@@ -106,7 +106,7 @@ type CurbScreen = {
 };
 
 type OptChoice = { id: string; name: string; priceDeltaCents: number; soldOut: boolean; active: boolean; sortOrder: number };
-type OptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; active: boolean; sortOrder: number; options: OptChoice[] };
+type OptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; active: boolean; sortOrder: number; itemId: string | null; vendorId: string | null; options: OptChoice[] };
 
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
@@ -325,6 +325,9 @@ export default function VendorDashboard() {
   const [optBusy, setOptBusy] = useState(false);
   const [optErr, setOptErr] = useState("");
   const [newGroup, setNewGroup] = useState("");
+  /* Default ON. A stand adding "Flavour" almost always means every drink —
+     the per-item question is the rare one. */
+  const [newGroupAll, setNewGroupAll] = useState(true);
   const [newOpt, setNewOpt] = useState<Record<string, { name: string; delta: string }>>({});
 
   /* The whole sheet of floor counts, open for editing. Keyed by item id and
@@ -3724,6 +3727,8 @@ export default function VendorDashboard() {
                   <div className="row wrap g-2" style={{ alignItems: "center", justifyContent: "space-between" }}>
                     <div className="row g-2" style={{ alignItems: "center", minWidth: 0 }}>
                       <b className="truncate">{g.name}</b>
+                      {/* Where it lives, so removing one is never a surprise. */}
+                      {g.vendorId ? <Badge tone="info">On every item</Badge> : <Badge tone="neutral">This item only</Badge>}
                       <Badge tone={g.required ? "warn" : "neutral"}>{g.required ? "Must choose" : "Optional"}</Badge>
                       {g.maxChoices > 1 ? <Badge tone="neutral">Up to {g.maxChoices}</Badge> : null}
                     </div>
@@ -3743,7 +3748,9 @@ export default function VendorDashboard() {
                         onClick={async () => {
                           const yes = await dialog.confirm({
                             title: `Remove "${g.name}"?`,
-                            body: "Customers stop being asked this. Orders already placed keep the words they were placed with.",
+                            body: g.vendorId
+                              ? `This question is on every item you sell, so removing it takes it off all of them. Orders already placed keep the words they were placed with.`
+                              : "Customers stop being asked this. Orders already placed keep the words they were placed with.",
                             confirmLabel: "Remove it",
                             tone: "warn",
                           });
@@ -3833,27 +3840,37 @@ export default function VendorDashboard() {
                 </div>
               ))}
 
-              <div className="row wrap g-2">
-                <Input
-                  placeholder="Add a question, e.g. Size"
-                  aria-label="New question for this item"
-                  style={{ flex: "1 1 200px", minWidth: 0 }}
-                  disabled={optBusy}
-                  value={newGroup}
-                  onChange={(e) => setNewGroup(e.target.value)}
+              <div className="stack g-2">
+                <div className="row wrap g-2">
+                  <Input
+                    placeholder="Add a question, e.g. Flavor"
+                    aria-label="New question"
+                    style={{ flex: "1 1 200px", minWidth: 0 }}
+                    disabled={optBusy}
+                    value={newGroup}
+                    onChange={(e) => setNewGroup(e.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="plus"
+                    disabled={optBusy || !newGroup.trim()}
+                    onClick={async () => {
+                      const ok = await optCall(editing.id, "POST", {
+                        kind: "group", name: newGroup, required: true, appliesToAll: newGroupAll,
+                      });
+                      if (ok) setNewGroup("");
+                    }}
+                  >
+                    Add question
+                  </Button>
+                </div>
+                <Checkbox
+                  checked={newGroupAll}
+                  onCheckedChange={setNewGroupAll}
+                  label="Ask this on every item I sell"
+                  hint="Flavors and extras usually belong to the whole menu — add them once here and every item gets them. Untick for something only this item needs."
                 />
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon="plus"
-                  disabled={optBusy || !newGroup.trim()}
-                  onClick={async () => {
-                    const ok = await optCall(editing.id, "POST", { kind: "group", name: newGroup, required: true });
-                    if (ok) setNewGroup("");
-                  }}
-                >
-                  Add question
-                </Button>
               </div>
             </div>
 
