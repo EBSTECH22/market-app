@@ -111,7 +111,7 @@ type OptGroup = { id: string; name: string; required: boolean; minChoices: numbe
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; discountEnabled?: boolean; discountLabel?: string; discountMode?: string; discountPercent?: number; discountCents?: number; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; curbsideEnabled?: boolean; discountEnabled?: boolean; discountLabel?: string; discountMode?: string; discountPercent?: number; discountCents?: number; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
   /** Set when the market let go of the hold on their space over an unpaid invoice. */
   hold?: { boothLabel: string; releasedAt: string; blocked: boolean; reason?: string } | null;
@@ -1507,6 +1507,11 @@ export default function VendorDashboard() {
             <a className="nav-item" href="/vendor/labels">
               <Icon name="tag" size={16} /><span className="truncate">Barcode labels</span>
             </a>
+            {me.vendor.curbsideEnabled ? (
+              <a className="nav-item" href="/vendor/curbside-qr">
+                <Icon name="print" size={16} /><span className="truncate">Curbside QR sign</span>
+              </a>
+            ) : null}
             <a className="nav-item" href="/vendor/qr">
               <Icon name="print" size={16} /><span className="truncate">Table QR card</span>
             </a>
@@ -1872,6 +1877,9 @@ export default function VendorDashboard() {
                       {/* A one-person stand has to be able to stop the queue
                           without closing for the day. */}
                       <div className="row wrap g-2">
+                        <LinkButton href="/vendor/curbside-qr" variant="secondary" icon="print">
+                          My curbside QR sign
+                        </LinkButton>
                         {curb.pausedUntil ? (
                           <Button variant="primary" icon="check" disabled={curbBusy} onClick={() => void curbPatch({ pauseMinutes: 0 })}>
                             Start taking orders again
@@ -3227,6 +3235,11 @@ export default function VendorDashboard() {
           <a className="nav-item" style={{ minHeight: 46 }} href="/vendor/labels">
             <Icon name="tag" size={17} /><span>Barcode labels</span>
           </a>
+          {me.vendor.curbsideEnabled ? (
+            <a className="nav-item" style={{ minHeight: 46 }} href="/vendor/curbside-qr">
+              <Icon name="print" size={17} /><span>Curbside QR sign</span>
+            </a>
+          ) : null}
           <a className="nav-item" style={{ minHeight: 46 }} href="/vendor/qr">
             <Icon name="print" size={17} /><span>Table QR card</span>
           </a>
