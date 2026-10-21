@@ -4498,7 +4498,15 @@ export default function AdminPage() {
   /* A cashier deep-linking to #settings shouldn't land on a blank screen. */
   const tabReachable = (visibleTabs as readonly string[]).includes(tab);
 
-  const go = (t: AdminTab) => { setTab(t); setReceipt(null); setMoreOpen(false); };
+  const go = (t: AdminTab) => {
+    setTab(t);
+    setReceipt(null);
+    setMoreOpen(false);
+    /* The content region is the scroller on a phone; the window is on a
+       desktop. Scroll whichever one is listening. */
+    window.scrollTo({ top: 0 });
+    document.querySelector(".shell-main")?.scrollTo({ top: 0 });
+  };
 
   /* Counts that need the operator's attention, shown on the nav itself so
      pending work is visible without opening every tab. */

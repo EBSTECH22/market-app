@@ -1375,7 +1375,16 @@ export default function VendorDashboard() {
   const editing = activeItems.find((it) => it.id === editItem) || null;
   const navBadge: Partial<Record<VendorTab, number>> = { inbox: needsReply, messages: msgUnread };
 
-  const go = (t: VendorTab) => { setTab(t); setMoreOpen(false); window.scrollTo({ top: 0 }); };
+  /* Back to the top on a tab change. On a phone the PAGE no longer scrolls —
+     the content region does — so scrolling the window alone would do nothing
+     and leave somebody halfway down the previous screen. Both, because which
+     one is the scroller depends on the width. */
+  const go = (t: VendorTab) => {
+    setTab(t);
+    setMoreOpen(false);
+    window.scrollTo({ top: 0 });
+    document.querySelector(".shell-main")?.scrollTo({ top: 0 });
+  };
 
   const itemColumns: Column<Item>[] = [
     {

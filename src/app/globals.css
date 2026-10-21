@@ -1274,29 +1274,66 @@ body.scroll-locked { overflow: hidden; }
 @media (max-width: 900px) {
   .sidebar { display: none; }
   .shell-main { margin-left: 0; }
-  .content { padding: var(--sp-4) var(--sp-4) calc(84px + env(safe-area-inset-bottom)); }
   .topbar { padding-left: var(--sp-4); padding-right: var(--sp-4); }
 
+  /* ------------------------------------------------- THE BOTTOM BAR -------
+     THE PAGE DOES NOT SCROLL ON A PHONE. The content does.
+
+     The bar used to be `position: fixed`, which is the obvious way to pin
+     something to the bottom of a screen and the wrong one on a phone. A fixed
+     element is positioned against the LAYOUT viewport, while what you are
+     looking at is the VISUAL viewport — and those two come apart every time
+     the address bar slides away, which is continuously, while you scroll. The
+     bar drifts up and down a few pixels behind your thumb, and no amount of
+     svh units or compositor hints fixes it, because nothing is broken: that
+     is what fixed positioning means. The `transform`/`will-change` pair below
+     was an attempt to fix the symptom and made it worse, by promoting the bar
+     into a layer that the browser then repositioned a frame late.
+
+     So the shell is exactly one screen tall and does not scroll. The content
+     region inside it scrolls instead, and the bar is an ordinary flex child
+     sitting underneath it. It cannot drift relative to the page, because it
+     is not positioned against the page at all — it is simply the last thing
+     in a box the height of the screen.
+
+     Phones only. The desktop layout has a sidebar, no bar, and a normal
+     scrolling page, and is deliberately untouched. */
+  .shell {
+    flex-direction: column;
+    height: 100svh;
+    min-height: 0;
+    /* Deliberately NO `overflow: hidden` here. The children already fit — the
+       content region flexes, the bar is a fixed height — so there is nothing
+       to clip, and clipping would put every modal, slide-over and toast
+       inside an ancestor that some WebKit builds clip fixed children against.
+       The scroll belongs to .shell-main and only to .shell-main. */
+  }
+  .shell-main {
+    min-height: 0;
+    overflow-y: auto;
+    /* Momentum scrolling, and don't hand the scroll to the page behind when
+       this region reaches its end. */
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+  /* No fixed bar to clear any more — just normal breathing room. */
+  .content { padding: var(--sp-4) var(--sp-4) var(--sp-10); }
+
+  /* A modal locks the region that actually scrolls. `body` is no longer it. */
+  body.scroll-locked .shell-main { overflow: hidden; }
+
   .tabbar {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
+    position: static;
+    flex: 0 0 auto;
     z-index: var(--z-nav);
     display: flex;
-    background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-    backdrop-filter: saturate(180%) blur(12px);
-    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    background: var(--bg-elevated);
     border-top: 1px solid var(--border);
     padding-bottom: env(safe-area-inset-bottom);
-    /* Give the bar its own compositor layer. A blurred FIXED element that
-       shares a layer with the page gets its backdrop re-sampled on every
-       scroll frame, which is what makes it lag a few pixels behind your
-       thumb on an iPad. */
-    transform: translateZ(0);
-    will-change: transform;
   }
-  @supports not (background: color-mix(in srgb, red 50%, blue)) {
-    .tabbar { background: var(--bg-elevated); }
-  }
+  /* The blur went with the fixed positioning. A bar that no longer sits over
+     the content has nothing to blur, and backdrop-filter on a phone costs a
+     repaint of that strip on every scroll frame for a effect nobody can see. */
   .tabbar-item {
     flex: 1 1 0;
     min-width: 0;
