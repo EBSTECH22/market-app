@@ -30,6 +30,13 @@ type Overview = { today: { count: number; totalCents: number; taxCents: number }
 type CartLine = { itemId: string; sku: string; lineKey: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string; options?: Record<string, string[]>; optionsText?: string; discountLabel?: string };
 /* What comes BACK from a sale — no lineKey, because the server has no notion
    of the till's ticket lines, only of what was sold. */
+type CurbBoardOrder = {
+  id: string; number: number; status: string; vendorName: string; vendorCode: string;
+  vehicleColor: string; customerName: string; customerPhone: string;
+  paid: boolean; arrived: boolean; totalCents: number; waitingMinutes: number;
+  lines: { name: string; quantity: number; optionsText: string }[];
+};
+
 type ReceiptLine = { name: string; quantity: number; priceCents: number; basePriceCents?: number; optionsText?: string; vendorName?: string; vendorCode?: string; sku?: string };
 type TillOptChoice = { id: string; name: string; priceDeltaCents: number; soldOut: boolean };
 type TillOptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; options: TillOptChoice[] };
@@ -1696,6 +1703,15 @@ export default function AdminPage() {
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
+  /* Only while somebody is looking at a screen that shows it. The register
+     needs it too: that is where an unpaid order gets rung up. */
+  useEffect(() => {
+    if (tab !== "floor" && tab !== "register") return;
+    void loadCurbBoard();
+    const t = setInterval(() => void loadCurbBoard(), 10000);
+    return () => clearInterval(t);
+  }, [tab, loadCurbBoard]);
+
   const loadTickets = useCallback(async (q: string, drawerId = "") => {
     const params = new URLSearchParams({ q });
     if (drawerId) params.set("drawerId", drawerId);
@@ -3177,10 +3193,22 @@ export default function AdminPage() {
 
   /* A curbside order being paid for at the counter. Held so the sale can tell
      the order which sale covered it once the money is actually taken. */
-  /* Staff checked an ID. Reset after every sale, deliberately: a discount
-     that stays on until somebody notices is a discount given to the next
-     twenty customers. */
+  /* The vendor's discount, applied to this ticket.
+  
+     NOTHING IS VERIFIED HERE, on purpose. Whether to ask for a card is the
+     person at the counter's judgement, not the till's — a market that makes a
+     veteran produce paperwork for a dollar off a lemonade has lost more than
+     it saved. The button used to say "ID checked", which asked a cashier to
+     tick something that often wasn't true.
+     
+     Reset after every sale, which is NOT discretionary: a discount that stays
+     on until somebody notices is a discount given to the next twenty
+     customers. */
   const [vendorDiscount, setVendorDiscount] = useState(false);
+
+  /* Every stand's live curbside orders, for the office. Polled while the
+     Floor tab is open. */
+  const [curbBoard, setCurbBoard] = useState<CurbBoardOrder[] | null>(null);
 
   const [curbNumber, setCurbNumber] = useState("");
   const [curbPulled, setCurbPulled] = useState<{ id: string; number: number; vehicleColor: string; customerName: string } | null>(null);
@@ -3200,8 +3228,17 @@ export default function AdminPage() {
    * differ once, in front of the customer, to cost the feature its
    * credibility. Options come across as the words that were ordered.
    */
-  const pullCurbside = async () => {
-    const n = curbNumber.replace(/\D/g, "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loadCurbBoard = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/curbside");
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) setCurbBoard(d.orders || []);
+    } catch { /* the next tick will try again */ }
+  }, []);
+
+  const pullCurbside = async (fromRow?: number) => {
+    const n = fromRow !== undefined ? String(fromRow) : curbNumber.replace(/\D/g, "");
     if (!n) return;
     setScanErr("");
     const res = await fetch(`/api/admin/curbside?number=${encodeURIComponent(n)}`);
@@ -5194,6 +5231,22 @@ export default function AdminPage() {
                 </Button>
               </div>
 
+              {/* Waiting and unpaid, as buttons. Typing a number somebody has
+                  read out over a counter is how the wrong order gets rung. */}
+              {!curbPulled && curbBoard && curbBoard.some((o) => !o.paid) ? (
+                <div className="stack g-2">
+                  <span className="t-label">Waiting to be paid for</span>
+                  <div className="row wrap g-2">
+                    {curbBoard.filter((o) => !o.paid).map((o) => (
+                      <Button key={o.id} size="sm" variant="secondary" onClick={() => void pullCurbside(o.number)}>
+                        #{o.number} · {o.vehicleColor}
+                        {o.arrived ? " · outside" : ""}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               {curbPulled ? (
                 <Note tone="info" title={`Order #${curbPulled.number} on the ticket`}>
                   {curbPulled.vehicleColor} car{curbPulled.customerName ? ` · ${curbPulled.customerName}` : ""}. Take the money as
@@ -5412,11 +5465,11 @@ export default function AdminPage() {
                       <Checkbox
                         checked={vendorDiscount}
                         onCheckedChange={setVendorDiscount}
-                        label="Apply it — ID checked"
+                        label="Apply to this ticket"
                         hint={
                           cart.some((l) => !l.discountLabel)
-                            ? "Comes off the lines from vendors who offer it. Everything else on the ticket is unchanged."
-                            : "The vendor set this and it comes out of their share, not the market's."
+                            ? "Your call — no proof needed. Comes off the lines from vendors who offer it; everything else on the ticket is unchanged."
+                            : "Your call — no proof needed. It comes out of the vendor's share, not the market's."
                         }
                       />
                     </div>
@@ -7828,12 +7881,75 @@ export default function AdminPage() {
       )}
 
       {tab === "floor" && (
-        <FloorStockCard
-          items={overview?.floor || []}
-          loading={!overview}
-          month={overview?.month}
-          onSaved={loadAll}
-        />
+        <>
+          {/* ------------------------------------------ curbside board ----
+              Read-only. Moving an order along is the stand's job — two people
+              tapping Ready is how a drink goes out twice. The one action here
+              is pulling an unpaid order onto the till, which is the counter's
+              job and nobody else's. */}
+          {curbBoard && curbBoard.length > 0 ? (
+            <Card
+              className="mb-4"
+              title="Curbside right now"
+              subtitle={`${plural(curbBoard.length, "order")} waiting`}
+              actions={
+                curbBoard.some((o) => o.arrived) ? (
+                  <Badge tone="info" dot>{curbBoard.filter((o) => o.arrived).length} outside</Badge>
+                ) : undefined
+              }
+            >
+              <div className="card-body stack g-3">
+                {curbBoard.map((o) => (
+                  <div
+                    key={o.id}
+                    className="row between wrap g-3"
+                    style={{ alignItems: "center", padding: "var(--sp-2) 0", borderBottom: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="stack g-1" style={{ minWidth: 0 }}>
+                      <div className="row g-2 wrap" style={{ alignItems: "center" }}>
+                        <b>#{o.number}</b>
+                        <span className="t-sm truncate">{o.vendorName}</span>
+                        <Badge tone="neutral">{o.status === "PLACED" ? "New" : o.status === "ACCEPTED" ? "Making" : "Ready"}</Badge>
+                        {o.paid ? <Badge tone="success" dot>Paid</Badge> : <Badge tone="warn" dot>Unpaid</Badge>}
+                        {o.arrived ? <Badge tone="info" dot>Outside</Badge> : null}
+                        {/* A quarter of an hour is long enough that somebody
+                            should look, whoever is nearest. */}
+                        {o.waitingMinutes >= 15 ? <Badge tone="danger" dot>{o.waitingMinutes} min</Badge> : null}
+                      </div>
+                      <span className="t-xs t-muted truncate">
+                        {o.vehicleColor} car
+                        {o.customerName ? ` · ${o.customerName}` : ""}
+                        {o.customerPhone ? ` · ${fmtPhone(o.customerPhone)}` : ""}
+                        {" · "}
+                        {o.lines.map((l) => `${l.quantity}× ${l.name}${l.optionsText ? ` (${l.optionsText})` : ""}`).join(", ")}
+                      </span>
+                    </div>
+                    <div className="row g-2" style={{ alignItems: "center", flexShrink: 0 }}>
+                      <b className="num">{money(o.totalCents)}</b>
+                      {!o.paid ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon="receipt"
+                          onClick={() => { go("register"); void pullCurbside(o.number); }}
+                        >
+                          Ring it up
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
+
+          <FloorStockCard
+            items={overview?.floor || []}
+            loading={!overview}
+            month={overview?.month}
+            onSaved={loadAll}
+          />
+        </>
       )}
 
       {tab === "vendors" && (

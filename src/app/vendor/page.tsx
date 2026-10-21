@@ -3013,8 +3013,9 @@ export default function VendorDashboard() {
                   <div className="card-body stack g-4">
                     <p className="t-sm t-secondary">
                       Military, first responders, teachers — whoever you&rsquo;d like to look after. Staff
-                      check ID at the register and tap it; it only ever comes off <b>your</b> items, never
-                      another vendor&rsquo;s on the same ticket.
+                      tap it at the register when someone asks; it only ever comes off <b>your</b> items,
+                      never another vendor&rsquo;s on the same ticket. Nobody has to produce paperwork —
+                      it&rsquo;s the counter&rsquo;s judgement, and it&rsquo;s your discount to give.
                     </p>
                     <Note tone="info">
                       This is your discount and it comes out of your share. The customer saves exactly

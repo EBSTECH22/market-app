@@ -22,7 +22,46 @@ export async function GET(req: NextRequest) {
     { const denied = await denyUnless("ops"); if (denied) return denied; }
 
     const raw = (req.nextUrl.searchParams.get("number") || "").replace(/\D/g, "");
-    if (!raw) return NextResponse.json({ error: "Give the order number." }, { status: 400 });
+
+    /* NO NUMBER: the whole board.
+    
+       The stand sees its own queue; the office saw nothing at all, which left
+       the counter unable to answer "is my drink coming?" and nobody watching
+       an order that had been sitting unpaid for twenty minutes with somebody
+       parked outside. Read-only on purpose — moving an order along is the
+       stand's job, and two people tapping Ready is how a drink goes out
+       twice. */
+    if (!raw) {
+      const live = await db.order.findMany({
+        where: { fulfillment: "CURBSIDE", status: { in: ["PLACED", "ACCEPTED", "READY"] } },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true, number: true, status: true, createdAt: true, paidAt: true, arrivedAt: true,
+          totalCents: true, vehicleColor: true, customerName: true, customerPhone: true,
+          vendor: { select: { businessName: true, code: true } },
+          lines: { select: { name: true, quantity: true, optionsText: true } },
+        },
+      });
+      return NextResponse.json({
+        orders: live.map((o) => ({
+          id: o.id,
+          number: o.number,
+          status: o.status,
+          vendorName: o.vendor.businessName,
+          vendorCode: o.vendor.code,
+          vehicleColor: o.vehicleColor,
+          customerName: o.customerName,
+          customerPhone: o.customerPhone,
+          paid: !!o.paidAt,
+          arrived: !!o.arrivedAt,
+          totalCents: o.totalCents,
+          /* Minutes, worked out here so every screen agrees and nobody is
+             comparing a server timestamp against a till's clock. */
+          waitingMinutes: Math.max(0, Math.round((Date.now() - new Date(o.createdAt).getTime()) / 60000)),
+          lines: o.lines,
+        })),
+      });
+    }
 
     const order = await db.order.findFirst({
       where: { number: Number(raw), fulfillment: "CURBSIDE" },

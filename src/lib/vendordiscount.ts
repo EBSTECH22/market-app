@@ -16,9 +16,12 @@
  * that ticket is $0.55. The market would pay five cents for the privilege of
  * making the sale, on every qualifying ticket, forever.
  *
- * VERIFIED IN PERSON, so it is applied at the register and nowhere else. There
- * is no way to check a card through a phone screen, and a discount anybody can
- * tick on a public ordering page is not a discount, it is a price cut.
+ * APPLIED AT THE REGISTER AND NOWHERE ELSE — not because anything is checked,
+ * but because a discount anybody can tick for themselves on a public ordering
+ * page is not a discount, it is a price cut. At the counter it is a person's
+ * decision. Nothing here asks for proof and nothing records whether any was
+ * offered: a market that makes a veteran produce paperwork for a dollar off a
+ * lemonade has lost more than it saved.
  *
  * Pure: no database, no next/headers. The till and the server both import it
  * and have to agree to the cent.
