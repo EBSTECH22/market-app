@@ -138,7 +138,7 @@ type VendorTab = (typeof VENDOR_TABS)[number];
 const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }> = {
   home: { label: "Home", icon: "store", sub: "Your booth at a glance" },
   items: { label: "My items", icon: "box", sub: "Prices, stock, sales, and barcode labels" },
-  curbside: { label: "Kerbside", icon: "bell", sub: "Orders waiting to go out to the car park" },
+  curbside: { label: "Curbside", icon: "bell", sub: "Orders waiting to go out to the parking lot" },
   orders: { label: "Online orders", icon: "receipt", sub: "What people have bought from your page — pack it, send it, hand it over" },
   insights: { label: "What's working", icon: "chart", sub: "What sells, what's stuck, and what's about to run out" },
   inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
@@ -315,7 +315,7 @@ export default function VendorDashboard() {
   /* The questions an item asks when it's ordered. Loaded only when an item is
      opened — most items have none, and putting them on every item in the
      portal payload would make the common case pay for the rare one. */
-  /* The kerbside screen. Polled while the tab is open, because the stand is
+  /* The curbside screen. Polled while the tab is open, because the stand is
      looking at a propped-up phone and nobody is going to press refresh. */
   const [curb, setCurb] = useState<CurbScreen | null>(null);
   const [curbBusy, setCurbBusy] = useState(false);
@@ -439,7 +439,7 @@ export default function VendorDashboard() {
      history, and most visits to the portal are "did anything sell". */
   useEffect(() => { if (tab === "insights") { void loadStats(); void loadBench(); } }, [tab, loadStats, loadBench]);
 
-  /* ------------------------------------------------------ kerbside ------ */
+  /* ------------------------------------------------------ curbside ------ */
   const loadCurb = useCallback(async () => {
     try {
       const r = await fetch("/api/vendor/curbside");
@@ -1815,12 +1815,12 @@ export default function VendorDashboard() {
               {!curb ? (
                 <SkeletonCard />
               ) : !curb.enabled ? (
-                <Card title="Kerbside ordering">
+                <Card title="Curbside ordering">
                   <div className="card-body">
                     <EmptyState
                       icon="bell"
                       title="Not switched on"
-                      body="The market office turns this on for stands that take orders out to the car park. Ask them if you'd like it."
+                      body="The market office turns this on for stands that take orders out to the parking lot. Ask them if you'd like it."
                     />
                   </div>
                 </Card>

@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * The customer's own view of their order, and the button they press on
  * arrival.
  *
- * This is the whole notification channel. Because a kerbside order is placed
+ * This is the whole notification channel. Because a curbside order is placed
  * minutes before collection, the page they ordered on stays open in their hand
  * and polls — so there is nothing to text, nothing to install, and no message
  * to miss. The token in the URL is the only thing identifying them, which is

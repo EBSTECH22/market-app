@@ -1,5 +1,5 @@
 /**
- * Kerbside ordering: order from the car park, press a button on arrival,
+ * Curbside ordering: order from the parking lot, press a button on arrival,
  * somebody brings it out.
  *
  * Built for one stand inside the building that makes everything to order. That
@@ -14,7 +14,7 @@
  *
  *   AN ORDER CAN BE UNPAID AND STILL REAL. Paying inside means the order lives
  *   before the money does. Everything else in the app treats an unpaid order as
- *   an abandoned checkout, which is why kerbside never uses the PENDING state
+ *   an abandoned checkout, which is why curbside never uses the PENDING state
  *   that says exactly that.
  *
  *   THREE THINGS MOVE INDEPENDENTLY — preparation, payment and arrival. A
@@ -86,7 +86,7 @@ export function openState(
   hours: Hours,
   opts: { enabled: boolean; pausedUntil?: Date | null; now?: Date } = { enabled: true }
 ): OpenState {
-  if (!opts.enabled) return { open: false, reason: "This stand isn't taking kerbside orders." };
+  if (!opts.enabled) return { open: false, reason: "This stand isn't taking curbside orders." };
 
   const pausedUntil = opts.pausedUntil ? new Date(opts.pausedUntil) : null;
   const now = opts.now || new Date();

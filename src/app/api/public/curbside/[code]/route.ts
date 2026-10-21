@@ -43,7 +43,7 @@ function hoursOf(v: { curbsideOpenMinute: number; curbsideCloseMinute: number; c
 export async function GET(_req: NextRequest, { params }: { params: { code: string } }) {
   return runRoute("public/curbside GET", async () => {
     const v = await stand(params.code);
-    if (!v) return NextResponse.json({ error: "No kerbside ordering here." }, { status: 404 });
+    if (!v) return NextResponse.json({ error: "No curbside ordering here." }, { status: 404 });
 
     const state = openState(minuteOfDay(new Date(), TZ), hoursOf(v), {
       enabled: v.curbsideEnabled,
@@ -104,7 +104,7 @@ export async function GET(_req: NextRequest, { params }: { params: { code: strin
 export async function POST(req: NextRequest, { params }: { params: { code: string } }) {
   return runRoute("public/curbside POST", async () => {
     const v = await stand(params.code);
-    if (!v) return NextResponse.json({ error: "No kerbside ordering here." }, { status: 404 });
+    if (!v) return NextResponse.json({ error: "No curbside ordering here." }, { status: 404 });
 
     const body = await req.json().catch(() => ({}));
     const lines = (Array.isArray(body.lines) ? body.lines : []) as CartRequest;
@@ -217,7 +217,7 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
       try {
         await pushToVendor(
           v.id,
-          `Kerbside order #${order.number} 🚗`,
+          `Curbside order #${order.number} 🚗`,
           `${cart.lines.reduce((n, l) => n + l.quantity, 0)} item(s) · ${vehicleColor} car · paying inside`
         );
       } catch { /* a notification must never fail an order */ }

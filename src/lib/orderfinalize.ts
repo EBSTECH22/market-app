@@ -55,7 +55,7 @@ export async function finalizeOrder(orderId: string): Promise<FinalizeResult> {
       /* A KERBSIDE ORDER DOESN'T STOP AT "PAID".
       
          Paid is where a posted or collected order waits for the vendor to pack
-         it. A kerbside order paid on the phone is a drink somebody is driving
+         it. A curbside order paid on the phone is a drink somebody is driving
          towards right now, so it joins the queue the moment the money lands —
          in the same state an order paid inside starts in, so the stand's
          screen shows one list in one order and never has to care which way
@@ -83,7 +83,7 @@ export async function finalizeOrder(orderId: string): Promise<FinalizeResult> {
       type: "SALE",
       amountCents: order.vendorNetCents,
       note: order.fulfillment === "CURBSIDE"
-        ? `Kerbside order #${order.number}`
+        ? `Curbside order #${order.number}`
         : `Online order #${order.number}${order.shippingCents ? " (includes shipping)" : ""}`,
     },
   });
@@ -123,7 +123,7 @@ export async function finalizeOrder(orderId: string): Promise<FinalizeResult> {
   try {
     await pushToVendor(
       order.vendorId,
-      order.fulfillment === "CURBSIDE" ? `Kerbside order #${order.number} 🚗` : `Online order #${order.number} 🛍️`,
+      order.fulfillment === "CURBSIDE" ? `Curbside order #${order.number} 🚗` : `Online order #${order.number} 🛍️`,
       order.fulfillment === "CURBSIDE"
         ? `${order.vehicleColor || "Car"}${order.customerName ? ` · ${order.customerName}` : ""} · paid.`
         : `${order.customerName} — ${order.fulfillment === "SHIP" ? "to post" : "for collection"}. $${(order.vendorNetCents / 100).toFixed(2)} to your balance.`

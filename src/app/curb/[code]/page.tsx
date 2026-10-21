@@ -5,11 +5,11 @@ import { Badge, Button, Card, EmptyState, Field, Input, Note, SkeletonCard, Text
 import { money, plural } from "@/lib/format";
 
 /**
- * Ordering from the car park.
+ * Ordering from the parking lot.
  *
  * ONE PAGE, TWO MODES. Before ordering it is a menu; afterwards the SAME page
  * becomes the order's status screen, polling until it is handed over. That is
- * deliberate and it is the whole notification design: a kerbside order is
+ * deliberate and it is the whole notification design: a curbside order is
  * placed minutes before collection, so the phone that placed it is still in
  * the customer's hand. Nothing to text, nothing to install, no message to
  * miss — and no SMS bill.
@@ -75,7 +75,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
 
   /* ---------------------------------------------------------- polling ----
      Only while there is something to watch. A handed-over order stops the
-     timer rather than quietly burning somebody's battery in a car park. */
+     timer rather than quietly burning somebody's battery in a parking lot. */
   const stop = useRef(false);
   useEffect(() => {
     if (!token) return;
@@ -205,7 +205,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
 
             {!status.paid && !done ? (
               <Note tone="warn" title="Pay at the counter">
-                Pop in to pay when you arrive, or send somebody in — they can&rsquo;t hand it over until
+                Come in to pay when you arrive, or send someone in — they can&rsquo;t hand it over until
                 it&rsquo;s paid for.
               </Note>
             ) : null}
@@ -369,7 +369,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
               </div>
             ) : null}
 
-            <Field label="Colour of your car" hint="It's how they'll find you." required>
+            <Field label="Color of your car" hint="It's how they'll find you." required>
               {(p) => <Input {...p} value={vehicleColor} onChange={(e) => setVehicleColor(e.target.value)} placeholder="Blue" />}
             </Field>
             <Field label="Phone" hint="In case they need to reach you." required>
@@ -387,7 +387,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
               </div>
               {payMode === "INSIDE" ? (
                 <p className="t-xs t-muted">
-                  Pop in to pay when you arrive — they can&rsquo;t hand it over until it&rsquo;s paid for.
+                  Come in to pay when you arrive — they can&rsquo;t hand it over until it&rsquo;s paid for.
                 </p>
               ) : null}
             </div>

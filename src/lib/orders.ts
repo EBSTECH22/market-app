@@ -86,10 +86,10 @@ export async function priceCart(
 
      Everything above is about selling to somebody who isn't in the building,
      which is why it draws on `onlineQuantity` and refuses when that pool runs
-     out. Kerbside is somebody in the car park, served by a stand that makes
+     out. Curbside is somebody in the car park, served by a stand that makes
      each order when it comes in: there is no pool, and demanding one would
      mean the stand setting stock aside every morning for a shelf that doesn't
-     exist. So kerbside prices from the menu, takes no stock, and needs no
+     exist. So curbside prices from the menu, takes no stock, and needs no
      `onlineEnabled` flag — an item is orderable because the stand sells it. */
   const curbside = fulfillment === "CURBSIDE";
   const vendor = await db.vendor.findFirst({

@@ -6,7 +6,7 @@ import { runRoute } from "@/lib/handler";
 export const dynamic = "force-dynamic";
 
 /**
- * Pulling a kerbside order onto the till.
+ * Pulling a curbside order onto the till.
  *
  * Somebody who chose to pay inside walks up and says "order 5021". Re-keying
  * the drink would price it a second time, from scratch, with whatever the menu
@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
         lines: { select: { itemId: true, name: true, quantity: true, priceCents: true, optionsText: true, taxClass: true } },
       },
     });
-    if (!order) return NextResponse.json({ error: `No kerbside order #${raw}.` }, { status: 404 });
+    if (!order) return NextResponse.json({ error: `No curbside order #${raw}.` }, { status: 404 });
 
     if (order.paidAt || order.saleId) {
       return NextResponse.json({ error: `Order #${order.number} is already paid for.` }, { status: 409 });

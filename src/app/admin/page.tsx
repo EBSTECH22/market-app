@@ -3175,7 +3175,7 @@ export default function AdminPage() {
   } | null>(null);
   const [optAskErr, setOptAskErr] = useState("");
 
-  /* A kerbside order being paid for at the counter. Held so the sale can tell
+  /* A curbside order being paid for at the counter. Held so the sale can tell
      the order which sale covered it once the money is actually taken. */
   const [curbNumber, setCurbNumber] = useState("");
   const [curbPulled, setCurbPulled] = useState<{ id: string; number: number; vehicleColor: string; customerName: string } | null>(null);
@@ -3201,7 +3201,7 @@ export default function AdminPage() {
     setScanErr("");
     const res = await fetch(`/api/admin/curbside?number=${encodeURIComponent(n)}`);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setScanErr(String(data.error || `No kerbside order #${n}.`)); return; }
+    if (!res.ok) { setScanErr(String(data.error || `No curbside order #${n}.`)); return; }
 
     const o = data.order as { id: string; number: number; vehicleColor: string; customerName: string; vendorName: string; lines: { itemId: string; name: string; quantity: number; priceCents: number; optionsText: string; taxClass: string }[] };
     setCart(o.lines.map((l, idx) => ({
@@ -3392,7 +3392,7 @@ export default function AdminPage() {
     })); } finally { setBusy(false); }
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
 
-    /* The money is booked. Tell the kerbside order WHICH sale covered it, so
+    /* The money is booked. Tell the curbside order WHICH sale covered it, so
        it stops asking to be paid and the stand can hand it over. Deliberately
        after the sale, never before: if this call fails the till is still
        right, and the order can be marked from the stand's screen. The sale
@@ -5169,7 +5169,7 @@ export default function AdminPage() {
               {/* Somebody at the counter saying "order 5021". */}
               <div className="row wrap g-2" style={{ alignItems: "flex-end" }}>
                 <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-                <Field label="Kerbside order paying at the counter">
+                <Field label="Curbside order paying at the counter">
                   {(p) => (
                     <Input
                       {...p}
@@ -7947,7 +7947,7 @@ export default function AdminPage() {
                     {v.rentFree ? <Badge tone="success" icon="check">Rent free</Badge> : null}
                     {/* Only when it differs from the market's rate — a badge on
                         every vendor would say nothing. */}
-                    {v.curbsideEnabled ? <Badge tone="info" icon="bell">Kerbside</Badge> : null}
+                    {v.curbsideEnabled ? <Badge tone="info" icon="bell">Curbside</Badge> : null}
                     {v.marketFeePercent === 0 ? (
                       <Badge tone="success" icon="check">No market fee</Badge>
                     ) : typeof v.marketFeePercent === "number" ? (
@@ -8004,10 +8004,10 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  {/* Kerbside: a public ordering link for this stand. Off for
+                  {/* Curbside: a public ordering link for this stand. Off for
                       everybody until the office turns it on here. */}
                   <div className="stack g-2">
-                    <p className="t-label">Kerbside ordering</p>
+                    <p className="t-label">Curbside ordering</p>
                     <div className="row wrap g-2" style={{ alignItems: "center" }}>
                       <Button
                         size="sm"
@@ -8017,17 +8017,17 @@ export default function AdminPage() {
                         onClick={async () => {
                           const turningOn = !v.curbsideEnabled;
                           const yes = await dialog.confirm({
-                            title: turningOn ? `Let ${v.businessName} take kerbside orders?` : `Stop kerbside orders for ${v.businessName}?`,
+                            title: turningOn ? `Let ${v.businessName} take curbside orders?` : `Stop curbside orders for ${v.businessName}?`,
                             body: turningOn
-                              ? "Customers get a public ordering link for this stand — order from the car park, press a button on arrival, somebody brings it out. Orders they've already taken are unaffected."
+                              ? "Customers get a public ordering link for this stand — order from the parking lot, press a button on arrival, somebody brings it out. Orders they've already taken are unaffected."
                               : "The ordering link stops working. Orders already waiting still need handing over.",
                             confirmLabel: turningOn ? "Turn it on" : "Turn it off",
                             tone: turningOn ? "default" : "warn",
                           });
-                          if (yes) await patchVendor(v.id, { curbsideEnabled: turningOn }, turningOn ? "Kerbside ordering on" : "Kerbside ordering off");
+                          if (yes) await patchVendor(v.id, { curbsideEnabled: turningOn }, turningOn ? "Curbside ordering on" : "Curbside ordering off");
                         }}
                       >
-                        {v.curbsideEnabled ? "Turn kerbside off" : "Turn kerbside on"}
+                        {v.curbsideEnabled ? "Turn curbside off" : "Turn curbside on"}
                       </Button>
                       {v.curbsideEnabled ? (
                         <LinkButton size="sm" variant="ghost" icon="external" href={`/curb/${v.code}`} external>
@@ -8038,7 +8038,7 @@ export default function AdminPage() {
                     {v.curbsideEnabled ? (
                       <p className="t-xs t-muted">
                         Their link is <span className="mono">/curb/{v.code}</span> — put it on a QR code by the door and in
-                        the car park. They set their own pauses from their portal.
+                        the parking lot. They set their own pauses from their portal.
                       </p>
                     ) : null}
                   </div>
