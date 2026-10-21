@@ -1703,15 +1703,6 @@ export default function AdminPage() {
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
-  /* Only while somebody is looking at a screen that shows it. The register
-     needs it too: that is where an unpaid order gets rung up. */
-  useEffect(() => {
-    if (tab !== "floor" && tab !== "register") return;
-    void loadCurbBoard();
-    const t = setInterval(() => void loadCurbBoard(), 10000);
-    return () => clearInterval(t);
-  }, [tab, loadCurbBoard]);
-
   const loadTickets = useCallback(async (q: string, drawerId = "") => {
     const params = new URLSearchParams({ q });
     if (drawerId) params.set("drawerId", drawerId);
@@ -3236,6 +3227,16 @@ export default function AdminPage() {
       if (r.ok) setCurbBoard(d.orders || []);
     } catch { /* the next tick will try again */ }
   }, []);
+
+  /* Only while somebody is looking at a screen that shows it. The register
+     needs it too: that is where an unpaid order gets rung up. */
+  useEffect(() => {
+    if (tab !== "floor" && tab !== "register") return;
+    void loadCurbBoard();
+    const t = setInterval(() => void loadCurbBoard(), 10000);
+    return () => clearInterval(t);
+  }, [tab, loadCurbBoard]);
+
 
   const pullCurbside = async (fromRow?: number) => {
     const n = fromRow !== undefined ? String(fromRow) : curbNumber.replace(/\D/g, "");
