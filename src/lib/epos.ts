@@ -304,6 +304,10 @@ export type ReceiptLine = {
      later from a piece of paper in somebody's handbag. */
   vendorName?: string;
   vendorCode?: string;
+  /* "Large · Strawberry". On the paper because a receipt that says
+     "Lemonade $5.50" when they ordered a large strawberry is the start of a
+     refund argument nobody can settle. */
+  optionsText?: string;
 };
 
 export type ReceiptSale = {
@@ -426,7 +430,7 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
     const base = l.basePriceCents || l.priceCents;
     tagBase += tag(base) * qty;
     tagPaid += tag(l.priceCents) * qty;
-    for (const row of wrapLine(`${qty}x ${l.name}`, money(tag(base) * qty), cols)) out.push(t(row));
+    for (const row of wrapLine(`${qty}x ${l.name}${l.optionsText ? ` (${l.optionsText})` : ""}`, money(tag(base) * qty), cols)) out.push(t(row));
 
     /* A discounted item shows what it normally is, indented under itself —
        people want to see the saving on the paper, not just in the total. */

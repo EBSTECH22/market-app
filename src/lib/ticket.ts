@@ -4,6 +4,7 @@ import { marketFeeFor } from "@/lib/marketfee";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { cardUpliftCents, cashCents, lineShares } from "@/lib/cardprice";
+import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
 
 /**
  * What a ticket costs, worked out once and written down.
@@ -20,7 +21,8 @@ import { cardUpliftCents, cashCents, lineShares } from "@/lib/cardprice";
  * is written FROM it. The customer is charged what the paper says, always.
  */
 
-export type TicketLineIn = { itemId: string; quantity: number };
+/** `options` is group id → chosen option ids, exactly as the till sends them. */
+export type TicketLineIn = { itemId: string; quantity: number; options?: Record<string, string[]> };
 
 export type PricedLine = {
   itemId: string;
@@ -32,6 +34,8 @@ export type PricedLine = {
   commissionCents: number;
   vendorNetCents: number;
   taxClass: string;
+  /** The choices, in words, frozen onto the line. "" for an item without any. */
+  optionsText: string;
 };
 
 export type PricedTicket = {
@@ -67,7 +71,10 @@ export async function priceTicket(
 
   const items = await db.item.findMany({
     where: { id: { in: lines.map((l) => l.itemId) } },
-    include: { vendor: true },
+    include: {
+      vendor: true,
+      optionGroups: { include: { options: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+    },
   });
 
   const rates = await getTaxRates();
@@ -83,10 +90,22 @@ export async function priceTicket(
     const item = items.find((i) => i.id === l.itemId);
     if (!item) throw new TicketError("An item on the ticket no longer exists.");
     const quantity = Math.max(1, Math.round(l.quantity));
-    const vendorUnit = effectivePriceCents(item);
+
+    /* Choices move the VENDOR'S price; the fee goes on top afterwards. Same
+       arithmetic, same order, as api/admin/sale — the two have to agree to the
+       cent or a card slip and a cash ticket for the same drink differ. */
+    const groups = item.optionGroups as unknown as OptionGroup[];
+    const picked = (l.options || {}) as Selection;
+    if (groups.length) {
+      const problem = validateSelection(groups, picked);
+      if (problem) throw new TicketError(`${item.name}: ${problem}`);
+    }
+    const resolved = resolveSelection(groups, picked);
+
+    const vendorUnit = unitVendorCents(effectivePriceCents(item), resolved.deltaCents);
     const fee = marketFeeFor(item.vendor, marketRate);
     const unit = cashCents(vendorUnit, fee);
-    const cashBase = cashCents(item.priceCents, fee);
+    const cashBase = cashCents(unitVendorCents(item.priceCents, resolved.deltaCents), fee);
     saleSavingsCents += Math.max(0, cashBase - unit) * quantity;
     const gross = unit * quantity;
     const shares = lineShares(vendorUnit, unit, quantity, item.vendor.commissionPercent);
@@ -101,6 +120,7 @@ export async function priceTicket(
       commissionCents: shares.commissionCents,
       vendorNetCents: shares.vendorNetCents,
       taxClass: normalizeTaxClass(item.taxClass),
+      optionsText: resolved.text,
     });
   }
 

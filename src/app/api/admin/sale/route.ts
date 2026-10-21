@@ -10,6 +10,7 @@ import { printForSale } from "@/lib/receiptjob";
 import { afterResponse } from "@/lib/after";
 import { cardUpliftCents, tagCents, cashCents, lineShares } from "@/lib/cardprice";
 import { marketFeeFor } from "@/lib/marketfee";
+import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
 
   const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName, terminalPaymentIntentId, printHere } = (await req.json()) as {
-    lines: { itemId: string; quantity: number; priceCents?: number }[];
+    lines: { itemId: string; quantity: number; priceCents?: number; options?: Record<string, string[]> }[];
     paymentMethod: string;
     cardName?: string;
     /** Set when the card was taken on the reader — see the block below. */
@@ -147,7 +148,13 @@ export async function POST(req: NextRequest) {
 
   const items = await db.item.findMany({
     where: { id: { in: effLines.map((l) => l.itemId) } },
-    include: { vendor: true },
+    include: {
+      vendor: true,
+      /* The menus come with the items so the SERVER prices the choices. The
+         till sends which options were tapped, never what they cost — the same
+         rule that already stops it sending its own prices. */
+      optionGroups: { include: { options: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+    },
   });
 
   /* Every setting this sale needs, in one query rather than fifteen. */
@@ -156,7 +163,7 @@ export async function POST(req: NextRequest) {
   let subtotal = 0;
   const saleLines: {
     itemId: string; vendorId: string; name: string; basePriceCents: number; priceCents: number; quantity: number;
-    commissionCents: number; vendorNetCents: number; taxClass: string;
+    commissionCents: number; vendorNetCents: number; taxClass: string; optionsText: string;
   }[] = [];
 
   let saleSavingsCents = 0;
@@ -183,14 +190,31 @@ export async function POST(req: NextRequest) {
        everyone else's has to charge each line the price on its own label. */
     const fee = marketFeeFor(item.vendor, cfg.marketFeePercent);
     const vendorNow = effectivePriceCents(item);
-    const cashBase = cashCents(item.priceCents, fee);
+    /* WHAT THEY ASKED FOR, PRICED HERE.
+    
+       A large strawberry is the item's price plus the deltas on the choices,
+       and that total is the VENDOR'S price — the market fee and the card
+       percentage go on top of it afterwards, exactly as they do for a jar of
+       jam. Validated as well as priced: a required question left unanswered
+       has to stop the sale, or the vendor hands over a drink nobody specified. */
+    const groups = item.optionGroups as unknown as OptionGroup[];
+    const picked = (l.options || {}) as Selection;
+    if (groups.length) {
+      const problem = validateSelection(groups, picked);
+      if (problem) return NextResponse.json({ error: `${item.name}: ${problem}` }, { status: 400 });
+    }
+    const resolved = resolveSelection(groups, picked);
+    const vendorNowWithOptions = unitVendorCents(vendorNow, resolved.deltaCents);
+    const baseWithOptions = unitVendorCents(item.priceCents, resolved.deltaCents);
+
+    const cashBase = cashCents(baseWithOptions, fee);
     const sentPrice = Math.round(Number(l.priceCents));
     const useSent =
       offline && Number.isFinite(sentPrice) && sentPrice >= 0 && sentPrice <= Math.max(100_00, cashBase * 3);
-    const unit = useSent ? sentPrice : cashCents(vendorNow, fee);
+    const unit = useSent ? sentPrice : cashCents(vendorNowWithOptions, fee);
     /* An offline sale rung before a price change keeps the price it was rung
        at; the vendor's share can't be more than the customer paid. */
-    const vendorUnit = Math.min(vendorNow, unit);
+    const vendorUnit = Math.min(vendorNowWithOptions, unit);
 
     // Never negative: an item whose price DROPPED after an offline sale would
     // otherwise book as "savings" of minus something.
@@ -210,6 +234,8 @@ export async function POST(req: NextRequest) {
       // Snapshotted here, not looked up at report time: reclassifying an item
       // next month must not change the tax on a ticket already filed.
       taxClass: normalizeTaxClass(item.taxClass),
+      /* In words, so a receipt and a refund both say which drink. */
+      optionsText: resolved.text,
     });
   }
 
@@ -416,6 +442,7 @@ export async function POST(req: NextRequest) {
         commissionCents: sl.commissionCents,
         vendorNetCents: sl.vendorNetCents,
         taxClass: sl.taxClass,
+        optionsText: sl.optionsText || "",
       })),
     });
     await tx.ledgerEntry.createMany({
@@ -423,7 +450,7 @@ export async function POST(req: NextRequest) {
         vendorId: sl.vendorId,
         type: "SALE",
         amountCents: sl.vendorNetCents,
-        note: `${sl.quantity}× ${sl.name}`,
+        note: `${sl.quantity}× ${sl.name}${sl.optionsText ? ` (${sl.optionsText})` : ""}`,
       })),
     });
     /* The old code clamped negative quantities here, which quietly hid an
@@ -501,6 +528,7 @@ export async function POST(req: NextRequest) {
           quantity: l.quantity,
           priceCents: l.priceCents,
           basePriceCents: l.basePriceCents,
+          optionsText: l.optionsText || "",
           vendorName: v?.businessName || "",
           vendorCode: v?.code || "",
         };
@@ -569,7 +597,9 @@ export async function POST(req: NextRequest) {
          the vendor's price on cash — so its lines add up to its total. */
       sendCustomerReceiptEmail(customer.email, sale.number,
         saleLines.map((l) => ({
-          name: l.name,
+          /* The emailed receipt has no second line to put choices on, so they
+             ride along with the name. */
+          name: l.optionsText ? `${l.name} (${l.optionsText})` : l.name,
           quantity: l.quantity,
           priceCents: paid(l.basePriceCents || l.priceCents),
         })),

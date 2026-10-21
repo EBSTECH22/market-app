@@ -144,7 +144,52 @@ model Item {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  optionGroups ItemOptionGroup[]
+
   @@index([category])
+}
+
+/// A question asked when something is ordered: "Size", "Flavour", "Extras".
+///
+/// Only items that need them have them, and an item with no groups behaves
+/// exactly as it always has — which is what keeps this from touching the three
+/// hundred items on the floor that are simply a jar of jam.
+model ItemOptionGroup {
+  id        String @id @default(cuid())
+  itemId    String
+  item      Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  name      String
+  /// A group that must be answered before the line can be added. "Size" on a
+  /// drink is required; "Extras" is not.
+  required  Boolean @default(true)
+  /// How many may be picked. Size is 1 and 1; extras are 0 and many. Kept as
+  /// numbers rather than a single/multi flag so "pick any two" costs nothing
+  /// to support later.
+  minChoices Int @default(1)
+  maxChoices Int @default(1)
+  sortOrder Int @default(0)
+  active    Boolean @default(true)
+  options   ItemOption[]
+
+  @@index([itemId])
+}
+
+/// One answer, and what it does to the price.
+model ItemOption {
+  id       String @id @default(cuid())
+  groupId  String
+  group    ItemOptionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name     String
+  /// Added to the item's price when chosen. May be negative (a small costs
+  /// less than the listed price) or zero (strawberry costs the same).
+  priceDeltaCents Int @default(0)
+  /// Out of strawberry, but still selling lemonade. Separate from the item's
+  /// own sold-out state so losing one syrup doesn't take the drink off.
+  soldOut  Boolean @default(false)
+  sortOrder Int @default(0)
+  active   Boolean @default(true)
+
+  @@index([groupId])
 }
 
 // A price or sale-percent change, so "did that discount work" can be answered.
@@ -311,6 +356,10 @@ model SaleLine {
   // Copied from the item at the moment of sale. Reclassifying an item later
   // must not silently rewrite the tax on tickets already rung and filed.
   taxClass        String @default("STANDARD")
+  /// The options chosen, in words — same snapshot as OrderLine, and for the
+  /// same reason. A receipt that says "Lemonade $5.50" when the customer
+  /// ordered a large strawberry is a refund argument waiting to happen.
+  optionsText     String @default("")
 }
 
 model LedgerEntry {
@@ -900,6 +949,15 @@ model OrderLine {
   quantity   Int
   taxClass   String @default("STANDARD")
   shipCents  Int    @default(0)
+  /// WHAT THEY ACTUALLY ORDERED, in words, frozen at order time.
+  ///
+  /// "Large · Strawberry · Extra ice". Stored as text rather than as links to
+  /// the option rows for the same reason `name` and `priceCents` are copied
+  /// here: a vendor renaming "Large" to "20oz" next week, or deleting the
+  /// strawberry option when they stop carrying it, must not rewrite what
+  /// somebody already bought and paid for. `priceCents` above already includes
+  /// every delta, so this line needs no arithmetic to be read back.
+  optionsText String @default("")
 
   @@index([itemId])
 }

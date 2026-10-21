@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 function floorRow(i: {
   id: string; sku: string; name: string; priceCents: number; salePercent: number; quantity: number; taxClass: string;
   vendor: { businessName: string; code: string; lowStockThreshold: number; marketFeePercent?: number | null };
+  optionGroups?: { id: string }[];
 }, marketRate: number) {
   /* The vendor's own rate where they have one. The register reads this list,
      so a row priced at the market rate for a fee-exempt vendor would ring up
@@ -27,6 +28,9 @@ function floorRow(i: {
     taxClass: String(i.taxClass || "STANDARD"),
     vendorName: i.vendor.businessName, vendorCode: i.vendor.code,
     lowStockAt: i.vendor.lowStockThreshold,
+    /* Just whether there are questions, not what they are. The till fetches
+       the menu only for the item somebody actually tapped. */
+    hasOptions: (i.optionGroups?.length || 0) > 0,
   };
 }
 
@@ -40,7 +44,10 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get("only") === "floor") {
     const floor = await db.item.findMany({
       where: { active: true, vendor: { active: true } },
-      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } } },
+      include: {
+        vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } },
+        optionGroups: { where: { active: true }, select: { id: true } },
+      },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     });
     const marketRate = await getMarketFeePercent();
@@ -60,7 +67,10 @@ export async function GET(req: NextRequest) {
     db.refund.findMany({ where: { createdAt: { gte: monthStart }, note: { not: { startsWith: "VOID" } } } }),
     db.item.findMany({
       where: { active: true, vendor: { active: true } },
-      include: { vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } } },
+      include: {
+        vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } },
+        optionGroups: { where: { active: true }, select: { id: true } },
+      },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
     }),
     db.vendor.count({ where: { active: true } }),

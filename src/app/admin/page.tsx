@@ -22,9 +22,17 @@ import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
-type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number };
+type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
-type CartLine = { itemId: string; sku: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string };
+/* `lineKey` is the ticket line's identity, NOT the sku. Two large lemonades
+   with different syrups are two lines, and a second identical one adds to the
+   first — keying on sku alone merged drinks nobody ordered together. */
+type CartLine = { itemId: string; sku: string; lineKey: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string; options?: Record<string, string[]>; optionsText?: string };
+/* What comes BACK from a sale — no lineKey, because the server has no notion
+   of the till's ticket lines, only of what was sold. */
+type ReceiptLine = { name: string; quantity: number; priceCents: number; basePriceCents?: number; optionsText?: string; vendorName?: string; vendorCode?: string; sku?: string };
+type TillOptChoice = { id: string; name: string; priceDeltaCents: number; soldOut: boolean };
+type TillOptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; options: TillOptChoice[] };
 /** Computed server-side in /api/admin/contracts — see src/lib/agreement.ts. */
 type Delivery = {
   state: "DRAFT" | "SENT" | "OPENED" | "SIGNED" | "EXECUTED";
@@ -1023,7 +1031,7 @@ function ContractStatusBadge({ status, endDate }: { status: string; endDate?: st
   return <Badge tone="neutral" dot>Ended</Badge>;
 }
 
-type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: CartLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
+type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: ReceiptLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type DrawerAdjustment = { at: string; by: string; cents: number; reason: string };
 type Drawer = {
@@ -1463,7 +1471,7 @@ export default function AdminPage() {
   const [punchName, setPunchName] = useState("");
   const [punchPin, setPunchPin] = useState("");
   const [punchMsg, setPunchMsg] = useState("");
-  const [refundTarget, setRefundTarget] = useState<{ ticket: Ticket; lines: { id: string; name: string; priceCents: number; quantity: number }[]; refunded: Record<string, number> } | null>(null);
+  const [refundTarget, setRefundTarget] = useState<{ ticket: Ticket; lines: { id: string; name: string; priceCents: number; quantity: number; optionsText?: string }[]; refunded: Record<string, number> } | null>(null);
   const [refundQty, setRefundQty] = useState<Record<string, number>>({});
   const [refundRestock, setRefundRestock] = useState(true);
   const [refundMsg, setRefundMsg] = useState("");
@@ -2830,7 +2838,7 @@ export default function AdminPage() {
     setRefundMsg("");
     const { ok, data } = await safeFetch(`/api/admin/tickets/${t.id}`);
     if (!ok) { setScanErr(String(data.error || "Couldn't load ticket.")); return; }
-    const sale = data.sale as { lines: { id: string; name: string; priceCents: number; quantity: number }[] };
+    const sale = data.sale as { lines: { id: string; name: string; priceCents: number; quantity: number; optionsText?: string }[] };
     setRefundTarget({ ticket: t, lines: sale.lines, refunded: (data.refunded as Record<string, number>) || {} });
     setRefundQty({});
     setRefundRestock(true);
@@ -3158,12 +3166,45 @@ export default function AdminPage() {
   };
 
   // ---------- register ----------
-  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string; taxClass?: string }) => {
+  /* The questions an item asks, open at the till. Held here rather than in a
+     child component so the scanner can fill it and the ticket can read it. */
+  const [optAsk, setOptAsk] = useState<{
+    item: { id: string; sku: string; name: string; vendorName: string; taxClass?: string };
+    groups: TillOptGroup[];
+    picked: Record<string, string[]>;
+  } | null>(null);
+  const [optAskErr, setOptAskErr] = useState("");
+
+  const keyFor = (sku: string, options?: Record<string, string[]>) => {
+    const ids = Object.values(options || {}).flat().sort();
+    return ids.length ? `${sku}|${ids.join(",")}` : sku;
+  };
+
+  /* Tapping an item on the floor list. One extra round trip, and only for the
+     items that ask something — everything else goes straight on the ticket. */
+  const tapFloorItem = async (i: FloorItem) => {
+    if (!i.hasOptions) {
+      addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass });
+      return;
+    }
+    const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(i.sku)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setScanErr(String(data.error || `Couldn't open ${i.name}.`)); return; }
+    setOptAskErr("");
+    setOptAsk({
+      item: { id: data.item.id, sku: data.item.sku, name: data.item.name, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass },
+      groups: data.item.optionGroups || [],
+      picked: {},
+    });
+  };
+
+  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string; taxClass?: string; options?: Record<string, string[]>; optionsText?: string }) => {
     setScanErr(""); setSearch(""); setOpenVendor(null);
+    const lineKey = keyFor(item.sku, item.options);
     setCart((c) => {
-      const line = c.find((l) => l.sku === item.sku);
-      if (line) return c.map((l) => (l.sku === item.sku ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { itemId: item.id, sku: item.sku, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1, taxClass: item.taxClass }];
+      const line = c.find((l) => l.lineKey === lineKey);
+      if (line) return c.map((l) => (l.lineKey === lineKey ? { ...l, quantity: l.quantity + 1 } : l));
+      return [...c, { itemId: item.id, sku: item.sku, lineKey, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1, taxClass: item.taxClass, options: item.options, optionsText: item.optionsText }];
     });
   };
 
@@ -3171,11 +3212,32 @@ export default function AdminPage() {
     const code = scan.trim().toUpperCase();
     setScan("");
     if (!code) return;
-    const inCart = cart.find((l) => l.sku === code);
-    if (inCart) { addItemToCart({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName, taxClass: inCart.taxClass }); return; }
+    /* Scanning the same code twice repeats the line already on the ticket,
+       choices and all — the common case is a second identical drink, and
+       asking the questions again would be the till arguing with the cashier.
+       Only matched when exactly one line carries that code; with two different
+       drinks on the ticket there is no "the same again" to repeat. */
+    const sameCode = cart.filter((l) => l.sku === code);
+    const inCart = sameCode.length === 1 ? sameCode[0] : null;
+    if (inCart) {
+      addItemToCart({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName, taxClass: inCart.taxClass, options: inCart.options, optionsText: inCart.optionsText });
+      return;
+    }
     const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(code)}`);
     const data = await res.json();
     if (!res.ok) { setScanErr(data.error || `Nothing found for ${code}.`); return; }
+
+    /* A drink can't go on the ticket until somebody says which drink. */
+    const groups: TillOptGroup[] = data.item.optionGroups || [];
+    if (groups.length) {
+      setOptAskErr("");
+      setOptAsk({
+        item: { id: data.item.id, sku: data.item.sku, name: data.item.name, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass },
+        groups,
+        picked: {},
+      });
+      return;
+    }
     addItemToCart({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass });
   };
 
@@ -3287,7 +3349,7 @@ export default function AdminPage() {
         customerContact: custQ.trim(),
         redeem,
         idemKey: newSaleKey(),
-        lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+        lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, options: l.options })),
       }),
     })); } finally { setBusy(false); }
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
@@ -4875,9 +4937,14 @@ export default function AdminPage() {
         >
           <div className="stack g-4 content-narrow" style={{ margin: "0 auto" }}>
             <div className="stack g-1">
-              {receipt.lines.map((l) => (
-                <div key={l.sku} className="row between g-3 t-body">
-                  <span className="truncate">{l.quantity}× {l.name}</span>
+              {/* Server-sent lines, so no lineKey — index keeps two identical
+                  drinks with different choices from colliding. */}
+              {receipt.lines.map((l, i) => (
+                <div key={`${l.sku}-${i}`} className="row between g-3 t-body">
+                  <span className="truncate">
+                    {l.quantity}× {l.name}
+                    {l.optionsText ? <span className="t-muted"> · {l.optionsText}</span> : null}
+                  </span>
                   <b className="num shrink0">{money((l.basePriceCents || l.priceCents) * l.quantity)}</b>
                 </div>
               ))}
@@ -5074,7 +5141,7 @@ export default function AdminPage() {
                           variant="secondary"
                           size="lg"
                           icon="plus"
-                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass })}
+                          onClick={() => void tapFloorItem(i)}
                         >
                           <span className="mono t-xs">{i.sku}</span>
                           <span className="truncate">{i.name}</span>
@@ -5130,7 +5197,7 @@ export default function AdminPage() {
                           variant="secondary"
                           size="lg"
                           icon="plus"
-                          onClick={() => addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass })}
+                          onClick={() => void tapFloorItem(i)}
                         >
                           <span className="truncate">{i.name}</span>
                           <span className="num">{money(i.priceCents)}</span>
@@ -5173,12 +5240,13 @@ export default function AdminPage() {
                     const onSale = each > l.priceCents;
                     return (
                       <div
-                        key={l.sku}
+                        key={l.lineKey}
                         className="row between wrap g-3"
                         style={{ padding: "var(--sp-3) 0", borderBottom: "1px solid var(--border-subtle)" }}
                       >
                         <div className="grow">
                           <div className="t-card truncate">{l.name}</div>
+                          {l.optionsText ? <div className="t-xs truncate" style={{ fontWeight: 600 }}>{l.optionsText}</div> : null}
                           <div className="t-xs t-muted row wrap g-1">
                             <span>{l.vendorName}</span>
                             <span aria-hidden>·</span>
@@ -5197,7 +5265,7 @@ export default function AdminPage() {
                             icon="minus"
                             label={`One fewer ${l.name}`}
                             variant="secondary"
-                            onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}
+                            onClick={() => setCart((c) => c.map((x) => x.lineKey === l.lineKey ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}
                           />
                           <b className="num" style={{ minWidth: 40, textAlign: "center", fontSize: "var(--fs-md)" }}>
                             {l.quantity}
@@ -5206,7 +5274,7 @@ export default function AdminPage() {
                             icon="plus"
                             label={`One more ${l.name}`}
                             variant="secondary"
-                            onClick={() => setCart((c) => c.map((x) => x.sku === l.sku ? { ...x, quantity: x.quantity + 1 } : x))}
+                            onClick={() => setCart((c) => c.map((x) => x.lineKey === l.lineKey ? { ...x, quantity: x.quantity + 1 } : x))}
                           />
                           <b className="num" style={{ minWidth: 76, textAlign: "right" }}>
                             {money(each * l.quantity)}
@@ -5215,7 +5283,7 @@ export default function AdminPage() {
                             icon="trash"
                             label={`Remove ${l.name} from the ticket`}
                             variant="dangerSoft"
-                            onClick={() => setCart((c) => c.filter((x) => x.sku !== l.sku))}
+                            onClick={() => setCart((c) => c.filter((x) => x.lineKey !== l.lineKey))}
                           />
                         </div>
                       </div>
@@ -5435,7 +5503,11 @@ export default function AdminPage() {
                       primary: true,
                       cell: (l) => (
                         <span>
-                          {l.name} <span className="t-muted num">· {money(l.priceCents)}</span>
+                          {l.name}
+                          {/* Which drink. Refunding "Lemonade" off a ticket
+                              with three different ones is a guess otherwise. */}
+                          {l.optionsText ? <span style={{ fontWeight: 600 }}> {l.optionsText}</span> : null}{" "}
+                          <span className="t-muted num">· {money(l.priceCents)}</span>
                         </span>
                       ),
                     },
@@ -11216,6 +11288,100 @@ export default function AdminPage() {
             <span>Sign out</span>
           </button>
         </div>
+      </Modal>
+
+      {/* ------------------------------------------------ which drink ------
+          Asked at the till before the line goes on the ticket. The price is
+          worked out by the server, not here: the till adding deltas itself
+          would have to know the vendor's fee and repeat the rounding, and the
+          first disagreement would be a screen promising one price while the
+          drawer took another. */}
+      <Modal
+        open={!!optAsk}
+        onClose={() => { setOptAsk(null); setOptAskErr(""); }}
+        title={optAsk ? optAsk.item.name : ""}
+        description={optAsk ? optAsk.item.vendorName : undefined}
+        width="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => { setOptAsk(null); setOptAskErr(""); }}>Cancel</Button>
+            <Button
+              variant="primary"
+              icon="plus"
+              loading={busy}
+              onClick={async () => {
+                if (!optAsk) return;
+                setBusy(true);
+                setOptAskErr("");
+                try {
+                  const { ok, data } = await safeFetch("/api/admin/lookup", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sku: optAsk.item.sku, options: optAsk.picked }),
+                  });
+                  if (!ok) { setOptAskErr(String(data.error || "That combination didn't price.")); return; }
+                  addItemToCart({
+                    id: optAsk.item.id, sku: optAsk.item.sku, name: optAsk.item.name,
+                    vendorName: optAsk.item.vendorName, taxClass: optAsk.item.taxClass,
+                    priceCents: Number(data.priceCents), basePriceCents: Number(data.basePriceCents),
+                    options: optAsk.picked, optionsText: String(data.optionsText || ""),
+                  });
+                  setOptAsk(null);
+                } finally { setBusy(false); }
+              }}
+            >
+              Add to ticket
+            </Button>
+          </>
+        }
+      >
+        {optAsk ? (
+          <div className="stack g-4">
+            {optAsk.groups.map((g) => {
+              const picked = optAsk.picked[g.id] || [];
+              const single = Math.max(1, g.maxChoices) === 1;
+              return (
+                <div key={g.id} className="stack g-2">
+                  <div className="row g-2" style={{ alignItems: "center" }}>
+                    <span className="t-label">{g.name}</span>
+                    {g.required ? null : <Badge tone="neutral">Optional</Badge>}
+                    {!single ? <Badge tone="neutral">Up to {g.maxChoices}</Badge> : null}
+                  </div>
+                  <div className="row wrap g-2">
+                    {g.options.map((o) => {
+                      const on = picked.includes(o.id);
+                      return (
+                        <Button
+                          key={o.id}
+                          size="sm"
+                          variant={on ? "primary" : "secondary"}
+                          disabled={o.soldOut}
+                          onClick={() =>
+                            setOptAsk((f) => {
+                              if (!f) return f;
+                              const cur = f.picked[g.id] || [];
+                              /* One answer replaces the last; a multi-choice
+                                 group toggles and stops at its own limit. */
+                              const next = single
+                                ? (on ? [] : [o.id])
+                                : on
+                                  ? cur.filter((x) => x !== o.id)
+                                  : cur.length >= Math.max(1, g.maxChoices) ? cur : [...cur, o.id];
+                              return { ...f, picked: { ...f.picked, [g.id]: next } };
+                            })
+                          }
+                        >
+                          {o.name}
+                          {o.soldOut ? " — sold out" : o.priceDeltaCents > 0 ? ` +${money(o.priceDeltaCents)}` : o.priceDeltaCents < 0 ? ` −${money(Math.abs(o.priceDeltaCents))}` : ""}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+            {optAskErr ? <Note tone="error">{optAskErr}</Note> : null}
+          </div>
+        ) : null}
       </Modal>
 
       {/* Agreement terms — reachable from both the Agreements panel and the

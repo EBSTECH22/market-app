@@ -93,6 +93,9 @@ function BoothMap({ spots }: { spots: BoothSpot[] }) {
   );
 }
 
+type OptChoice = { id: string; name: string; priceDeltaCents: number; soldOut: boolean; active: boolean; sortOrder: number };
+type OptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; active: boolean; sortOrder: number; options: OptChoice[] };
+
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
@@ -295,6 +298,15 @@ export default function VendorDashboard() {
   /* The reason the last save was refused, kept on screen beside the button
      that was pressed rather than in a toast that has already gone. */
   const [saveErr, setSaveErr] = useState<string>("");
+
+  /* The questions an item asks when it's ordered. Loaded only when an item is
+     opened — most items have none, and putting them on every item in the
+     portal payload would make the common case pay for the rare one. */
+  const [optGroups, setOptGroups] = useState<OptGroup[]>([]);
+  const [optBusy, setOptBusy] = useState(false);
+  const [optErr, setOptErr] = useState("");
+  const [newGroup, setNewGroup] = useState("");
+  const [newOpt, setNewOpt] = useState<Record<string, { name: string; delta: string }>>({});
 
   /* The whole sheet of floor counts, open for editing. Keyed by item id and
      held as strings, because that is what a half-typed number is. */
@@ -955,6 +967,29 @@ export default function VendorDashboard() {
     setBusy(false);
     setCounting(false);
     toast.success("Counts saved", summary);
+  };
+
+  /* ------------------------------------------------- item options ---------
+     Every call returns the item's whole option list, so the screen is never
+     reassembled from guesses about what a POST did. */
+  const optCall = async (itemId: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: object): Promise<boolean> => {
+    setOptBusy(true);
+    setOptErr("");
+    try {
+      const r = await fetch(`/api/vendor/items/${itemId}/options`, {
+        method,
+        ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+      });
+      const d: { groups?: OptGroup[]; error?: string } = await r.json().catch(() => ({}));
+      if (!r.ok) { setOptErr(d.error || "That didn't save."); return false; }
+      setOptGroups(d.groups || []);
+      return true;
+    } catch {
+      setOptErr("That didn't reach the market — check your signal.");
+      return false;
+    } finally {
+      setOptBusy(false);
+    }
   };
 
   const restockItem = async (it: Item) => {
@@ -1799,6 +1834,11 @@ export default function VendorDashboard() {
                   onRowClick={(it) => {
                     setEditItem(it.id);
                     setSaveErr("");
+                    setOptGroups([]);
+                    setOptErr("");
+                    setNewGroup("");
+                    setNewOpt({});
+                    void optCall(it.id, "GET");
                     setEditIF({
                       name: it.name, price: String(it.priceCents / 100), qty: String(it.quantity),
                       sale: String(it.salePercent || 0),
@@ -3315,6 +3355,162 @@ export default function VendorDashboard() {
                 />
               )}
             </Field>
+
+            <hr className="divider" />
+
+            {/* ------------------------------------------------ options ----
+                What this item asks before it can be ordered. Most items ask
+                nothing and this section stays a single line of invitation; a
+                drink asks size and flavour and the price follows the answer. */}
+            <div className="stack g-3">
+              <div className="stack g-1">
+                <span className="t-label">Choices customers make</span>
+                <p className="t-xs t-muted">
+                  Sizes, flavours, extras. Each choice can add to the price, take off it, or
+                  leave it alone — the price they pay follows what they pick. An item with no
+                  choices is ordered and rung up exactly as it is now.
+                </p>
+              </div>
+
+              {optErr ? <Note tone="error">{optErr}</Note> : null}
+
+              {optGroups.filter((g) => g.active).map((g) => (
+                <div key={g.id} className="stack g-2" style={{ paddingLeft: "var(--sp-4)", borderLeft: "2px solid var(--border)" }}>
+                  <div className="row wrap g-2" style={{ alignItems: "center", justifyContent: "space-between" }}>
+                    <div className="row g-2" style={{ alignItems: "center", minWidth: 0 }}>
+                      <b className="truncate">{g.name}</b>
+                      <Badge tone={g.required ? "warn" : "neutral"}>{g.required ? "Must choose" : "Optional"}</Badge>
+                      {g.maxChoices > 1 ? <Badge tone="neutral">Up to {g.maxChoices}</Badge> : null}
+                    </div>
+                    <div className="row g-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={optBusy}
+                        onClick={() => void optCall(editing.id, "PATCH", { kind: "group", id: g.id, required: !g.required })}
+                      >
+                        {g.required ? "Make optional" : "Make required"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="dangerSoft"
+                        disabled={optBusy}
+                        onClick={async () => {
+                          const yes = await dialog.confirm({
+                            title: `Remove "${g.name}"?`,
+                            body: "Customers stop being asked this. Orders already placed keep the words they were placed with.",
+                            confirmLabel: "Remove it",
+                            tone: "warn",
+                          });
+                          if (yes) void optCall(editing.id, "DELETE", { kind: "group", id: g.id });
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+
+                  {g.options.filter((o) => o.active).map((o) => (
+                    <div key={o.id} className="row g-2" style={{ alignItems: "center", justifyContent: "space-between" }}>
+                      <span className="truncate">
+                        {o.name}{" "}
+                        <span className="t-xs t-muted num">
+                          {o.priceDeltaCents === 0
+                            ? "same price"
+                            : o.priceDeltaCents > 0
+                              ? `+${money(o.priceDeltaCents)}`
+                              : `−${money(Math.abs(o.priceDeltaCents))}`}
+                        </span>
+                        {o.soldOut ? <> <Badge tone="danger" dot>Sold out</Badge></> : null}
+                      </span>
+                      <div className="row g-2" style={{ flexShrink: 0 }}>
+                        <Button
+                          size="sm"
+                          variant={o.soldOut ? "secondary" : "ghost"}
+                          disabled={optBusy}
+                          onClick={() => void optCall(editing.id, "PATCH", { kind: "option", id: o.id, soldOut: !o.soldOut })}
+                        >
+                          {o.soldOut ? "Back on" : "Sold out"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={optBusy}
+                          onClick={() => void optCall(editing.id, "DELETE", { kind: "option", id: o.id })}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="row wrap g-2">
+                    <Input
+                      placeholder="Another choice, e.g. Large"
+                      aria-label={`New choice for ${g.name}`}
+                      style={{ flex: "1 1 160px", minWidth: 0 }}
+                      disabled={optBusy}
+                      value={newOpt[g.id]?.name || ""}
+                      onChange={(e) => setNewOpt((f) => ({ ...f, [g.id]: { name: e.target.value, delta: f[g.id]?.delta || "" } }))}
+                    />
+                    <Input
+                      type="number"
+                      step="0.25"
+                      inputMode="decimal"
+                      placeholder="+$"
+                      aria-label={`Price change for the new ${g.name} choice`}
+                      style={{ width: 96 }}
+                      disabled={optBusy}
+                      value={newOpt[g.id]?.delta || ""}
+                      onChange={(e) => setNewOpt((f) => ({ ...f, [g.id]: { name: f[g.id]?.name || "", delta: e.target.value } }))}
+                    />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="plus"
+                      disabled={optBusy || !(newOpt[g.id]?.name || "").trim()}
+                      onClick={async () => {
+                        const n = newOpt[g.id];
+                        const ok = await optCall(editing.id, "POST", {
+                          kind: "option",
+                          groupId: g.id,
+                          name: n?.name,
+                          /* Dollars on screen, cents on the wire. A blank box
+                             is "no change", not zero dollars by accident. */
+                          priceDeltaCents: Math.round(Number(String(n?.delta || "0").trim() || 0) * 100),
+                        });
+                        if (ok) setNewOpt((f) => ({ ...f, [g.id]: { name: "", delta: "" } }));
+                      }}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              <div className="row wrap g-2">
+                <Input
+                  placeholder="Add a question, e.g. Size"
+                  aria-label="New question for this item"
+                  style={{ flex: "1 1 200px", minWidth: 0 }}
+                  disabled={optBusy}
+                  value={newGroup}
+                  onChange={(e) => setNewGroup(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon="plus"
+                  disabled={optBusy || !newGroup.trim()}
+                  onClick={async () => {
+                    const ok = await optCall(editing.id, "POST", { kind: "group", name: newGroup, required: true });
+                    if (ok) setNewGroup("");
+                  }}
+                >
+                  Add question
+                </Button>
+              </div>
+            </div>
 
             <hr className="divider" />
 

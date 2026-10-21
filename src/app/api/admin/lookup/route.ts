@@ -4,8 +4,8 @@ import { effectivePriceCents } from "@/lib/pricing";
 import { cashCents } from "@/lib/cardprice";
 import { getMarketFeePercent } from "@/lib/settings";
 import { marketFeeFor } from "@/lib/marketfee";
-
 import { denyUnless } from "@/lib/perm";
+import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,11 @@ export async function GET(req: NextRequest) {
 
   const item = await db.item.findUnique({
     where: { sku },
-    include: { vendor: { select: { businessName: true, code: true, active: true, marketFeePercent: true } } },
+    include: {
+      vendor: { select: { businessName: true, code: true, active: true, marketFeePercent: true } },
+      /* So the till can ask the questions before the line goes on the ticket. */
+      optionGroups: { where: { active: true }, include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+    },
   });
   if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
   if (!item.vendor.active) {
@@ -26,4 +30,44 @@ export async function GET(req: NextRequest) {
   const fee = marketFeeFor(item.vendor, await getMarketFeePercent());
   const unit = cashCents(effectivePriceCents(item), fee);
   return NextResponse.json({ item: { ...item, priceCents: unit, taxClass: String(item.taxClass || "STANDARD"), basePriceCents: cashCents(item.priceCents, fee), salePercent: item.salePercent } });
+}
+
+/**
+ * Price one line with its choices, exactly as the sale will.
+ *
+ * POST { sku, options } → { priceCents, basePriceCents, optionsText }
+ *
+ * The till could add the deltas up itself, but it would have to know the
+ * vendor's fee and repeat the rounding — and the first time the two disagreed,
+ * the screen would promise one price and the drawer would take another. One
+ * round trip buys an exact match with the server that books the money.
+ */
+export async function POST(req: NextRequest) {
+  { const denied = await denyUnless("ops"); if (denied) return denied; }
+
+  const body = await req.json().catch(() => ({}));
+  const sku = String(body.sku || "").trim().toUpperCase();
+  if (!sku) return NextResponse.json({ error: "No code given." }, { status: 400 });
+
+  const item = await db.item.findUnique({
+    where: { sku },
+    include: {
+      vendor: { select: { businessName: true, active: true, marketFeePercent: true } },
+      optionGroups: { where: { active: true }, include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+    },
+  });
+  if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
+
+  const groups = item.optionGroups as unknown as OptionGroup[];
+  const picked = (body.options || {}) as Selection;
+  const problem = groups.length ? validateSelection(groups, picked) : null;
+  if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+
+  const resolved = resolveSelection(groups, picked);
+  const fee = marketFeeFor(item.vendor, await getMarketFeePercent());
+  return NextResponse.json({
+    priceCents: cashCents(unitVendorCents(effectivePriceCents(item), resolved.deltaCents), fee),
+    basePriceCents: cashCents(unitVendorCents(item.priceCents, resolved.deltaCents), fee),
+    optionsText: resolved.text,
+  });
 }
