@@ -322,6 +322,9 @@ export type ReceiptSale = {
   foodTaxCents?: number;
   standardTaxCents?: number;
   discountCents?: number;
+  /** The vendor's own discount, named as they named it. */
+  vendorDiscountCents?: number;
+  vendorDiscountLabel?: string;
   totalCents: number;
   cashTenderedCents?: number;
   changeCents?: number;
@@ -466,6 +469,9 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
     out.push(line("TAX (FOOD)", money(sale.foodTaxCents)));
   } else {
     out.push(line("TAX", money(sale.taxCents)));
+  }
+  if (sale.vendorDiscountCents) {
+    out.push(line((sale.vendorDiscountLabel || "DISCOUNT").toUpperCase().slice(0, 20), `-${money(sale.vendorDiscountCents)}`));
   }
   if (sale.discountCents) out.push(line("REWARDS", `-${money(sale.discountCents)}`));
 

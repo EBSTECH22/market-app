@@ -13,7 +13,36 @@ export async function POST(req: NextRequest) {
     acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; allowSelfCheckout?: boolean;
     tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string;
     lowStockThreshold?: number;
+    discountEnabled?: boolean; discountLabel?: string; discountMode?: string;
+    discountPercent?: number; discountCents?: number;
   } = {};
+
+  /* THE VENDOR'S OWN DISCOUNT. Theirs to switch on, theirs to set, and theirs
+     to pay for — the customer saves exactly what the vendor gives up. Nothing
+     here needs the office's permission because nothing here spends the
+     market's money. */
+  if (body.discountEnabled !== undefined) data.discountEnabled = !!body.discountEnabled;
+  if (body.discountLabel !== undefined) {
+    const label = String(body.discountLabel || "").trim().slice(0, 40);
+    data.discountLabel = label || "Military / first responder";
+  }
+  if (body.discountMode !== undefined) {
+    data.discountMode = String(body.discountMode).toUpperCase() === "AMOUNT" ? "AMOUNT" : "PERCENT";
+  }
+  if (body.discountPercent !== undefined) {
+    const n = Number(body.discountPercent);
+    if (!Number.isFinite(n) || n < 0 || n > 50) {
+      return NextResponse.json({ error: "A discount can be 0 to 50%." }, { status: 400 });
+    }
+    data.discountPercent = n;
+  }
+  if (body.discountCents !== undefined) {
+    const n = Math.round(Number(body.discountCents));
+    if (!Number.isFinite(n) || n < 0 || n > 100_00) {
+      return NextResponse.json({ error: "A flat discount can be $0 to $100." }, { status: 400 });
+    }
+    data.discountCents = n;
+  }
 
   /* 0 means "never warn me". Clamped rather than rejected: a vendor typing
      "500" wants the warning off, and arguing with them about it helps nobody. */

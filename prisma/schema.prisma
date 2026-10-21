@@ -65,6 +65,23 @@ model Vendor {
   /// "Back in fifteen minutes." A one-person stand needs to be able to stop
   /// the queue without closing for the day.
   curbsidePausedUntil DateTime?
+  /// ---- the vendor's own discount ----------------------------------------
+  /// Military, first responder, teacher, whatever this vendor wants to
+  /// honour. THEIRS, in every sense: they switch it on, they set it, and the
+  /// saving comes out of their own share — the customer pays less and the
+  /// vendor receives less by the same amount, while the market's fee on the
+  /// sale is untouched. That is the only arrangement that needs no
+  /// negotiation, because nobody is spending anybody else's money.
+  discountEnabled Boolean @default(false)
+  /// What the receipt and the till button call it.
+  discountLabel   String  @default("Military / first responder")
+  /// PERCENT or AMOUNT.
+  discountMode    String  @default("PERCENT")
+  discountPercent Float   @default(10)
+  /// Used when the mode is AMOUNT: flat money off, once per ticket for this
+  /// vendor rather than once per line, or a basket of six would take it six
+  /// times.
+  discountCents   Int     @default(100)
 
   stripeCustomerId String  @default("")
   stripePmId       String  @default("")
@@ -238,6 +255,13 @@ model Sale {
   paymentMethod String
   customerId    String     @default("")
   discountCents Int        @default(0)
+  /// The vendor's own discount on this ticket (military, first responder).
+  /// Separate from `discountCents`, which is the market's loyalty reward —
+  /// the two come out of different pockets and adding them together would
+  /// hide which. Already reflected in the line prices; kept here so a receipt
+  /// can name it and a report can total it.
+  vendorDiscountCents Int    @default(0)
+  vendorDiscountLabel String @default("")
   cardAdjustCents Int      @default(0)
   saleSavingsCents Int    @default(0)
   // Cash sales only. 0 means the tender wasn't recorded (exact-change path, or

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePulse } from "@/lib/usePulse";
 import {
-  Icon, Button, IconButton, LinkButton, Field, Input, MoneyInput, Select, Textarea, Checkbox,
+  Icon, Button, IconButton, LinkButton, Field, Input, MoneyInput, Select, Segmented, Textarea, Checkbox,
   Modal, Panel, useDialog, useToast, DataTable, Badge, Card, Stat, EmptyState,
   Note, Skeleton, SkeletonCard, SkeletonStats, PageHeader, type Column, type IconName,
 } from "@/components/ui";
@@ -111,7 +111,7 @@ type OptGroup = { id: string; name: string; required: boolean; minChoices: numbe
 type Item = { id: string; sku: string; name: string; priceCents: number; quantity: number; active: boolean; salePercent?: number; taxClass?: string; category?: string; description?: string; unitLabel?: string; featured?: boolean; onlineEnabled?: boolean; onlineQuantity?: number; onlinePickup?: boolean; onlineShip?: boolean; shipCents?: number };
 type Ledger = { id: string; type: string; amountCents: number; note: string; createdAt: string };
 type Me = {
-  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
+  vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; discountEnabled?: boolean; discountLabel?: string; discountMode?: string; discountPercent?: number; discountCents?: number; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
   /** Set when the market let go of the hold on their space over an unpaid invoice. */
   hold?: { boothLabel: string; releasedAt: string; blocked: boolean; reason?: string } | null;
@@ -528,6 +528,13 @@ export default function VendorDashboard() {
       setPubInsta(data.vendor.instagramUrl || "");
       setPubFb(data.vendor.facebookUrl || "");
       setPubWeb(data.vendor.websiteUrl || "");
+      setDiscForm({
+        on: !!data.vendor.discountEnabled,
+        label: data.vendor.discountLabel || "Military / first responder",
+        mode: String(data.vendor.discountMode || "PERCENT").toUpperCase() === "AMOUNT" ? "AMOUNT" : "PERCENT",
+        percent: String(data.vendor.discountPercent ?? 10),
+        amount: ((data.vendor.discountCents ?? 100) / 100).toFixed(2),
+      });
     }
   }, []);
 
@@ -783,6 +790,34 @@ export default function VendorDashboard() {
   };
 
   /** Save the vendor's own low-stock threshold. 0 turns the warnings off. */
+  /* The vendor's own discount. Held locally while they type and saved on the
+     button, because a percentage saved on every keystroke would briefly be 1%
+     on the way to 15%. */
+  const [discForm, setDiscForm] = useState<{ on: boolean; label: string; mode: "PERCENT" | "AMOUNT"; percent: string; amount: string } | null>(null);
+  const [discMsg, setDiscMsg] = useState("");
+
+  const saveDiscount = async () => {
+    if (!discForm) return;
+    setBusy(true);
+    setDiscMsg("");
+    try {
+      const r = await fetch("/api/vendor/settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          discountEnabled: discForm.on,
+          discountLabel: discForm.label,
+          discountMode: discForm.mode,
+          discountPercent: Number(discForm.percent) || 0,
+          discountCents: Math.round((Number(discForm.amount) || 0) * 100),
+        }),
+      });
+      const d = await r.json().catch(() => ({} as { error?: string }));
+      if (!r.ok) { setDiscMsg(String(d.error || "That didn't save.")); return; }
+      toast.success(discForm.on ? "Discount on" : "Discount off", discForm.on ? "The register will offer it on your items." : "The register won't offer it any more.");
+      await load();
+    } finally { setBusy(false); }
+  };
+
   const saveLowStock = async (raw: string) => {
     const n = Math.max(0, Math.min(99, Math.round(Number(raw) || 0)));
     setBusy(true);
@@ -2970,6 +3005,96 @@ export default function VendorDashboard() {
           {/* -------------------------------------------------------- settings */}
           {tab === "settings" && (
             <div className="stack g-4">
+              {discForm ? (
+                <Card
+                  title="A discount you offer"
+                  subtitle={discForm.on ? "The register offers it on your items" : "Off"}
+                >
+                  <div className="card-body stack g-4">
+                    <p className="t-sm t-secondary">
+                      Military, first responders, teachers — whoever you&rsquo;d like to look after. Staff
+                      check ID at the register and tap it; it only ever comes off <b>your</b> items, never
+                      another vendor&rsquo;s on the same ticket.
+                    </p>
+                    <Note tone="info">
+                      This is your discount and it comes out of your share. The customer saves exactly
+                      what you give up — the market&rsquo;s fee on the sale doesn&rsquo;t change either way.
+                    </Note>
+
+                    <Checkbox
+                      checked={discForm.on}
+                      onCheckedChange={(v) => setDiscForm((f) => f && ({ ...f, on: v }))}
+                      label="Offer a discount"
+                    />
+
+                    {discForm.on ? (
+                      <>
+                        <Field label="What to call it" hint="This is what staff see on the button and what prints on the receipt.">
+                          {(p) => (
+                            <Input
+                              {...p}
+                              value={discForm.label}
+                              onChange={(e) => setDiscForm((f) => f && ({ ...f, label: e.target.value }))}
+                              placeholder="Military / first responder"
+                            />
+                          )}
+                        </Field>
+
+                        <Segmented
+                          label="How much"
+                          value={discForm.mode}
+                          onChange={(v) => setDiscForm((f) => f && ({ ...f, mode: v as "PERCENT" | "AMOUNT" }))}
+                          options={[
+                            { value: "PERCENT", label: "A percentage" },
+                            { value: "AMOUNT", label: "A set amount" },
+                          ]}
+                        />
+
+                        {discForm.mode === "PERCENT" ? (
+                          <Field label="Percent off" hint="Up to 50%.">
+                            {(p) => (
+                              <Input
+                                {...p}
+                                type="number"
+                                min="0"
+                                max="50"
+                                step="1"
+                                inputMode="numeric"
+                                style={{ width: 120 }}
+                                value={discForm.percent}
+                                onChange={(e) => setDiscForm((f) => f && ({ ...f, percent: e.target.value }))}
+                              />
+                            )}
+                          </Field>
+                        ) : (
+                          <Field
+                            label="Amount off"
+                            hint="Taken once per ticket, not once per item — six drinks in one order is still one discount."
+                          >
+                            {(p) => (
+                              <MoneyInput
+                                {...p}
+                                style={{ width: 140 }}
+                                value={discForm.amount}
+                                onChange={(e) => setDiscForm((f) => f && ({ ...f, amount: e.target.value }))}
+                              />
+                            )}
+                          </Field>
+                        )}
+                      </>
+                    ) : null}
+
+                    {discMsg ? <Note tone="error">{discMsg}</Note> : null}
+
+                    <div className="row g-2">
+                      <Button variant="primary" icon="check" loading={busy} onClick={saveDiscount}>
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              ) : null}
+
               <Card
                 title="Sale alerts"
                 subtitle={

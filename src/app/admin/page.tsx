@@ -22,12 +22,12 @@ import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
-type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean };
+type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean; discountLabel?: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 /* `lineKey` is the ticket line's identity, NOT the sku. Two large lemonades
    with different syrups are two lines, and a second identical one adds to the
    first — keying on sku alone merged drinks nobody ordered together. */
-type CartLine = { itemId: string; sku: string; lineKey: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string; options?: Record<string, string[]>; optionsText?: string };
+type CartLine = { itemId: string; sku: string; lineKey: string; name: string; vendorName: string; priceCents: number; basePriceCents?: number; quantity: number; taxClass?: string; options?: Record<string, string[]>; optionsText?: string; discountLabel?: string };
 /* What comes BACK from a sale — no lineKey, because the server has no notion
    of the till's ticket lines, only of what was sold. */
 type ReceiptLine = { name: string; quantity: number; priceCents: number; basePriceCents?: number; optionsText?: string; vendorName?: string; vendorCode?: string; sku?: string };
@@ -1031,7 +1031,7 @@ function ContractStatusBadge({ status, endDate }: { status: string; endDate?: st
   return <Badge tone="neutral" dot>Ended</Badge>;
 }
 
-type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: ReceiptLine[]; discountCents?: number; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
+type Receipt = { id: string; number: number; employee: string; cardName: string; createdAt: string; subtotalCents: number; taxCents: number; totalCents: number; taxRate: number; paymentMethod: string; lines: ReceiptLine[]; discountCents?: number; vendorDiscountCents?: number; vendorDiscountLabel?: string; cardAdjustCents?: number; saleSavingsCents?: number; customerPoints?: number | null; customerContact?: string;
 };
 type DrawerAdjustment = { at: string; by: string; cents: number; reason: string };
 type Drawer = {
@@ -3177,6 +3177,11 @@ export default function AdminPage() {
 
   /* A curbside order being paid for at the counter. Held so the sale can tell
      the order which sale covered it once the money is actually taken. */
+  /* Staff checked an ID. Reset after every sale, deliberately: a discount
+     that stays on until somebody notices is a discount given to the next
+     twenty customers. */
+  const [vendorDiscount, setVendorDiscount] = useState(false);
+
   const [curbNumber, setCurbNumber] = useState("");
   const [curbPulled, setCurbPulled] = useState<{ id: string; number: number; vehicleColor: string; customerName: string } | null>(null);
 
@@ -3222,7 +3227,7 @@ export default function AdminPage() {
 
   const tapFloorItem = async (i: FloorItem) => {
     if (!i.hasOptions) {
-      addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass });
+      addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass, discountLabel: i.discountLabel });
       return;
     }
     const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(i.sku)}`);
@@ -3236,13 +3241,13 @@ export default function AdminPage() {
     });
   };
 
-  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string; taxClass?: string; options?: Record<string, string[]>; optionsText?: string }) => {
+  const addItemToCart = (item: { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; vendorName: string; taxClass?: string; options?: Record<string, string[]>; optionsText?: string; discountLabel?: string }) => {
     setScanErr(""); setSearch(""); setOpenVendor(null);
     const lineKey = keyFor(item.sku, item.options);
     setCart((c) => {
       const line = c.find((l) => l.lineKey === lineKey);
       if (line) return c.map((l) => (l.lineKey === lineKey ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { itemId: item.id, sku: item.sku, lineKey, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1, taxClass: item.taxClass, options: item.options, optionsText: item.optionsText }];
+      return [...c, { itemId: item.id, sku: item.sku, lineKey, name: item.name, vendorName: item.vendorName, priceCents: item.priceCents, basePriceCents: item.basePriceCents, quantity: 1, taxClass: item.taxClass, options: item.options, optionsText: item.optionsText, discountLabel: item.discountLabel }];
     });
   };
 
@@ -3387,6 +3392,7 @@ export default function AdminPage() {
         customerContact: custQ.trim(),
         redeem,
         idemKey: newSaleKey(),
+        vendorDiscount,
         lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, options: l.options })),
       }),
     })); } finally { setBusy(false); }
@@ -3410,7 +3416,7 @@ export default function AdminPage() {
     }
 
     setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });
-    setCart([]); setCardName(""); setCashConfirm(false);
+    setCart([]); setCardName(""); setCashConfirm(false); setVendorDiscount(false);
     loadDrawer(); loadAll(); loadTickets(ticketQ, ticketDrawer?.id || "");
     if (autoPrint) setTimeout(() => printSale((data.sale as { id: string }).id), 250);
   };
@@ -5393,6 +5399,29 @@ export default function AdminPage() {
                     <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>{money(total)}</span>
                   </div>
                 </div>
+
+                {/* The vendor's own discount. Only shown when something on
+                    the ticket actually offers one, so the button isn't sitting
+                    there on every sale inviting a tap. */}
+                {(() => {
+                  const offered = [...new Set(cart.map((l) => l.discountLabel).filter(Boolean))] as string[];
+                  if (offered.length === 0) return null;
+                  return (
+                    <div className="card card-pad-sm stack g-2">
+                      <span className="t-label">{offered.join(" · ")}</span>
+                      <Checkbox
+                        checked={vendorDiscount}
+                        onCheckedChange={setVendorDiscount}
+                        label="Apply it — ID checked"
+                        hint={
+                          cart.some((l) => !l.discountLabel)
+                            ? "Comes off the lines from vendors who offer it. Everything else on the ticket is unchanged."
+                            : "The vendor set this and it comes out of their share, not the market's."
+                        }
+                      />
+                    </div>
+                  );
+                })()}
 
                 <div className="card card-pad-sm stack g-3">
                   <span className="t-label row g-1"><Icon name="star" size={12} />Rewards and email receipt — optional</span>

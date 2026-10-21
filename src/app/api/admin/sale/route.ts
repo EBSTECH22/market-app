@@ -11,6 +11,7 @@ import { afterResponse } from "@/lib/after";
 import { cardUpliftCents, tagCents, cashCents, lineShares } from "@/lib/cardprice";
 import { marketFeeFor } from "@/lib/marketfee";
 import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
+import { perUnitDiscounts, offersDiscount, type VendorDiscount } from "@/lib/vendordiscount";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
 import { runRoute, HttpError } from "@/lib/handler";
@@ -23,8 +24,10 @@ export async function POST(req: NextRequest) {
   return runRoute("admin/sale POST", async () => {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
 
-  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName, terminalPaymentIntentId, printHere } = (await req.json()) as {
+  const { lines, paymentMethod, cardName, customerContact, redeem, cashTenderedCents, idemKey: rawIdemKey, offline: rawOffline, soldAtIso, employeeName, terminalPaymentIntentId, printHere, vendorDiscount: rawVendorDiscount } = (await req.json()) as {
     lines: { itemId: string; quantity: number; priceCents?: number; options?: Record<string, string[]> }[];
+    /** Staff checked an ID and tapped the vendor's discount button. */
+    vendorDiscount?: boolean;
     paymentMethod: string;
     cardName?: string;
     /** Set when the card was taken on the reader — see the block below. */
@@ -167,7 +170,40 @@ export async function POST(req: NextRequest) {
   }[] = [];
 
   let saleSavingsCents = 0;
+
+  /* ------------------------------------------- the vendor's own discount --
+     Worked out for the whole ticket first, because a flat amount is taken
+     once per vendor rather than once per line. Each line then has it taken
+     off BOTH the customer's price and the vendor's price, which is what makes
+     it the vendor's discount: the customer saves exactly what the vendor
+     gives up, and the market's fee on the sale does not move.
+     
+     Recomputing the fee against the reduced price instead would quietly make
+     the market pay a share of a discount it never agreed to — a few cents a
+     ticket, invisible, and compounding all day. */
+  const wantsDiscount = rawVendorDiscount === true && !snap;
+  let vendorDiscountCents = 0;
+  let vendorDiscountLabel = "";
+  const perUnitOff: number[] = [];
+  if (wantsDiscount) {
+    const discountLines = lines.map((l) => {
+      const item = items.find((i) => i.id === l.itemId);
+      return {
+        vendorId: item?.vendorId || "",
+        vendorUnitCents: item ? effectivePriceCents(item) : 0,
+        quantity: Math.max(1, Math.round(l.quantity)),
+      };
+    });
+    const byVendor = new Map(items.map((i) => [i.vendorId, i.vendor as unknown as VendorDiscount]));
+    const offs = perUnitDiscounts(discountLines, byVendor);
+    for (let i = 0; i < offs.length; i++) perUnitOff[i] = offs[i];
+    const offering = items.find((i) => offersDiscount(i.vendor as unknown as VendorDiscount));
+    vendorDiscountLabel = offering ? String((offering.vendor as unknown as VendorDiscount).discountLabel || "Discount") : "";
+  }
+
+  let lineIndex = -1;
   for (const l of snap ? [] : lines) {
+    lineIndex++;
     const item = items.find((i) => i.id === l.itemId);
     if (!item) return NextResponse.json({ error: "An item on the ticket no longer exists." }, { status: 400 });
     const q = Math.max(1, Math.round(l.quantity));
@@ -211,10 +247,13 @@ export async function POST(req: NextRequest) {
     const sentPrice = Math.round(Number(l.priceCents));
     const useSent =
       offline && Number.isFinite(sentPrice) && sentPrice >= 0 && sentPrice <= Math.max(100_00, cashBase * 3);
-    const unit = useSent ? sentPrice : cashCents(vendorNowWithOptions, fee);
+    /* Off both sides, never one. */
+    const off = Math.max(0, Math.min(vendorNowWithOptions, perUnitOff[lineIndex] || 0));
+    const unit = useSent ? sentPrice : Math.max(0, cashCents(vendorNowWithOptions, fee) - off);
+    vendorDiscountCents += off * q;
     /* An offline sale rung before a price change keeps the price it was rung
        at; the vendor's share can't be more than the customer paid. */
-    const vendorUnit = Math.min(vendorNowWithOptions, unit);
+    const vendorUnit = Math.min(Math.max(0, vendorNowWithOptions - off), unit);
 
     // Never negative: an item whose price DROPPED after an offline sale would
     // otherwise book as "savings" of minus something.
@@ -407,6 +446,8 @@ export async function POST(req: NextRequest) {
       data: {
         customerId: customer ? customer.id : "",
         discountCents,
+        vendorDiscountCents,
+        vendorDiscountLabel,
         cardAdjustCents,
         saleSavingsCents,
         number,
@@ -521,6 +562,8 @@ export async function POST(req: NextRequest) {
       number: sale.number,
       createdAt: sale.createdAt,
       employee: sale.employee,
+      vendorDiscountCents,
+      vendorDiscountLabel,
       lines: saleLines.map((l) => {
         const v = items.find((i) => i.vendorId === l.vendorId)?.vendor;
         return {
@@ -612,6 +655,6 @@ export async function POST(req: NextRequest) {
      (Before, the till waited up to 1.2 seconds for them on every sale.) */
   if (tellPeople.length) await afterResponse(Promise.allSettled(tellPeople));
 
-  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, cardAdjustCents, saleSavingsCents, totalCents, taxRate: rates.standardPercent, foodTaxCents: taxSplit.foodTaxCents, standardTaxCents: taxSplit.standardTaxCents, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" }, printNow });
+  return NextResponse.json({ sale: { id: sale.id, number: sale.number, employee: sale.employee, cardName: sale.cardName, createdAt: sale.createdAt, subtotalCents: subtotal, taxCents, discountCents, vendorDiscountCents, vendorDiscountLabel, cardAdjustCents, saleSavingsCents, totalCents, taxRate: rates.standardPercent, foodTaxCents: taxSplit.foodTaxCents, standardTaxCents: taxSplit.standardTaxCents, cashTenderedCents: sale.cashTenderedCents, changeCents: sale.changeCents, customerPoints, customerContact: customer ? (customer.email || customer.phone) : "" }, printNow });
   });
 }

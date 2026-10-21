@@ -14,7 +14,10 @@ export const dynamic = "force-dynamic";
    top for the tag. vendorPriceCents is what the vendor set. */
 function floorRow(i: {
   id: string; sku: string; name: string; priceCents: number; salePercent: number; quantity: number; taxClass: string;
-  vendor: { businessName: string; code: string; lowStockThreshold: number; marketFeePercent?: number | null };
+  vendor: {
+    businessName: string; code: string; lowStockThreshold: number; marketFeePercent?: number | null;
+    discountEnabled?: boolean; discountLabel?: string;
+  };
   optionGroups?: { id: string }[];
 }, marketRate: number) {
   /* The vendor's own rate where they have one. The register reads this list,
@@ -31,6 +34,9 @@ function floorRow(i: {
     /* Just whether there are questions, not what they are. The till fetches
        the menu only for the item somebody actually tapped. */
     hasOptions: (i.optionGroups?.length || 0) > 0,
+    /* So the till knows whether to offer the vendor's discount button for
+       this line, and what to call it. */
+    discountLabel: i.vendor.discountEnabled ? (i.vendor.discountLabel || "Discount") : "",
   };
 }
 
@@ -45,7 +51,7 @@ export async function GET(req: NextRequest) {
     const floor = await db.item.findMany({
       where: { active: true, vendor: { active: true } },
       include: {
-        vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } },
+        vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true, discountEnabled: true, discountLabel: true, discountMode: true, discountPercent: true, discountCents: true } },
         optionGroups: { where: { active: true }, select: { id: true } },
       },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
@@ -68,7 +74,7 @@ export async function GET(req: NextRequest) {
     db.item.findMany({
       where: { active: true, vendor: { active: true } },
       include: {
-        vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true } },
+        vendor: { select: { businessName: true, code: true, lowStockThreshold: true, marketFeePercent: true, discountEnabled: true, discountLabel: true, discountMode: true, discountPercent: true, discountCents: true } },
         optionGroups: { where: { active: true }, select: { id: true } },
       },
       orderBy: [{ vendorId: "asc" }, { name: "asc" }],
