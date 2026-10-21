@@ -123,6 +123,47 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
       });
     }
 
+    /* ------------------------------------------------ FINDING IT AGAIN --
+    
+       The status page IS the check-in button, and it lives behind a long
+       random token in the URL. Close the tab on the way to the car and the
+       only way to say "I'm outside" is to walk in — which is the one thing
+       the whole feature exists to avoid.
+    
+       So: their phone number, which they already gave, against orders that
+       are still live at this stand. Deliberately narrow — today's unfinished
+       orders only, one stand, rate limited — because a phone number is a
+       guessable thing and this hands back somebody's order. What it exposes
+       is a drink and a car colour, and only while they are waiting for it. */
+    if (body.action === "find") {
+      const limited = await enforceRateLimit(req, "curbside-find", clientIp(req), { limit: 10, windowMs: 10 * 60 * 1000 }, "Too many tries.");
+      if (limited) return limited;
+
+      const digits = String(body.phone || "").replace(/\D/g, "");
+      if (digits.length < 10) return NextResponse.json({ error: "Enter the phone number you ordered with." }, { status: 400 });
+
+      const since = new Date(Date.now() - 12 * 60 * 60 * 1000);
+      const mine = await db.order.findFirst({
+        where: {
+          vendorId: v.id,
+          fulfillment: "CURBSIDE",
+          status: { in: ["PLACED", "ACCEPTED", "READY"] },
+          createdAt: { gte: since },
+          /* Stored as the customer typed it, so match on the digits. */
+          customerPhone: { contains: digits.slice(-10) },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { token: true, number: true },
+      });
+      if (!mine) {
+        return NextResponse.json(
+          { error: "No order waiting on that number. If you've already collected it, you're all set." },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ token: mine.token, number: mine.number });
+    }
+
     if (body.action !== "place") return NextResponse.json({ error: "Unknown action." }, { status: 400 });
 
     /* Shut is shut, checked again at the moment of ordering rather than when

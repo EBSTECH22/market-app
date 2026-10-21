@@ -102,6 +102,24 @@ export async function PATCH(req: NextRequest) {
 
     const orderId = String(body.orderId || "");
     const to = String(body.to || "").toUpperCase();
+
+    /* "THEY'RE HERE", pressed by the stand.
+    
+       The customer's own button is the usual way, but somebody who closed the
+       tab, has a flat battery, or simply walked in and said so still needs
+       marking — and arrival is the one thing on this screen the stand can
+       know without the app telling them. Separate from the preparation
+       buttons because arriving isn't a step in making a drink. */
+    if (to === "ARRIVED") {
+      const o = await db.order.findFirst({
+        where: { id: orderId, vendorId, fulfillment: "CURBSIDE" },
+        select: { id: true, status: true, arrivedAt: true },
+      });
+      if (!o) return NextResponse.json({ error: "No such order." }, { status: 404 });
+      if (!isLive(o.status)) return NextResponse.json({ error: "That order is already finished." }, { status: 409 });
+      if (!o.arrivedAt) await db.order.update({ where: { id: o.id }, data: { arrivedAt: new Date() } });
+      return NextResponse.json(await screen(vendorId));
+    }
     const order = await db.order.findFirst({
       where: { id: orderId, vendorId, fulfillment: "CURBSIDE" },
       select: { id: true, status: true, paidAt: true, number: true, saleId: true },

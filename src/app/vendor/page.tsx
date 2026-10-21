@@ -1945,6 +1945,12 @@ export default function VendorDashboard() {
                                   Handed over
                                 </Button>
                               ) : null}
+                              {/* They walked in, or rang, or their phone died. */}
+                              {!o.arrivedAt ? (
+                                <Button size="sm" variant="secondary" disabled={curbBusy} onClick={() => void curbPatch({ orderId: o.id, to: "ARRIVED" })}>
+                                  They&rsquo;re here
+                                </Button>
+                              ) : null}
                               <Button size="sm" variant="ghost" disabled={curbBusy} onClick={() => void curbPatch({ orderId: o.id, to: "NO_SHOW" })}>
                                 Nobody came
                               </Button>

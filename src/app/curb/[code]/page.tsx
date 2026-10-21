@@ -86,12 +86,41 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  /* Different phone, cleared browser, or a passenger looking it up. */
+  const [findPhone, setFindPhone] = useState("");
+  const [findErr, setFindErr] = useState("");
+  const [finding, setFinding] = useState(false);
+
   /* The token comes from the URL, so coming back from Stripe — or just
      reopening the tab — lands on the order rather than an empty menu. */
+  /* THE TOKEN, KEPT ON THE PHONE THAT ORDERED.
+  
+     The URL is the only thing that identifies an order, and somebody who
+     closes the tab on the way to the car has thrown away the button they need
+     to press. Remembering it here means reopening the page on the same phone
+     lands straight back on their order — which is what the QR code on the
+     door does anyway. Cleared when the order finishes, so the next visit
+     starts on the menu.
+  
+     localStorage can throw outright in a locked-down browser, so every touch
+     of it is wrapped: a phone that won't remember still has the phone-number
+     lookup below. */
+  const remember = useCallback((t: string) => {
+    try { window.localStorage.setItem(`curb:${params.code}`, t); } catch { /* fine */ }
+  }, [params.code]);
+
+  const forget = useCallback(() => {
+    try { window.localStorage.removeItem(`curb:${params.code}`); } catch { /* fine */ }
+  }, [params.code]);
+
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("t");
-    if (t) setToken(t);
-  }, []);
+    if (t) { setToken(t); remember(t); return; }
+    try {
+      const saved = window.localStorage.getItem(`curb:${params.code}`);
+      if (saved) setToken(saved);
+    } catch { /* fine */ }
+  }, [params.code, remember]);
 
   const loadMenu = useCallback(async () => {
     try {
@@ -121,7 +150,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
         const d = await r.json();
         if (r.ok) {
           setStatus(d);
-          if (["COLLECTED", "CANCELLED", "NO_SHOW"].includes(d.status)) stop.current = true;
+          if (["COLLECTED", "CANCELLED", "NO_SHOW"].includes(d.status)) { stop.current = true; forget(); }
         }
       } catch { /* a dropped poll is not worth telling anybody about */ }
       if (!stop.current) timer = setTimeout(tick, 5000);
@@ -129,7 +158,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
 
     void tick();
     return () => { stop.current = true; clearTimeout(timer); };
-  }, [token]);
+  }, [token, forget]);
 
   const addLine = (item: MenuItem, picked: Record<string, string[]>, optionsText: string) => {
     const ids = Object.values(picked).flat().sort();
@@ -185,11 +214,30 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
       /* Paying inside: straight to the status screen, token in the URL so a
          refresh doesn't lose it. */
       window.history.replaceState(null, "", `/curb/${params.code}?t=${d.token}`);
+      remember(d.token);
       setCart([]);
       setToken(d.token);
     } catch {
       setErr("That didn't reach the market — check your signal and try again.");
     } finally { setBusy(false); }
+  };
+
+  const findMine = async () => {
+    setFinding(true);
+    setFindErr("");
+    try {
+      const r = await fetch(`/api/public/curbside/${params.code}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "find", phone: findPhone }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setFindErr(String(d.error || "Couldn't find it.")); return; }
+      window.history.replaceState(null, "", `/curb/${params.code}?t=${d.token}`);
+      remember(d.token);
+      setToken(d.token);
+    } catch {
+      setFindErr("Couldn't reach the market — check your signal.");
+    } finally { setFinding(false); }
   };
 
   const checkIn = async () => {
@@ -263,7 +311,7 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
         </Card>
 
         {done ? (
-          <Button variant="secondary" onClick={() => { window.history.replaceState(null, "", `/curb/${params.code}`); setToken(""); setStatus(null); void loadMenu(); }}>
+          <Button variant="secondary" onClick={() => { forget(); window.history.replaceState(null, "", `/curb/${params.code}`); setToken(""); setStatus(null); void loadMenu(); }}>
             Order something else
           </Button>
         ) : null}
@@ -314,6 +362,32 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
               </button>
             ))
           )}
+        </div>
+      </Card>
+
+      {/* ---- already ordered, lost the page ---- */}
+      <Card title="Already ordered?" subtitle="Find your order and tell them you're here.">
+        <div className="card-body stack g-3">
+          <Field label="The phone number you ordered with">
+            {(p) => (
+              <div className="row g-2">
+                <Input
+                  {...p}
+                  className="grow"
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="405 555 0134"
+                  value={findPhone}
+                  onChange={(e) => setFindPhone(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void findMine(); }}
+                />
+                <Button variant="secondary" loading={finding} disabled={!findPhone.trim()} onClick={findMine}>
+                  Find it
+                </Button>
+              </div>
+            )}
+          </Field>
+          {findErr ? <Note tone="error">{findErr}</Note> : null}
         </div>
       </Card>
 
