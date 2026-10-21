@@ -34,11 +34,22 @@ export async function GET() {
   const role = await currentRole();
   const seesAll = !!role && can(role, "money");
 
+  /* THE NEXT PERSON TO HOLD IT CAN SEE WHAT IS IN IT.
+  
+     On a one-till market, somebody with no drawer of their own who is looking
+     at this screen is about to take this one on — the running total becomes
+     their opening float within seconds, and they are accountable for it from
+     that moment. Showing a cashier "$0.00 carries over to you" and then
+     handing them $540 is the one thing worse than not showing it at all.
+     Still nobody else's business: it needs one till, no drawer of your own,
+     and it is the figure you are about to be given. */
+  const inheriting = !drawer && (await getSingleRegister());
+
   const open = await Promise.all(
     all.map(async (d) => {
       const mine = !!drawer && d.id === drawer.id;
       const base = { id: d.id, employee: d.employee, openedAt: d.openedAt, mine };
-      if (!seesAll && !mine) return base;
+      if (!seesAll && !mine && !inheriting) return base;
       const cash = await drawerCashCents(d);
       return {
         ...base,
@@ -51,7 +62,10 @@ export async function GET() {
     })
   );
 
-  if (!drawer) return NextResponse.json({ session: null, open, me: who?.name || "", ambiguous, canWorkOthers: seesAll });
+  /* Said here rather than left to the settings endpoint, which a cashier
+     isn't allowed to read — the till screen has to know whether another open
+     drawer means "take it on" or "somebody else is working". */
+  if (!drawer) return NextResponse.json({ session: null, open, me: who?.name || "", ambiguous, canWorkOthers: seesAll, singleRegister: inheriting });
   const cashSalesCents = await drawerCashCents(drawer);
   return NextResponse.json({
     session: { ...drawer, cashSalesCents, adjustments: readAdjustments(drawer.adjustmentsJson) },

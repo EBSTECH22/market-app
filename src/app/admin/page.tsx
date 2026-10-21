@@ -1672,7 +1672,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/drawer");
       if (res.status === 401) { setAuthed(false); return; }
       setAuthed(true);
-      let data: { session?: Drawer; error?: string; open?: OpenDrawerRow[] } = {};
+      let data: { session?: Drawer; error?: string; open?: OpenDrawerRow[]; singleRegister?: boolean } = {};
       try { data = await res.json(); } catch { data = { error: "Server error." }; }
       if (!res.ok) {
         setDrawerErr(`Register can't reach the drawer system (${data.error || res.status}). If you just deployed, make sure the SQL for Employee + DrawerSession ran in Supabase.`);
@@ -1680,6 +1680,9 @@ export default function AdminPage() {
         setDrawerErr("");
         setDrawer(data.session ?? null);
         setOpenDrawerList(data.open || []);
+        /* Straight from the till endpoint, so this works for a cashier who
+           can't read the settings endpoint at all. */
+        if (data.singleRegister !== undefined) setSingleReg(!!data.singleRegister);
       }
     } catch {
       setDrawerErr("Network problem loading the register — refresh to retry.");
@@ -2983,6 +2986,15 @@ export default function AdminPage() {
       });
       if (!ok) { setDrawerErr(String(data.error || "Couldn't open.")); return; }
       setCounts({}); setEmpPin("");
+      /* Say what happened. A till that silently changes hands leaves the new
+         cashier guessing whether it worked and what they are holding. */
+      const h = data.handover as { employee: string; carriedCents: number } | null | undefined;
+      if (h) {
+        toast.success(
+          `You have the till`,
+          `${money(h.carriedCents)} carried over from ${h.employee}. They've been clocked out and both slips are printing.`
+        );
+      }
       await loadDrawer();
     } finally { setBusy(false); }
   };
@@ -4929,10 +4941,26 @@ export default function AdminPage() {
         </Card>
       )}
 
-      {tab === "register" && !closeReport && drawerLoaded && !drawer && (
+      {tab === "register" && !closeReport && drawerLoaded && !drawer && (() => {
+        /* TAKING THE TILL ON IS NOT OPENING A NEW ONE.
+        
+           Somebody else's drawer being open on a one-register market means
+           the money is already in the till and already counted — by them,
+           when they opened. Making the next person count it before they can
+           sign in is asking them to do a stock-take at the counter with a
+           queue in front of them, which is exactly the moment nobody does it.
+           The running total transfers; they just say who they are. */
+        const takingOver = singleReg ? openDrawerList.filter((d) => !d.mine) : [];
+        const handingOver = takingOver[0] || null;
+
+        return (
         <Card
-          title="Open the register"
-          subtitle="Locked until an employee signs in and counts the starting drawer."
+          title={handingOver ? "Take over the register" : "Open the register"}
+          subtitle={
+            handingOver
+              ? `${handingOver.employee} left the drawer open. Sign in and it passes to you.`
+              : "Locked until an employee signs in and counts the starting drawer."
+          }
         >
           {employees.length === 0 ? (
             <EmptyState
@@ -4980,22 +5008,31 @@ export default function AdminPage() {
               </div>
               )}
 
-              <div className="stack g-3">
-                <h3 className="t-section">Count the starting drawer</h3>
-                {countForm}
-              </div>
+              {handingOver ? (
+                <Note tone="info" title={`${money(handingOver.expectedCents ?? handingOver.openTotalCents ?? 0)} carries over to you`}>
+                  That is what {handingOver.employee} left in the drawer — their float, the cash they
+                  took, and anything paid in or out. Their shift closes and they clock out the moment
+                  you sign in. Count it when you get a quiet minute; if it disagrees, tell the office.
+                </Note>
+              ) : (
+                <div className="stack g-3">
+                  <h3 className="t-section">Count the starting drawer</h3>
+                  {countForm}
+                </div>
+              )}
 
               {drawerErr ? <Note tone="error">{drawerErr}</Note> : null}
 
               <div>
                 <Button variant="primary" size="lg" icon="unlock" loading={busy} onClick={openDrawer}>
-                  Sign in and open the drawer
+                  {handingOver ? "Sign in and take the till" : "Sign in and open the drawer"}
                 </Button>
               </div>
             </div>
           )}
         </Card>
-      )}
+        );
+      })()}
 
       {tab === "register" && !closeReport && drawer && closing && (
         <Card
