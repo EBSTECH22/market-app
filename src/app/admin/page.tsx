@@ -1561,6 +1561,7 @@ export default function AdminPage() {
   const [cMode, setCMode] = useState<"standard" | "custom">("standard");
   const [rentPerSqft, setRentPerSqft] = useState(6);
   const [scPaused, setScPaused] = useState(false);
+  const [singleReg, setSingleReg] = useState(true);
   const [cardAdj, setCardAdj] = useState("0");
   const [marketFee, setMarketFee] = useState("0");
   /* Dollars as typed, not cents — the field is a text input and rounding it on
@@ -1699,7 +1700,7 @@ export default function AdminPage() {
     // 401s here are normal for employee sessions — those tabs are admin-only
     if (v.ok) setVendors((await v.json()).vendors || []);
     if (c.ok) setContracts((await c.json()).contracts || []);
-    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (sd.marketFeePercent !== undefined) setMarketFee(String(sd.marketFeePercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); if (sd.payoutFee) { setFeePercentInput(String(sd.payoutFee.percent)); setFeeFixedInput((sd.payoutFee.fixedCents / 100).toFixed(2)); } }
+    if (s.ok) { const sd = await s.json(); setTaxRate(sd.taxRatePercent); if (typeof sd.foodTaxRatePercent === "number") { setFoodTaxRate(sd.foodTaxRatePercent); setFoodTaxInput(String(sd.foodTaxRatePercent)); } if (sd.rentPerSqft) setRentPerSqft(sd.rentPerSqft); setScPaused(!!sd.selfCheckoutPaused); if (sd.singleRegister !== undefined) setSingleReg(!!sd.singleRegister); if (sd.cardAdjustPercent !== undefined) setCardAdj(String(sd.cardAdjustPercent)); if (sd.marketFeePercent !== undefined) setMarketFee(String(sd.marketFeePercent)); if (typeof sd.refundApprovalCents === "number") setApprovalDollars((sd.refundApprovalCents / 100).toFixed(2).replace(/\.00$/, "")); if (sd.payoutFee) { setFeePercentInput(String(sd.payoutFee.percent)); setFeeFixedInput((sd.payoutFee.fixedCents / 100).toFixed(2)); } }
     if (e.ok) setEmployees((await e.json()).employees || []);
   }, []);
 
@@ -11234,6 +11235,38 @@ export default function AdminPage() {
                   }}
                   label="Let shoppers scan and pay themselves"
                   hint="Turning this off hides the whole page and tells shoppers to pay at the register. Individual vendors are switched on their own row under Vendors."
+                />
+              </Card>
+
+              {/* One till or several. The answer changes what happens when a
+                  cashier walks off without counting out. */}
+              <Card
+                className="mb-4"
+                title="Registers"
+                subtitle="How many tills take money at this market."
+                actions={<Badge tone="neutral" dot>{singleReg ? "One" : "More than one"}</Badge>}
+              >
+                <Checkbox
+                  checked={singleReg}
+                  onCheckedChange={async () => {
+                    const r = await fetch("/api/admin/settings", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ singleRegister: !singleReg }),
+                    });
+                    if (r.ok) {
+                      setSingleReg((v) => !v);
+                      toast.success(
+                        singleReg ? "More than one register" : "One register",
+                        singleReg
+                          ? "Each drawer now has to be closed by its own cashier."
+                          : "Taking the till on closes the last shift on your count."
+                      );
+                    } else {
+                      toast.error("Couldn't change that", "Nothing was saved — try again in a moment.");
+                    }
+                  }}
+                  label="We only have one register"
+                  hint="With one till, opening the drawer when somebody else left theirs open closes their shift on your count, clocks them out, and prints both slips. Turn this off the day a second till appears — then two open drawers is two cashiers working, and closing one automatically would be taking money out of their count."
                 />
               </Card>
 

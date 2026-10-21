@@ -1,5 +1,5 @@
 import { enqueue, handOff, type PrintNow } from "@/lib/printqueue";
-import { receiptXml, receiptWithDrawerXml, drawerXml, type ReceiptSale } from "@/lib/epos";
+import { receiptXml, receiptWithDrawerXml, drawerXml, drawerSlipXml, type ReceiptSale, type DrawerSlip } from "@/lib/epos";
 import type { TillSettings } from "@/lib/settings";
 
 /**
@@ -47,6 +47,44 @@ export async function printForSale(
     return o.printHere ? await handOff(id, body, cfg) : null;
   } catch (err) {
     console.error("receipt queue failed", err);
+    return null;
+  }
+}
+
+/**
+ * The paper for a drawer being opened or counted out.
+ *
+ * ALWAYS PRINTS, unlike a sale receipt. "Auto-print receipts" is a choice
+ * about whether every customer gets paper; a drawer slip is the market's own
+ * record of money changing hands between two members of staff, and switching
+ * it off along with customer receipts would quietly remove the only written
+ * trace of a handover.
+ *
+ * Never throws: the drawer is already open, or already counted and closed.
+ * Paper is the least important thing that just happened.
+ */
+export async function printDrawerSlip(
+  slip: DrawerSlip,
+  o: { drawerId: string; clerk: string; printHere: boolean; cfg: TillSettings }
+): Promise<PrintNow> {
+  try {
+    const cfg = o.cfg;
+    const body = drawerSlipXml(slip, {
+      header: cfg.header, footer: cfg.footer, cols: cfg.cols, logo: cfg.logo, logoSize: cfg.logoSize,
+      logoSource: cfg.logoSource, logoKey1: cfg.logoKey1, logoKey2: cfg.logoKey2,
+    });
+    const id = await enqueue({
+      kind: "DRAWER_SLIP",
+      label:
+        slip.kind === "OPEN"
+          ? `Drawer opened — ${slip.employee}${slip.takenOverFrom ? ` (from ${slip.takenOverFrom})` : ""}`
+          : `Drawer closed — ${slip.employee}${slip.handedOverTo ? ` (taken over by ${slip.handedOverTo})` : ""}`,
+      createdBy: o.clerk,
+      body,
+    });
+    return o.printHere ? await handOff(id, body, cfg) : null;
+  } catch (err) {
+    console.error("drawer slip queue failed", err);
     return null;
   }
 }

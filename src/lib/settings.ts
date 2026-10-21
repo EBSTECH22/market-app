@@ -142,6 +142,25 @@ export async function setAutoPrint(on: boolean): Promise<void> {
 }
 
 /**
+ * ONE REGISTER, PASSED FROM HAND TO HAND.
+ *
+ * This market has a single till. Two drawers open at once therefore isn't two
+ * cashiers working — it's one person who walked off without counting out, and
+ * the next person's sales landing on somebody else's shift.
+ *
+ * On by default, because that is this market. Turn it off the day a second
+ * till appears: with two registers, two open drawers is correct, and closing
+ * one automatically would be taking money out of somebody's count.
+ */
+export async function getSingleRegister(): Promise<boolean> {
+  return (await str("singleRegister", "1")) !== "0";
+}
+
+export async function setSingleRegister(on: boolean): Promise<void> {
+  await put("singleRegister", on ? "1" : "0");
+}
+
+/**
  * Which version of Server Direct Print the printer is spoken to in.
  *
  * "1.00" is the default and the safe one. Firmware that doesn't understand a

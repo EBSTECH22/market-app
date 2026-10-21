@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { denyUnless } from "@/lib/perm";
-import { getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getMarketFeePercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey, getPrinterHost, getPrintMode } from "@/lib/settings";
+import { getSingleRegister, setSingleRegister, getTaxRatePercent, setTaxRatePercent, getCardAdjustPercent, getMarketFeePercent, getFoodTaxRatePercent, setFoodTaxRatePercent, getTerminalReaderId, getPrinterKey, getPrinterHost, getPrintMode } from "@/lib/settings";
 import { getApprovalThresholdCents, setApprovalThresholdCents, recordAudit } from "@/lib/audit";
 import { getPayoutFee, setPayoutFee } from "@/lib/payouts";
 import { db } from "@/lib/db";
@@ -21,7 +21,7 @@ async function getSelfCheckoutPaused(): Promise<boolean> {
 export async function GET() {
   // The register and the kiosk read the tax rates from here on every load.
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), cardAdjustPercent: await getCardAdjustPercent(), marketFeePercent: await getMarketFeePercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee(),
+  return NextResponse.json({ taxRatePercent: await getTaxRatePercent(), rentPerSqft: await getRentPerSqft(), selfCheckoutPaused: await getSelfCheckoutPaused(), singleRegister: await getSingleRegister(), cardAdjustPercent: await getCardAdjustPercent(), marketFeePercent: await getMarketFeePercent(), foodTaxRatePercent: (await getFoodTaxRatePercent()) ?? (await getTaxRatePercent()), refundApprovalCents: await getApprovalThresholdCents(), payoutFee: await getPayoutFee(),
     /* What hardware the till can count on. The register asks on every load so
        it can offer "put it on the reader" or fall back to typing an approval
        code, without a second round trip to find out which. */
@@ -111,6 +111,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, cardAdjustPercent: v });
   }
 
+  if (body.singleRegister !== undefined) {
+    const on = !!body.singleRegister;
+    const before = await getSingleRegister();
+    await setSingleRegister(on);
+    await auditSetting(req, "singleRegister", before ? 1 : 0, on ? 1 : 0,
+      on ? "One register: taking the till on closes the last shift automatically"
+         : "More than one register: each drawer is closed by its own cashier");
+    return NextResponse.json({ ok: true, singleRegister: on });
+  }
   if (body.marketFeePercent !== undefined) {
     const v = Number(body.marketFeePercent);
     if (!Number.isFinite(v) || v < 0 || v > 25) return NextResponse.json({ error: "The service fee must be between 0 and 25%." }, { status: 400 });

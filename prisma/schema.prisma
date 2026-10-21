@@ -377,6 +377,14 @@ model DrawerSession {
   status         String    @default("OPEN")
 
   @@index([status, employeeId])
+  /// ---- handover on a single till ----------------------------------------
+  /// Who took the drawer on when this shift ended without being counted out
+  /// by the person who held it. The incoming cashier's own count is what
+  /// closes this one, which is both the most accurate figure available and
+  /// the only one anybody actually looked at.
+  handedOverTo   String @default("")
+  /// And the reverse: whose shift this drawer was taken over from.
+  handedOverFrom String @default("")
 }
 
 model SaleLine {

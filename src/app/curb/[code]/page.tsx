@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, EmptyState, Field, Input, Note, SkeletonCard, Textarea } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, Field, Input, LinkButton, Note, SkeletonCard, Textarea } from "@/components/ui";
 import { money, plural } from "@/lib/format";
 
 /**
@@ -33,6 +33,39 @@ type Status = {
   totalCents: number; vehicleColor: string; ahead: number; message: string; canCheckIn: boolean;
   lines: { name: string; quantity: number; priceCents: number; optionsText: string }[];
 };
+
+/**
+ * The same header, wrap and hero every other public page wears.
+ *
+ * A page a customer reaches from a QR code on the door is the market's
+ * shopfront as much as the building is. Left plain it read as a form somebody
+ * had got halfway through building, which is not what you want somebody
+ * looking at while deciding whether to hand over a card.
+ */
+function Shell({ children, title, sub }: { children: React.ReactNode; title?: string; sub?: string }) {
+  return (
+    <>
+      <header className="public-header">
+        <div className="public-header-inner">
+          <a href="/market" aria-label="Community Harvest" style={{ display: "flex", alignItems: "center" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/wordmark.png" alt="Community Harvest" style={{ width: 150, maxWidth: "46vw", height: "auto", display: "block" }} />
+          </a>
+          <LinkButton href="/market" variant="ghost" size="sm" icon="store" className="shrink0">Market</LinkButton>
+        </div>
+      </header>
+      <main className="public-wrap public-narrow">
+        {title ? (
+          <div className="hero">
+            <h1 className="hero-title">{title}</h1>
+            {sub ? <p className="hero-sub">{sub}</p> : null}
+          </div>
+        ) : null}
+        <div className="stack g-4">{children}</div>
+      </main>
+    </>
+  );
+}
 
 export default function CurbsidePage({ params }: { params: { code: string } }) {
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -173,10 +206,10 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
 
   // ------------------------------------------------------------ status --
   if (token) {
-    if (!status) return <div className="page"><SkeletonCard /></div>;
+    if (!status) return <Shell><SkeletonCard /></Shell>;
     const done = ["COLLECTED", "CANCELLED", "NO_SHOW"].includes(status.status);
     return (
-      <div className="page stack g-4" style={{ maxWidth: 560, margin: "0 auto", padding: "var(--sp-4)" }}>
+      <Shell>
         <Card
           title={`Order #${status.number}`}
           subtitle={status.vendorName}
@@ -234,20 +267,23 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
             Order something else
           </Button>
         ) : null}
-      </div>
+      </Shell>
     );
   }
 
   // -------------------------------------------------------------- menu --
-  if (menuErr) return <div className="page"><Note tone="error">{menuErr}</Note></div>;
-  if (!menu) return <div className="page"><SkeletonCard /></div>;
+  if (menuErr) return <Shell><Note tone="error">{menuErr}</Note></Shell>;
+  if (!menu) return <Shell><SkeletonCard /></Shell>;
 
   const count = cart.reduce((n, l) => n + l.quantity, 0);
   const ready = cart.length > 0 && phone.trim() && vehicleColor.trim() && (payMode === "INSIDE" || email.trim());
 
   return (
-    <div className="page stack g-4" style={{ maxWidth: 560, margin: "0 auto", padding: "var(--sp-4)" }}>
-      <Card title={menu.vendor.businessName} subtitle="Order ahead — we'll bring it out to your car">
+    <Shell
+      title={menu.vendor.businessName}
+      sub="Order ahead, park out front, and press the button when you pull up — we'll bring it out to your car."
+    >
+      <Card title="Menu">
         {!menu.open ? (
           <div className="card-body"><Note tone="warn">{menu.reason}</Note></div>
         ) : null}
@@ -417,6 +453,6 @@ export default function CurbsidePage({ params }: { params: { code: string } }) {
           </div>
         </Card>
       ) : null}
-    </div>
+    </Shell>
   );
 }

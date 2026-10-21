@@ -516,6 +516,179 @@ export function receiptBody(sale: ReceiptSale, opts: ReceiptOptions = {}): strin
 export const receiptXml = (sale: ReceiptSale, opts: ReceiptOptions = {}): string =>
   eposDoc(receiptBody(sale, opts));
 
+/* ------------------------------------------------------- drawer slips -- */
+
+export type DrawerSlip = {
+  /** OPEN when a shift starts, CLOSE when it is counted out. */
+  kind: "OPEN" | "CLOSE";
+  employee: string;
+  at: string | Date;
+  /** What was in the till at the start of this shift. */
+  openTotalCents: number;
+  /** CLOSE only — cash taken, anything paid in or out, and the count. */
+  cashSalesCents?: number;
+  adjustTotalCents?: number;
+  expectedCents?: number;
+  countedCents?: number;
+  /** counted − expected. Negative is short. */
+  diffCents?: number;
+  /** Who counted it, when that isn't the person whose drawer it is. */
+  closedBy?: string;
+  /** Printed on the opening slip when the last shift didn't balance. */
+  previousEmployee?: string;
+  previousDiffCents?: number;
+  /** CLOSE: this shift ended because somebody else took the till on. */
+  handedOverTo?: string;
+  /** CLOSE: nothing was counted — the running total was carried across. */
+  notCounted?: boolean;
+  /** OPEN: taken straight over from this person, who never counted out. */
+  takenOverFrom?: string;
+  /** OPEN: what the incoming clerk counted, when they counted at all. */
+  countedByYouCents?: number;
+};
+
+/**
+ * The paper that goes with a drawer, opening or closing.
+ *
+ * ONE TILL, MANY PEOPLE. This market has a single register that changes hands
+ * through the day, so the money in it is handed from one person to the next
+ * with nothing written down. A slip at each end is what turns that into a
+ * handover: whoever takes the till gets a printed figure for what should be
+ * in it, and whoever counts out gets a printed figure for what was.
+ *
+ * SHORT AND OVER ARE PRINTED PLAINLY, in words, in double height. A drawer
+ * that is out by six dollars is the single most useful thing this paper can
+ * say, and burying it in a column of figures is how it goes unnoticed until
+ * somebody adds up a month of them.
+ */
+export function drawerSlipBody(slip: DrawerSlip, opts: ReceiptOptions = {}): string {
+  const tz = opts.timeZone || "America/Chicago";
+  const cols = Math.max(24, Math.min(96, Math.round(opts.cols || COLS)));
+  const when = new Date(slip.at);
+  const header = opts.header?.length ? opts.header : DEFAULT_HEADER;
+  const line = (l: string, r: string) => t(pad(l, r, cols));
+  const opening = slip.kind === "OPEN";
+
+  const out: string[] = [];
+  out.push(`<text align="center"/>`);
+  if (opts.logo !== false && opts.logoSource === "printer") out.push(storedLogo(opts.logoKey1, opts.logoKey2));
+  else if (opts.logo !== false) out.push(logoImage(opts.logoSize));
+  else out.push(`<text width="2" height="2">${esc(header[0] || "")}&#10;</text>`);
+  out.push(`<text width="1" height="1"/>`);
+
+  out.push(t(""));
+  out.push(`<text em="true" width="2" height="2">${esc(opening ? "DRAWER OPEN" : "DRAWER CLOSE")}&#10;</text>`);
+  out.push(`<text em="false" width="1" height="1"/>`);
+
+  out.push(t(""));
+  out.push(`<text align="left"/>`);
+  out.push(t(rule("-", cols)));
+  out.push(line("CLERK", slip.employee));
+  out.push(
+    line(
+      when.toLocaleDateString("en-US", { timeZone: tz }),
+      when.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz })
+    )
+  );
+  if (slip.closedBy && slip.closedBy !== slip.employee) out.push(line("COUNTED BY", slip.closedBy));
+  if (slip.handedOverTo) out.push(line("HANDED OVER TO", slip.handedOverTo));
+  if (slip.takenOverFrom) out.push(line("TAKEN OVER FROM", slip.takenOverFrom));
+  out.push(t(rule("-", cols)));
+
+  if (opening) {
+    /* The number the next person is accountable for, in double height,
+       because it is the only figure on this piece of paper that matters. */
+    out.push(`<text em="true" width="2" height="2">${esc(pad("IN DRAWER", money(slip.openTotalCents), Math.floor(cols / 2)))}&#10;</text>`);
+    out.push(`<text em="false" width="1" height="1"/>`);
+    out.push(t(""));
+    out.push(
+      t(center(slip.takenOverFrom ? "Everything from here is yours." : "Count it before you sell anything.", cols))
+    );
+
+    if (slip.takenOverFrom) {
+      out.push(t(""));
+      out.push(t(center(`Carried over from ${slip.takenOverFrom}.`, cols)));
+      out.push(t(center("They did not count out.", cols)));
+
+      /* They counted anyway and it disagrees. Printed while somebody is still
+         standing at the till and can say why — an hour later nobody can. */
+      if (typeof slip.countedByYouCents === "number" && slip.countedByYouCents !== slip.openTotalCents) {
+        const d = slip.countedByYouCents - slip.openTotalCents;
+        out.push(t(""));
+        out.push(t(rule("-", cols)));
+        out.push(line("YOU COUNTED", money(slip.countedByYouCents)));
+        out.push(line("CARRIED OVER", money(slip.openTotalCents)));
+        out.push(
+          `<text em="true">${esc(pad("DIFFERENCE", `${money(Math.abs(d))} ${d > 0 ? "MORE" : "LESS"}`, cols))}&#10;</text>`
+        );
+        out.push(t(""));
+        out.push(t(center("Tell the office before you start selling.", cols)));
+      }
+    }
+
+    if (slip.previousDiffCents) {
+      const over = slip.previousDiffCents > 0;
+      out.push(t(""));
+      out.push(t(rule("-", cols)));
+      out.push(t(center("LAST SHIFT DID NOT BALANCE", cols)));
+      out.push(
+        line(
+          slip.previousEmployee ? slip.previousEmployee.slice(0, 20) : "PREVIOUS",
+          `${money(Math.abs(slip.previousDiffCents))} ${over ? "OVER" : "SHORT"}`
+        )
+      );
+    }
+  } else {
+    out.push(line("OPENING FLOAT", money(slip.openTotalCents)));
+    out.push(line("CASH SALES", money(slip.cashSalesCents || 0)));
+    if (slip.adjustTotalCents) {
+      out.push(line(slip.adjustTotalCents > 0 ? "PAID IN" : "PAID OUT", money(slip.adjustTotalCents)));
+    }
+    out.push(t(rule("-", cols)));
+    out.push(line("SHOULD BE IN DRAWER", money(slip.expectedCents || 0)));
+    if (!slip.notCounted) out.push(line("COUNTED", money(slip.countedCents || 0)));
+    out.push(t(rule("-", cols)));
+
+    const diff = slip.diffCents || 0;
+    if (slip.notCounted) {
+      /* NEVER "BALANCED" HERE. Nobody counted this drawer, and printing the
+         word balanced over an unverified figure is how an unnoticed shortage
+         acquires a piece of paper saying it was fine. */
+      out.push(`<text em="true" width="2" height="2">${esc(center("NOT COUNTED", Math.floor(cols / 2)))}&#10;</text>`);
+      out.push(`<text em="false" width="1" height="1"/>`);
+      out.push(t(""));
+      out.push(t(center("Running total carried to the next shift.", cols)));
+    } else if (diff === 0) {
+      out.push(`<text em="true" width="2" height="2">${esc(center("BALANCED", Math.floor(cols / 2)))}&#10;</text>`);
+      out.push(`<text em="false" width="1" height="1"/>`);
+    } else {
+      const over = diff > 0;
+      out.push(
+        `<text em="true" width="2" height="2">${esc(pad(over ? "OVER" : "SHORT", money(Math.abs(diff)), Math.floor(cols / 2)))}&#10;</text>`
+      );
+      out.push(`<text em="false" width="1" height="1"/>`);
+      out.push(t(""));
+      out.push(t(center(over ? "More in the till than expected." : "Less in the till than expected.", cols)));
+    }
+
+    if (slip.handedOverTo) {
+      out.push(t(""));
+      out.push(t(center(`${slip.handedOverTo} took the till on.`, cols)));
+    }
+
+    out.push(t(""));
+    out.push(t(rule("-", cols)));
+    out.push(t("SIGNED ............................."));
+  }
+
+  out.push(cut());
+  return out.join("");
+}
+
+/** A drawer slip, ready for the printer. The drawer pops with it. */
+export const drawerSlipXml = (slip: DrawerSlip, opts: ReceiptOptions = {}): string =>
+  eposDoc(drawerPulse() + drawerSlipBody(slip, opts));
+
 /** Nothing but a drawer kick — the No Sale button. */
 export const drawerXml = (): string => eposDoc(drawerPulse());
 
