@@ -98,6 +98,8 @@ export default function RegisterKiosk() {
   const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [drawerLoaded, setDrawerLoaded] = useState(false);
   const [openFloat, setOpenFloat] = useState("");
+  /* The drawer this cashier is about to take on, if there is one. */
+  const [takeover, setTakeover] = useState<{ id: string; employee: string; expectedCents?: number; openTotalCents?: number } | null>(null);
   const [closeCount, setCloseCount] = useState("");
   const [closing, setClosing] = useState(false);
 
@@ -253,7 +255,17 @@ export default function RegisterKiosk() {
   const loadDrawer = useCallback(async () => {
     try {
       const r = await fetch("/api/admin/drawer");
-      if (r.ok) setDrawer((await r.json()).session);
+      if (r.ok) {
+        const d = await r.json();
+        setDrawer(d.session);
+        /* Somebody else's drawer still open on a one-till market. The kiosk
+           used to read only `session` and throw the rest away, so a cashier
+           arriving mid-shift was shown "count the starting cash" for a till
+           that was already counted, already full, and already somebody
+           else's. */
+        const others = (d.open || []).filter((o: { mine?: boolean }) => !o.mine);
+        setTakeover(d.singleRegister && others.length ? others[0] : null);
+      }
     } finally { setDrawerLoaded(true); }
   }, []);
 
@@ -696,8 +708,12 @@ export default function RegisterKiosk() {
     /* dollarsToCents returns null for anything it can't read. Passing that
        through would have the server coerce it to 0 and open the drawer with a
        float of nothing — which then reads as a huge shortage at count-out. */
-    const cents = dollarsToCents(openFloat);
-    if (cents === null || cents < 0) {
+    /* TAKING THE TILL ON NEEDS NO FIGURE. The money is already in the drawer
+       and the server carries the running total across; asking for a count
+       here would be asking a cashier to do a stock-take with a queue in front
+       of them, which is the moment nobody does it. */
+    const cents = takeover ? 0 : dollarsToCents(openFloat);
+    if (!takeover && (cents === null || cents < 0)) {
       toast.error("That's not an amount", "Enter the starting cash like 150.00");
       return;
     }
@@ -712,6 +728,14 @@ export default function RegisterKiosk() {
       if (!r.ok) { toast.error("Couldn't open the drawer", String(d.error || "")); return; }
       setDrawer(d.session);
       setOpenFloat("");
+      setTakeover(null);
+      if (d.handover) {
+        toast.success(
+          "You have the till",
+          `${money(d.handover.carriedCents)} carried over from ${d.handover.employee}. They've been clocked out.`
+        );
+        return;
+      }
       /* Say it out loud. A cashier who is never told they were clocked in
          has no reason to believe it on payday. */
       toast.success(
@@ -1308,21 +1332,48 @@ export default function RegisterKiosk() {
       topBar,
       center(
         <div className="card card-pad stack g-4" style={{ width: "100%", maxWidth: 520 }}>
-          <div className="stack g-1">
-            <h2 style={{ margin: 0, fontSize: "var(--fs-xl)" }}>Open the drawer</h2>
-            <span className="t-sm t-muted">Count the starting cash before the first sale.</span>
-          </div>
-          <MoneyInput
-            value={openFloat}
-            placeholder="150.00"
-            aria-label="Starting cash in the drawer"
-            style={{ height: 64, fontSize: "var(--fs-xl)" }}
-            onChange={(e) => setOpenFloat(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void openDrawer(); }}
-          />
-          <Button variant="primary" size="xl" block icon="unlock" loading={busy} disabled={busy || !openFloat.trim()} onClick={() => void openDrawer()}>
-            Open with {money(dollarsToCents(openFloat) || 0)}
-          </Button>
+          {takeover ? (
+            <>
+              <div className="stack g-1">
+                <h2 style={{ margin: 0, fontSize: "var(--fs-xl)" }}>Take over the till</h2>
+                <span className="t-sm t-muted">
+                  {takeover.employee} left the drawer open. It passes to you.
+                </span>
+              </div>
+              <div className="stack g-1" style={{ textAlign: "center", padding: "var(--sp-4) 0" }}>
+                <span className="t-label">Carrying over to you</span>
+                <span className="display num" style={{ fontSize: "var(--fs-4xl)" }}>
+                  {money(takeover.expectedCents ?? takeover.openTotalCents ?? 0)}
+                </span>
+              </div>
+              <Note tone="info">
+                That&rsquo;s their float, the cash they took, and anything paid in or out.
+                {" "}{takeover.employee} is clocked out as soon as you take it. Count it when you get a
+                quiet minute — if it disagrees, tell the office.
+              </Note>
+              <Button variant="primary" size="xl" block icon="unlock" loading={busy} disabled={busy} onClick={() => void openDrawer()}>
+                Take the till
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="stack g-1">
+                <h2 style={{ margin: 0, fontSize: "var(--fs-xl)" }}>Open the drawer</h2>
+                <span className="t-sm t-muted">Count the starting cash before the first sale.</span>
+              </div>
+              <MoneyInput
+                value={openFloat}
+                placeholder="150.00"
+                aria-label="Starting cash in the drawer"
+                style={{ height: 64, fontSize: "var(--fs-xl)" }}
+                onChange={(e) => setOpenFloat(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void openDrawer(); }}
+              />
+              <Button variant="primary" size="xl" block icon="unlock" loading={busy} disabled={busy || !openFloat.trim()} onClick={() => void openDrawer()}>
+                Open with {money(dollarsToCents(openFloat) || 0)}
+              </Button>
+            </>
+          )}
         </div>
       )
     );
