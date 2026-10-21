@@ -21,7 +21,7 @@ import { newSaleKey } from "@/lib/offline";
 import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 /* `lineKey` is the ticket line's identity, NOT the sku. Two large lemonades
@@ -3175,6 +3175,11 @@ export default function AdminPage() {
   } | null>(null);
   const [optAskErr, setOptAskErr] = useState("");
 
+  /* A kerbside order being paid for at the counter. Held so the sale can tell
+     the order which sale covered it once the money is actually taken. */
+  const [curbNumber, setCurbNumber] = useState("");
+  const [curbPulled, setCurbPulled] = useState<{ id: string; number: number; vehicleColor: string; customerName: string } | null>(null);
+
   const keyFor = (sku: string, options?: Record<string, string[]>) => {
     const ids = Object.values(options || {}).flat().sort();
     return ids.length ? `${sku}|${ids.join(",")}` : sku;
@@ -3182,6 +3187,39 @@ export default function AdminPage() {
 
   /* Tapping an item on the floor list. One extra round trip, and only for the
      items that ask something — everything else goes straight on the ticket. */
+  /**
+   * "Order 5021, paying now."
+   *
+   * The ticket is built from the ORDER'S lines, not re-keyed from the menu:
+   * pricing it a second time against whatever the menu says now only has to
+   * differ once, in front of the customer, to cost the feature its
+   * credibility. Options come across as the words that were ordered.
+   */
+  const pullCurbside = async () => {
+    const n = curbNumber.replace(/\D/g, "");
+    if (!n) return;
+    setScanErr("");
+    const res = await fetch(`/api/admin/curbside?number=${encodeURIComponent(n)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setScanErr(String(data.error || `No kerbside order #${n}.`)); return; }
+
+    const o = data.order as { id: string; number: number; vehicleColor: string; customerName: string; vendorName: string; lines: { itemId: string; name: string; quantity: number; priceCents: number; optionsText: string; taxClass: string }[] };
+    setCart(o.lines.map((l, idx) => ({
+      itemId: l.itemId,
+      sku: `#${o.number}`,
+      lineKey: `curb-${o.number}-${idx}`,
+      name: l.name,
+      vendorName: o.vendorName,
+      priceCents: l.priceCents,
+      basePriceCents: l.priceCents,
+      quantity: l.quantity,
+      taxClass: l.taxClass,
+      optionsText: l.optionsText,
+    })));
+    setCurbPulled({ id: o.id, number: o.number, vehicleColor: o.vehicleColor, customerName: o.customerName });
+    setCurbNumber("");
+  };
+
   const tapFloorItem = async (i: FloorItem) => {
     if (!i.hasOptions) {
       addItemToCart({ id: i.id, sku: i.sku, name: i.name, priceCents: i.priceCents, basePriceCents: i.basePriceCents, vendorName: i.vendorName, taxClass: i.taxClass });
@@ -3353,6 +3391,24 @@ export default function AdminPage() {
       }),
     })); } finally { setBusy(false); }
     if (!ok) { setScanErr(String(data.error || "Sale failed.")); return; }
+
+    /* The money is booked. Tell the kerbside order WHICH sale covered it, so
+       it stops asking to be paid and the stand can hand it over. Deliberately
+       after the sale, never before: if this call fails the till is still
+       right, and the order can be marked from the stand's screen. The sale
+       itself must never be undone by a bookkeeping follow-up. */
+    if (curbPulled) {
+      const pulled = curbPulled;
+      setCurbPulled(null);
+      void safeFetch("/api/admin/curbside", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: pulled.id, saleId: (data.sale as { id: string }).id }),
+      }).then(({ ok: linked }) => {
+        if (!linked) toast.warn(`Order #${pulled.number} was paid`, "Couldn't mark it paid on the stand's screen — tell them.");
+        else toast.success(`Order #${pulled.number} paid`, `${pulled.vehicleColor} car — they can hand it over now.`);
+      });
+    }
+
     setReceipt({ ...(data.sale as Receipt), paymentMethod, lines: cart });
     setCart([]); setCardName(""); setCashConfirm(false);
     loadDrawer(); loadAll(); loadTickets(ticketQ, ticketDrawer?.id || "");
@@ -5109,6 +5165,35 @@ export default function AdminPage() {
                   />
                 )}
               </Field>
+
+              {/* Somebody at the counter saying "order 5021". */}
+              <div className="row wrap g-2" style={{ alignItems: "flex-end" }}>
+                <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                <Field label="Kerbside order paying at the counter">
+                  {(p) => (
+                    <Input
+                      {...p}
+                      className="mono"
+                      inputMode="numeric"
+                      placeholder="5021"
+                      value={curbNumber}
+                      onChange={(e) => setCurbNumber(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void pullCurbside(); }}
+                    />
+                  )}
+                </Field>
+                </div>
+                <Button variant="secondary" icon="receipt" disabled={!curbNumber.trim()} onClick={() => void pullCurbside()}>
+                  Pull it up
+                </Button>
+              </div>
+
+              {curbPulled ? (
+                <Note tone="info" title={`Order #${curbPulled.number} on the ticket`}>
+                  {curbPulled.vehicleColor} car{curbPulled.customerName ? ` · ${curbPulled.customerName}` : ""}. Take the money as
+                  normal — the stand is told it&rsquo;s paid as soon as the sale goes through.
+                </Note>
+              ) : null}
 
               <div className="stack g-2">
                 <Field label="No scanner? Search by item name or code">
@@ -7862,6 +7947,7 @@ export default function AdminPage() {
                     {v.rentFree ? <Badge tone="success" icon="check">Rent free</Badge> : null}
                     {/* Only when it differs from the market's rate — a badge on
                         every vendor would say nothing. */}
+                    {v.curbsideEnabled ? <Badge tone="info" icon="bell">Kerbside</Badge> : null}
                     {v.marketFeePercent === 0 ? (
                       <Badge tone="success" icon="check">No market fee</Badge>
                     ) : typeof v.marketFeePercent === "number" ? (
@@ -7916,6 +8002,45 @@ export default function AdminPage() {
                       <Button size="sm" icon="cash" disabled={busy} onClick={() => ledgerEntry(v, "PAYOUT")}>Record payout</Button>
                       <Button size="sm" icon="edit" disabled={busy} onClick={() => ledgerEntry(v, "ADJUST")}>Adjust balance</Button>
                     </div>
+                  </div>
+
+                  {/* Kerbside: a public ordering link for this stand. Off for
+                      everybody until the office turns it on here. */}
+                  <div className="stack g-2">
+                    <p className="t-label">Kerbside ordering</p>
+                    <div className="row wrap g-2" style={{ alignItems: "center" }}>
+                      <Button
+                        size="sm"
+                        icon={v.curbsideEnabled ? "close" : "bell"}
+                        variant={v.curbsideEnabled ? "dangerSoft" : "secondary"}
+                        disabled={busy}
+                        onClick={async () => {
+                          const turningOn = !v.curbsideEnabled;
+                          const yes = await dialog.confirm({
+                            title: turningOn ? `Let ${v.businessName} take kerbside orders?` : `Stop kerbside orders for ${v.businessName}?`,
+                            body: turningOn
+                              ? "Customers get a public ordering link for this stand — order from the car park, press a button on arrival, somebody brings it out. Orders they've already taken are unaffected."
+                              : "The ordering link stops working. Orders already waiting still need handing over.",
+                            confirmLabel: turningOn ? "Turn it on" : "Turn it off",
+                            tone: turningOn ? "default" : "warn",
+                          });
+                          if (yes) await patchVendor(v.id, { curbsideEnabled: turningOn }, turningOn ? "Kerbside ordering on" : "Kerbside ordering off");
+                        }}
+                      >
+                        {v.curbsideEnabled ? "Turn kerbside off" : "Turn kerbside on"}
+                      </Button>
+                      {v.curbsideEnabled ? (
+                        <LinkButton size="sm" variant="ghost" icon="external" href={`/curb/${v.code}`} external>
+                          Open their ordering page
+                        </LinkButton>
+                      ) : null}
+                    </div>
+                    {v.curbsideEnabled ? (
+                      <p className="t-xs t-muted">
+                        Their link is <span className="mono">/curb/{v.code}</span> — put it on a QR code by the door and in
+                        the car park. They set their own pauses from their portal.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="stack g-2">

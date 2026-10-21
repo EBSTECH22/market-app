@@ -12,7 +12,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return runRoute("admin/vendors/[id] PATCH", async () => {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const body = await req.json();
-    const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean; rentFree?: boolean; marketFeePercent?: number | null } = {};
+    const data: { businessName?: string; contactName?: string; phone?: string; email?: string; commissionPercent?: number; active?: boolean; allowSelfCheckout?: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; curbsideOpenMinute?: number; curbsideCloseMinute?: number; curbsideCutoffMinutes?: number } = {};
     if (typeof body.businessName === "string" && body.businessName.trim()) data.businessName = body.businessName.trim();
     if (typeof body.contactName === "string") data.contactName = body.contactName.trim();
     if (typeof body.phone === "string") data.phone = body.phone.trim();
@@ -31,6 +31,28 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (typeof body.active === "boolean") data.active = body.active;
     if (typeof body.allowSelfCheckout === "boolean") data.allowSelfCheckout = body.allowSelfCheckout;
     if (typeof body.rentFree === "boolean") data.rentFree = body.rentFree;
+
+    /* Kerbside ordering, per stand. Off for everybody until the office turns
+       it on: a public ordering link appearing for a vendor who never asked for
+       one is a worse surprise than not having the feature. */
+    if (typeof body.curbsideEnabled === "boolean") data.curbsideEnabled = body.curbsideEnabled;
+    const minute = (v: unknown, fallback: number): number => {
+      const n = Math.round(Number(v));
+      return Number.isFinite(n) && n >= 0 && n <= 1439 ? n : fallback;
+    };
+    if (body.curbsideOpenMinute !== undefined) data.curbsideOpenMinute = minute(body.curbsideOpenMinute, 480);
+    if (body.curbsideCloseMinute !== undefined) data.curbsideCloseMinute = minute(body.curbsideCloseMinute, 1080);
+    if (body.curbsideCutoffMinutes !== undefined) {
+      const n = Math.round(Number(body.curbsideCutoffMinutes));
+      data.curbsideCutoffMinutes = Number.isFinite(n) && n >= 0 && n <= 240 ? n : 30;
+    }
+    /* Opening after closing would leave the stand shut every minute of the
+       day with nothing on screen to explain why. */
+    const openAt = data.curbsideOpenMinute;
+    const closeAt = data.curbsideCloseMinute;
+    if (openAt !== undefined && closeAt !== undefined && closeAt <= openAt) {
+      return NextResponse.json({ error: "Closing time has to be after opening time." }, { status: 400 });
+    }
 
     /* THE MARKET FEE, FOR THIS VENDOR ALONE.
     

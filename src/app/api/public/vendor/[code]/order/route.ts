@@ -96,6 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
               quantity: l.quantity,
               taxClass: l.taxClass,
               shipCents: l.shipCents,
+              optionsText: l.optionsText || "",
             })),
           },
         },

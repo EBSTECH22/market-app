@@ -52,7 +52,15 @@ export async function finalizeOrder(orderId: string): Promise<FinalizeResult> {
   const claimed = await db.order.updateMany({
     where: { id: order.id, status: "PENDING" },
     data: {
-      status: "PAID",
+      /* A KERBSIDE ORDER DOESN'T STOP AT "PAID".
+      
+         Paid is where a posted or collected order waits for the vendor to pack
+         it. A kerbside order paid on the phone is a drink somebody is driving
+         towards right now, so it joins the queue the moment the money lands —
+         in the same state an order paid inside starts in, so the stand's
+         screen shows one list in one order and never has to care which way
+         each was paid for. */
+      status: order.fulfillment === "CURBSIDE" ? "PLACED" : "PAID",
       paidAt: new Date(),
       shipName: ship?.name || order.customerName,
       shipLine1: addr?.line1 || "",
@@ -74,7 +82,9 @@ export async function finalizeOrder(orderId: string): Promise<FinalizeResult> {
       vendorId: order.vendorId,
       type: "SALE",
       amountCents: order.vendorNetCents,
-      note: `Online order #${order.number}${order.shippingCents ? " (includes shipping)" : ""}`,
+      note: order.fulfillment === "CURBSIDE"
+        ? `Kerbside order #${order.number}`
+        : `Online order #${order.number}${order.shippingCents ? " (includes shipping)" : ""}`,
     },
   });
 
@@ -113,8 +123,10 @@ export async function finalizeOrder(orderId: string): Promise<FinalizeResult> {
   try {
     await pushToVendor(
       order.vendorId,
-      `Online order #${order.number} 🛍️`,
-      `${order.customerName} — ${order.fulfillment === "SHIP" ? "to post" : "for collection"}. $${(order.vendorNetCents / 100).toFixed(2)} to your balance.`
+      order.fulfillment === "CURBSIDE" ? `Kerbside order #${order.number} 🚗` : `Online order #${order.number} 🛍️`,
+      order.fulfillment === "CURBSIDE"
+        ? `${order.vehicleColor || "Car"}${order.customerName ? ` · ${order.customerName}` : ""} · paid.`
+        : `${order.customerName} — ${order.fulfillment === "SHIP" ? "to post" : "for collection"}. $${(order.vendorNetCents / 100).toFixed(2)} to your balance.`
     );
   } catch { /* a notification must never fail an order */ }
 

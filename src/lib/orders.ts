@@ -4,6 +4,7 @@ import { marketFeeFor } from "@/lib/marketfee";
 import { tagCents, cashCents } from "@/lib/cardprice";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
 import { effectivePriceCents } from "@/lib/pricing";
+import { validateSelection, resolveSelection, unitVendorCents, type OptionGroup, type Selection } from "@/lib/itemoptions";
 
 /**
  * Online orders.
@@ -30,7 +31,8 @@ import { effectivePriceCents } from "@/lib/pricing";
  * NOT off the shipping — postage is the vendor's cost and their money.
  */
 
-export type CartRequest = { itemId: string; quantity: number }[];
+/** `options` is group id → chosen option ids, as the ordering page sends them. */
+export type CartRequest = { itemId: string; quantity: number; options?: Record<string, string[]> }[];
 
 export type PricedLine = {
   itemId: string;
@@ -43,6 +45,8 @@ export type PricedLine = {
   /** The vendor's own price for one — what commission and their share are
       worked out on. `priceCents` is the tag price the customer pays. */
   vendorCents: number;
+  /** "Large · Strawberry", frozen onto the line. "" when nothing was asked. */
+  optionsText?: string;
 };
 
 export type PricedCart = {
@@ -75,8 +79,19 @@ const MAX_QTY_PER_LINE = 20;
 export async function priceCart(
   vendorCode: string,
   request: CartRequest,
-  fulfillment: "PICKUP" | "SHIP"
+  fulfillment: "PICKUP" | "SHIP" | "CURBSIDE"
 ): Promise<PriceResult> {
+  /* KERBSIDE IS A DIFFERENT CHANNEL FROM THE WEB SHOP, and the difference is
+     the stock.
+
+     Everything above is about selling to somebody who isn't in the building,
+     which is why it draws on `onlineQuantity` and refuses when that pool runs
+     out. Kerbside is somebody in the car park, served by a stand that makes
+     each order when it comes in: there is no pool, and demanding one would
+     mean the stand setting stock aside every morning for a shelf that doesn't
+     exist. So kerbside prices from the menu, takes no stock, and needs no
+     `onlineEnabled` flag — an item is orderable because the stand sells it. */
+  const curbside = fulfillment === "CURBSIDE";
   const vendor = await db.vendor.findFirst({
     where: { code: vendorCode.toUpperCase(), active: true, portalLocked: false },
     select: { id: true, code: true, businessName: true, commissionPercent: true, marketFeePercent: true },
@@ -87,7 +102,19 @@ export async function priceCart(
   if (!wanted.length) return { ok: false, error: "Your basket is empty." };
 
   const items = await db.item.findMany({
-    where: { id: { in: wanted.map((l) => l.itemId) }, vendorId: vendor.id, active: true, onlineEnabled: true },
+    where: {
+      id: { in: wanted.map((l) => l.itemId) },
+      vendorId: vendor.id,
+      active: true,
+      ...(curbside ? {} : { onlineEnabled: true }),
+    },
+    include: {
+      optionGroups: {
+        where: { active: true },
+        include: { options: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      },
+    },
   });
 
   const lines: PricedLine[] = [];
@@ -103,7 +130,7 @@ export async function priceCart(
     if (!item) return { ok: false, error: "Something in your basket isn't available online any more." };
 
     const qty = Math.max(1, Math.min(MAX_QTY_PER_LINE, Math.round(Number(w.quantity) || 1)));
-    if (item.onlineQuantity < qty) {
+    if (!curbside && item.onlineQuantity < qty) {
       return {
         ok: false,
         error: item.onlineQuantity <= 0
@@ -111,22 +138,34 @@ export async function priceCart(
           : `Only ${item.onlineQuantity} of ${item.name} left online.`,
       };
     }
-    if (fulfillment === "SHIP" && !item.onlineShip) {
+    if (!curbside && fulfillment === "SHIP" && !item.onlineShip) {
       return { ok: false, error: `${item.name} isn't available to post — it's pickup at the market only.` };
     }
-    if (fulfillment === "PICKUP" && !item.onlinePickup) {
+    if (!curbside && fulfillment === "PICKUP" && !item.onlinePickup) {
       return { ok: false, error: `${item.name} is posted rather than collected.` };
     }
+
+    /* The choices move the vendor's price; the fee and the card percentage go
+       on top afterwards, exactly as at the till. */
+    const groups = item.optionGroups as unknown as OptionGroup[];
+    const picked = (w.options || {}) as Selection;
+    if (groups.length) {
+      const problem = validateSelection(groups, picked);
+      if (problem) return { ok: false, error: `${item.name}: ${problem}` };
+    }
+    const resolved = resolveSelection(groups, picked);
+    const vendorUnit = unitVendorCents(effectivePriceCents(item), resolved.deltaCents);
 
     lines.push({
       itemId: item.id,
       name: item.name,
       unitLabel: item.unitLabel,
-      priceCents: tagCents(cashCents(effectivePriceCents(item), feePercent), cardPercent),
-      vendorCents: effectivePriceCents(item),
+      priceCents: tagCents(cashCents(vendorUnit, feePercent), cardPercent),
+      vendorCents: vendorUnit,
       quantity: qty,
       taxClass: normalizeTaxClass(item.taxClass),
-      shipCents: Math.max(0, item.shipCents || 0),
+      shipCents: curbside ? 0 : Math.max(0, item.shipCents || 0),
+      optionsText: resolved.text,
     });
   }
 

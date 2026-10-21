@@ -5,7 +5,7 @@ import { usePulse } from "@/lib/usePulse";
 import {
   Icon, Button, IconButton, LinkButton, Field, Input, MoneyInput, Select, Textarea, Checkbox,
   Modal, Panel, useDialog, useToast, DataTable, Badge, Card, Stat, EmptyState,
-  Note, Skeleton, SkeletonStats, PageHeader, type Column, type IconName,
+  Note, Skeleton, SkeletonCard, SkeletonStats, PageHeader, type Column, type IconName,
 } from "@/components/ui";
 import { money, fmtDate, fmtDateTime, fmtTime, plural } from "@/lib/format";
 import { useHashTab } from "@/lib/useHashTab";
@@ -93,6 +93,18 @@ function BoothMap({ spots }: { spots: BoothSpot[] }) {
   );
 }
 
+type CurbOrder = {
+  id: string; number: number; status: string; createdAt: string; paidAt: string | null;
+  arrivedAt: string | null; handedOverAt: string | null; handedOverBy: string;
+  totalCents: number; vehicleColor: string; customerName: string; customerPhone: string; note: string; saleId: string;
+  lines: { name: string; quantity: number; optionsText: string; priceCents: number }[];
+};
+type CurbScreen = {
+  enabled: boolean; open: boolean; reason: string; pausedUntil: string | null;
+  hours: { open: string; close: string; lastOrder: string } | null;
+  live: CurbOrder[]; done: CurbOrder[];
+};
+
 type OptChoice = { id: string; name: string; priceDeltaCents: number; soldOut: boolean; active: boolean; sortOrder: number };
 type OptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; active: boolean; sortOrder: number; options: OptChoice[] };
 
@@ -120,12 +132,13 @@ type VOrder = {
 /* Tabs live in the URL hash so refresh, back/forward and shared links all work.
    They used to sit in plain useState, so a reload always dumped a vendor back
    on Home and there was no way to link anyone to a section. */
-const VENDOR_TABS = ["home", "items", "orders", "insights", "inbox", "messages", "page", "money", "chat", "settings"] as const;
+const VENDOR_TABS = ["home", "items", "curbside", "orders", "insights", "inbox", "messages", "page", "money", "chat", "settings"] as const;
 type VendorTab = (typeof VENDOR_TABS)[number];
 
 const TAB_META: Record<VendorTab, { label: string; icon: IconName; sub: string }> = {
   home: { label: "Home", icon: "store", sub: "Your booth at a glance" },
   items: { label: "My items", icon: "box", sub: "Prices, stock, sales, and barcode labels" },
+  curbside: { label: "Kerbside", icon: "bell", sub: "Orders waiting to go out to the car park" },
   orders: { label: "Online orders", icon: "receipt", sub: "What people have bought from your page — pack it, send it, hand it over" },
   insights: { label: "What's working", icon: "chart", sub: "What sells, what's stuck, and what's about to run out" },
   inbox: { label: "Inbox", icon: "inbox", sub: "Pre-orders, requests, and complaints from customers" },
@@ -302,6 +315,12 @@ export default function VendorDashboard() {
   /* The questions an item asks when it's ordered. Loaded only when an item is
      opened — most items have none, and putting them on every item in the
      portal payload would make the common case pay for the rare one. */
+  /* The kerbside screen. Polled while the tab is open, because the stand is
+     looking at a propped-up phone and nobody is going to press refresh. */
+  const [curb, setCurb] = useState<CurbScreen | null>(null);
+  const [curbBusy, setCurbBusy] = useState(false);
+  const [curbErr, setCurbErr] = useState("");
+
   const [optGroups, setOptGroups] = useState<OptGroup[]>([]);
   const [optBusy, setOptBusy] = useState(false);
   const [optErr, setOptErr] = useState("");
@@ -419,6 +438,37 @@ export default function VendorDashboard() {
   /* Loaded on demand rather than up front — both scan a vendor's whole sales
      history, and most visits to the portal are "did anything sell". */
   useEffect(() => { if (tab === "insights") { void loadStats(); void loadBench(); } }, [tab, loadStats, loadBench]);
+
+  /* ------------------------------------------------------ kerbside ------ */
+  const loadCurb = useCallback(async () => {
+    try {
+      const r = await fetch("/api/vendor/curbside");
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { setCurb(d); setCurbErr(""); }
+    } catch { /* the next tick will try again */ }
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "curbside") return;
+    void loadCurb();
+    const t = setInterval(() => void loadCurb(), 8000);
+    return () => clearInterval(t);
+  }, [tab, loadCurb]);
+
+  const curbPatch = async (body: object) => {
+    setCurbBusy(true);
+    setCurbErr("");
+    try {
+      const r = await fetch("/api/vendor/curbside", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setCurbErr(String(d.error || "That didn't go through.")); return; }
+      setCurb(d);
+    } catch {
+      setCurbErr("That didn't reach the market — check your signal.");
+    } finally { setCurbBusy(false); }
+  };
   useEffect(() => { if (tab === "money" && !statement) void loadStatement(); }, [tab, statement, loadStatement]);
 
   /* ---- getting paid ---------------------------------------------------- */
@@ -1757,6 +1807,147 @@ export default function VendorDashboard() {
                   <li className="t-sm">Collection orders wait at the market counter once you mark them ready. Staff hand over what you&rsquo;ve labelled; they don&rsquo;t pack for you.</li>
                 </ul>
               </Card>
+            </div>
+          )}
+
+          {tab === "curbside" && (
+            <div className="stack g-4">
+              {!curb ? (
+                <SkeletonCard />
+              ) : !curb.enabled ? (
+                <Card title="Kerbside ordering">
+                  <div className="card-body">
+                    <EmptyState
+                      icon="bell"
+                      title="Not switched on"
+                      body="The market office turns this on for stands that take orders out to the car park. Ask them if you'd like it."
+                    />
+                  </div>
+                </Card>
+              ) : (
+                <>
+                  <Card
+                    title={curb.open ? "Taking orders" : "Not taking orders"}
+                    subtitle={curb.hours ? `${curb.hours.open} to ${curb.hours.close} · last orders ${curb.hours.lastOrder}` : undefined}
+                    actions={curb.open ? <Badge tone="success" dot>Open</Badge> : <Badge tone="warn" dot>Closed</Badge>}
+                  >
+                    <div className="card-body stack g-3">
+                      {!curb.open ? <Note tone="warn">{curb.reason}</Note> : null}
+                      {curbErr ? <Note tone="error">{curbErr}</Note> : null}
+                      {/* A one-person stand has to be able to stop the queue
+                          without closing for the day. */}
+                      <div className="row wrap g-2">
+                        {curb.pausedUntil ? (
+                          <Button variant="primary" icon="check" disabled={curbBusy} onClick={() => void curbPatch({ pauseMinutes: 0 })}>
+                            Start taking orders again
+                          </Button>
+                        ) : (
+                          <>
+                            <Button variant="secondary" disabled={curbBusy} onClick={() => void curbPatch({ pauseMinutes: 15 })}>
+                              Pause 15 minutes
+                            </Button>
+                            <Button variant="secondary" disabled={curbBusy} onClick={() => void curbPatch({ pauseMinutes: 30 })}>
+                              Pause 30 minutes
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+
+                  <Card title="Waiting" subtitle={`${plural(curb.live.length, "order")} on the go`}>
+                    <div className="card-body stack g-3">
+                      {curb.live.length === 0 ? (
+                        <EmptyState icon="check" title="Nothing waiting" body="New orders land here and buzz your phone." />
+                      ) : (
+                        curb.live.map((o) => (
+                          <div key={o.id} className="stack g-3" style={{ padding: "var(--sp-3)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                            <div className="row between wrap g-2" style={{ alignItems: "center" }}>
+                              <div className="row g-2" style={{ alignItems: "center", minWidth: 0 }}>
+                                <b>#{o.number}</b>
+                                <Badge tone="neutral">{o.status === "PLACED" ? "New" : o.status === "ACCEPTED" ? "Making" : "Ready"}</Badge>
+                                {/* Payment is its own state, beside how far
+                                    along the drink is — never folded into it. */}
+                                {o.paidAt ? <Badge tone="success" dot>Paid</Badge> : <Badge tone="warn" dot>Unpaid</Badge>}
+                                {o.arrivedAt ? <Badge tone="info" dot>Outside now</Badge> : null}
+                              </div>
+                              <b className="num">{money(o.totalCents)}</b>
+                            </div>
+
+                            <div className="stack g-1">
+                              {o.lines.map((l, i) => (
+                                <span key={i} className="t-sm">
+                                  {l.quantity}× {l.name}
+                                  {l.optionsText ? <b> · {l.optionsText}</b> : null}
+                                </span>
+                              ))}
+                            </div>
+
+                            <span className="t-xs t-muted">
+                              {o.vehicleColor} car{o.customerName ? ` · ${o.customerName}` : ""}{o.customerPhone ? ` · ${o.customerPhone}` : ""}
+                              {o.note ? ` · "${o.note}"` : ""}
+                            </span>
+
+                            <div className="row wrap g-2">
+                              {o.status === "PLACED" ? (
+                                <Button size="sm" variant="primary" disabled={curbBusy} onClick={() => void curbPatch({ orderId: o.id, to: "ACCEPTED" })}>
+                                  Start making it
+                                </Button>
+                              ) : null}
+                              {o.status === "ACCEPTED" ? (
+                                <Button size="sm" variant="primary" disabled={curbBusy} onClick={() => void curbPatch({ orderId: o.id, to: "READY" })}>
+                                  Ready
+                                </Button>
+                              ) : null}
+                              {o.status === "READY" ? (
+                                <Button
+                                  size="sm"
+                                  variant="primary"
+                                  icon="check"
+                                  disabled={curbBusy || (!o.paidAt && !o.saleId)}
+                                  onClick={() => void curbPatch({ orderId: o.id, to: "COLLECTED" })}
+                                >
+                                  Handed over
+                                </Button>
+                              ) : null}
+                              <Button size="sm" variant="ghost" disabled={curbBusy} onClick={() => void curbPatch({ orderId: o.id, to: "NO_SHOW" })}>
+                                Nobody came
+                              </Button>
+                              <Button size="sm" variant="dangerSoft" disabled={curbBusy} onClick={() => void curbPatch({ orderId: o.id, to: "CANCELLED" })}>
+                                Cancel
+                              </Button>
+                            </div>
+
+                            {o.status === "READY" && !o.paidAt && !o.saleId ? (
+                              <Note tone="warn">
+                                Not paid yet — the register has to ring it up before it can go out.
+                              </Note>
+                            ) : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </Card>
+
+                  {curb.done.length > 0 ? (
+                    <Card title="Done today" subtitle={plural(curb.done.length, "order")}>
+                      <div className="card-body stack g-2">
+                        {curb.done.map((o) => (
+                          <div key={o.id} className="row between g-3">
+                            <span className="t-sm truncate">
+                              #{o.number} · {o.vehicleColor} car
+                              {o.handedOverBy ? <span className="t-muted"> · handed over by {o.handedOverBy}</span> : null}
+                            </span>
+                            <Badge tone={o.status === "COLLECTED" ? "success" : "neutral"}>
+                              {o.status === "COLLECTED" ? "Collected" : o.status === "NO_SHOW" ? "Nobody came" : "Cancelled"}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ) : null}
+                </>
+              )}
             </div>
           )}
 

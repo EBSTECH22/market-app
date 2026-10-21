@@ -51,6 +51,20 @@ model Vendor {
   /// market rate yet", and the day the market rate moved, every vendor would
   /// silently stay behind.
   marketFeePercent Float?
+  /// ---- kerbside ordering -------------------------------------------------
+  /// Off for everybody until the office turns it on. One stand inside the
+  /// building takes orders to the car park; nobody else should suddenly
+  /// appear to.
+  curbsideEnabled Boolean @default(false)
+  /// Minutes past midnight, market time. 480 is 8am, 1080 is 6pm.
+  curbsideOpenMinute  Int @default(480)
+  curbsideCloseMinute Int @default(1080)
+  /// How long before closing new orders stop. The last drink still has to be
+  /// made, handed over and paid for.
+  curbsideCutoffMinutes Int @default(30)
+  /// "Back in fifteen minutes." A one-person stand needs to be able to stop
+  /// the queue without closing for the day.
+  curbsidePausedUntil DateTime?
 
   stripeCustomerId String  @default("")
   stripePmId       String  @default("")
@@ -892,7 +906,7 @@ model Order {
   /// Anything the customer typed at checkout — "leave with the neighbour".
   note           String   @default("")
 
-  /// PICKUP | SHIP
+  /// PICKUP | SHIP | CURBSIDE
   fulfillment    String   @default("PICKUP")
   /// Captured by Stripe at checkout for shipped orders; empty for pickup.
   shipName       String   @default("")
@@ -916,6 +930,15 @@ model Order {
   /// PENDING → PAID → PACKED → READY → COLLECTED (pickup)
   ///                        → SHIPPED (post)
   /// plus EXPIRED (never paid) and CANCELLED / REFUNDED.
+  ///
+  /// CURBSIDE runs PLACED → ACCEPTED → READY → COLLECTED, plus NO_SHOW.
+  /// It never passes through PENDING once it is live, which matters: PENDING
+  /// means "a checkout nobody has completed", and `expireOrder` sweeps those
+  /// away to put the stock back. A kerbside order being paid for inside is
+  /// deliberately unpaid and entirely real, so it must never wear that state.
+  /// Payment is `paidAt`, preparation is this field, and arrival is
+  /// `arrivedAt` — three things that move independently and would fight each
+  /// other if they shared one column.
   status         String   @default("PENDING")
   /// The customer's own link to their order. Long and random — it is the only
   /// thing standing between a stranger and somebody's delivery address.
@@ -923,6 +946,21 @@ model Order {
   stripeSessionId String  @default("")
   carrier        String   @default("")
   trackingNumber String   @default("")
+
+  /// ---- kerbside ---------------------------------------------------------
+  /// What to look for in the car park. Colour alone, because it is the one
+  /// thing somebody can answer without getting out of the car and the one
+  /// thing that is still true when they have borrowed their mother's car.
+  vehicleColor   String   @default("")
+  /// They pressed "I'm here". Independent of how far along the drink is: an
+  /// order can arrive before it is ready, or long after.
+  arrivedAt      DateTime?
+  /// Who carried it out, and when. The one thing a customer will dispute.
+  handedOverAt   DateTime?
+  handedOverBy   String   @default("")
+  /// Set when the order is paid at the register instead of on the phone, so
+  /// the money is booked once, as a till sale, and this order stops asking.
+  saleId         String   @default("")
 
   createdAt      DateTime @default(now())
   paidAt         DateTime?
