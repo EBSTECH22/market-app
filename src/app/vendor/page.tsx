@@ -3730,9 +3730,30 @@ export default function VendorDashboard() {
                       {/* Where it lives, so removing one is never a surprise. */}
                       {g.vendorId ? <Badge tone="info">On every item</Badge> : <Badge tone="neutral">This item only</Badge>}
                       <Badge tone={g.required ? "warn" : "neutral"}>{g.required ? "Must choose" : "Optional"}</Badge>
-                      {g.maxChoices > 1 ? <Badge tone="neutral">Up to {g.maxChoices}</Badge> : null}
+                      <Badge tone="neutral">{g.maxChoices > 1 ? "Pick several" : "Pick one"}</Badge>
                     </div>
                     <div className="row g-2">
+                      {/* HOW MANY THEY MAY PICK.
+                          Every question was built single-answer, which is
+                          right for Size and wrong for Extras — somebody adding
+                          two syrups could only ever have one. */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={optBusy}
+                        onClick={() =>
+                          void optCall(editing.id, "PATCH", {
+                            kind: "group", id: g.id,
+                            maxChoices: g.maxChoices > 1 ? 1 : 99,
+                            /* Many-answer questions are almost never
+                               compulsory, and a required one with no minimum
+                               would refuse every order. */
+                            ...(g.maxChoices > 1 ? {} : { required: false, minChoices: 0 }),
+                          })
+                        }
+                      >
+                        {g.maxChoices > 1 ? "Only one" : "Allow several"}
+                      </Button>
                       <Button
                         size="sm"
                         variant="ghost"

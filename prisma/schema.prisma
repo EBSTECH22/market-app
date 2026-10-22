@@ -1271,3 +1271,26 @@ model JobApplication {
 
   @@index([status, createdAt])
 }
+
+/// A day the market did not open.
+///
+/// Rent is charged for a whole month on the 1st, which is right when the
+/// market keeps its normal hours and wrong the month a water main goes or it
+/// snows for three days. The market credits those days back, and until now
+/// that meant working out a fraction of each vendor's rent by hand and typing
+/// an adjustment per vendor — which is slow, easy to get wrong, and leaves
+/// nothing saying WHY the adjustment was there.
+///
+/// One row per closed day, entered once, and every vendor's credit falls out
+/// of it.
+model MarketClosure {
+  id        String   @id @default(cuid())
+  /// YYYY-MM-DD, market time. A day, not an instant — stored as text so it
+  /// cannot drift across a timezone or a daylight-saving boundary.
+  day       String   @unique
+  reason    String   @default("")
+  createdAt DateTime @default(now())
+  createdBy String   @default("")
+
+  @@index([day])
+}

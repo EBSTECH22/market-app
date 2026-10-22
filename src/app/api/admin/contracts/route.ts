@@ -35,8 +35,11 @@ export async function GET() {
   const rentPaid = new Map<string, number>();
   for (const row of byType) {
     const cents = row._sum.amountCents || 0;
-    // RENT is stored negative (a debit); RENT_PAYMENT is a credit.
-    if (row.type === "RENT") rentCharged.set(row.vendorId, (rentCharged.get(row.vendorId) || 0) + Math.abs(cents));
+    /* RENT is stored negative (a debit); RENT_PAYMENT is a credit. Negated
+       rather than made absolute, because a RENT line can also be a credit
+       AGAINST the month's rent — a closed-day credit is one — and taking the
+       absolute value of the sum would add that credit to what was charged. */
+    if (row.type === "RENT") rentCharged.set(row.vendorId, (rentCharged.get(row.vendorId) || 0) - cents);
     else rentPaid.set(row.vendorId, (rentPaid.get(row.vendorId) || 0) + cents);
   }
 

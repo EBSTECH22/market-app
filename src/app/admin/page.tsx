@@ -158,7 +158,7 @@ type RentLedger = {
   offers?: { key: string; name: string; unlimited: boolean }[];
 };
 
-const BANK_VIEWS = ["collections", "coming", "paid", "payouts"] as const;
+const BANK_VIEWS = ["collections", "coming", "paid", "monthend", "payouts"] as const;
 type BankView = (typeof BANK_VIEWS)[number];
 
 type BankState = {
@@ -525,6 +525,507 @@ function UpcomingMoney({
         </div>
       </div>
     </Card>
+  );
+}
+
+/* ---- what you owe each vendor on the 15th -------------------------------- */
+
+type StatementRow = {
+  vendorId: string; vendorCode: string; vendorName: string;
+  salesGrossCents: number; marketShareCents: number; salesNetCents: number; refundsCents: number;
+  rentChargedCents: number; closureCreditCents: number; rentPaidCents: number;
+  adjustmentsCents: number; paidOutCents: number; otherCents: number;
+  openingBalanceCents: number; closingBalanceCents: number; dueCents: number;
+};
+type Statement = {
+  month: string;
+  totalDays: number;
+  closedDays: number;
+  closures: { id: string; day: string; reason: string }[];
+  creditsPosted: boolean;
+  rows: StatementRow[];
+  totals: {
+    salesGrossCents: number; marketShareCents: number; rentChargedCents: number;
+    closureCreditCents: number; dueCents: number; owedToMarketCents: number;
+  };
+};
+
+/** The month a statement is being written for right now. */
+function statementMonth(now: Date, payoutDay: number): string {
+  /* Rent and sales for a month are settled on the NEXT month's payout day. So
+     before that day the question on the office's mind is last month; after it,
+     this month. Guessing the other way means opening the screen and seeing a
+     month that was already paid. */
+  const d = new Date(now);
+  if (d.getDate() <= Math.max(1, Math.min(28, payoutDay || 15))) d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** "2026-09" → "September 2026". Plain text, because this is read aloud. */
+function monthLabel(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  if (!y || !m) return month;
+  return `${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][m - 1]} ${y}`;
+}
+
+/**
+ * ONE NUMBER PER VENDOR, and the arithmetic that got there.
+ *
+ * The payout screen answers "what is their balance", which is a lifetime
+ * figure sitting next to a period's sales — two different things in one row,
+ * and the reason nobody could tell what a month came to. This screen answers
+ * the question actually asked on the 15th: for THIS month, what did their
+ * goods sell for, what was the market's share, what rent were they charged,
+ * what comes back for the days the doors stayed shut, and what is the cheque.
+ *
+ * Nothing here writes to a ledger except the one button that says it does.
+ */
+function MonthEndStatement({
+  payoutDay, busy, onPosted,
+}: {
+  payoutDay: number;
+  busy: boolean;
+  onPosted: () => void;
+}) {
+  const [month, setMonth] = useState(() => statementMonth(new Date(), payoutDay));
+  const [data, setData] = useState<Statement | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [working, setWorking] = useState(false);
+  const [newDay, setNewDay] = useState("");
+  const [newReason, setNewReason] = useState("");
+  const [showWorking, setShowWorking] = useState(false);
+  const [detail, setDetail] = useState<StatementRow | null>(null);
+
+  const load = useCallback(async (m: string) => {
+    setLoading(true);
+    setErr("");
+    try {
+      const r = await fetch(`/api/admin/monthend?month=${encodeURIComponent(m)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(String(d.error || "Couldn't load that month.")); setData(null); }
+      else setData(d as Statement);
+    } catch {
+      setErr("Couldn't reach the server.");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(month); }, [month, load]);
+
+  const closureCall = async (method: "POST" | "DELETE", body: Record<string, unknown>) => {
+    setWorking(true);
+    setErr("");
+    try {
+      const r = await fetch("/api/admin/closures", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(String(d.error || "That didn't save."));
+      else await load(month);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const postCredits = async () => {
+    setWorking(true);
+    setErr("");
+    try {
+      const r = await fetch("/api/admin/monthend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(String(d.error || "Couldn't post the credits."));
+      else { setData(d as Statement); onPosted(); }
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const running = month >= thisMonth;
+  const payDay = Math.max(1, Math.min(28, payoutDay || 15));
+  /* The month after the one on screen — when this gets paid. */
+  const payLabel = (() => {
+    const [y, m] = month.split("-").map(Number);
+    const d = new Date(Date.UTC(y, m, 1));
+    return `${["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][d.getUTCMonth()]} ${payDay}`;
+  })();
+
+  const openDays = data ? data.totalDays - data.closedDays : 0;
+
+  const columns: Column<StatementRow>[] = [
+    {
+      key: "vendor",
+      header: "Vendor",
+      primary: true,
+      sortBy: (r) => r.vendorName,
+      cell: (r) => (
+        <div className="stack g-0">
+          <b>{r.vendorName}</b>
+          <span className="t-dim t-sm">{r.vendorCode}</span>
+        </div>
+      ),
+    },
+    {
+      key: "sales",
+      header: "Their sales",
+      align: "right",
+      sortBy: (r) => r.salesNetCents,
+      cell: (r) => (
+        <div className="stack g-0" style={{ alignItems: "flex-end" }}>
+          <span className="num">{money(r.salesNetCents)}</span>
+          {r.salesGrossCents ? (
+            <span className="t-dim t-sm num">{money(r.salesGrossCents)} rung up</span>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "share",
+      header: "Market's share",
+      align: "right",
+      sortBy: (r) => r.marketShareCents,
+      cell: (r) => <span className="num t-dim">{r.marketShareCents ? money(r.marketShareCents) : "—"}</span>,
+    },
+    {
+      key: "rent",
+      header: "Rent",
+      align: "right",
+      sortBy: (r) => r.rentChargedCents,
+      cell: (r) => <span className="num">{r.rentChargedCents ? `−${money(r.rentChargedCents)}` : "—"}</span>,
+    },
+    {
+      key: "credit",
+      header: "Closed days back",
+      align: "right",
+      sortBy: (r) => r.closureCreditCents,
+      cell: (r) => (
+        <span className="num" style={{ color: r.closureCreditCents ? "var(--success-fg, inherit)" : undefined }}>
+          {r.closureCreditCents ? `+${money(r.closureCreditCents)}` : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "before",
+      header: "Carried in",
+      align: "right",
+      hideBelow: 1100,
+      sortBy: (r) => r.openingBalanceCents,
+      cell: (r) => <span className="num t-dim">{r.openingBalanceCents ? money(r.openingBalanceCents) : "—"}</span>,
+    },
+    {
+      key: "paid",
+      header: "Already paid",
+      align: "right",
+      hideBelow: 1100,
+      sortBy: (r) => r.paidOutCents,
+      cell: (r) => <span className="num t-dim">{r.paidOutCents ? `−${money(r.paidOutCents)}` : "—"}</span>,
+    },
+    {
+      key: "due",
+      header: running ? "So far" : `Pay on the ${payDay}th`,
+      align: "right",
+      sortBy: (r) => r.dueCents,
+      cell: (r) =>
+        r.closingBalanceCents < 0 ? (
+          <Badge tone="warn">owes {money(-r.closingBalanceCents)}</Badge>
+        ) : (
+          <b className="num">{money(r.dueCents)}</b>
+        ),
+    },
+  ];
+
+  return (
+    <div className="stack g-4">
+      <Card
+        title={`What you owe for ${monthLabel(month)}`}
+        subtitle={
+          running
+            ? `This month is still running — the figures move as sales come in. Paid out on ${payLabel}.`
+            : `Paid out on ${payLabel}.`
+        }
+        actions={
+          <Field label="Month">
+            {(p) => (
+              <Input
+                {...p}
+                type="month"
+                value={month}
+                max={thisMonth}
+                onChange={(e) => setMonth(e.target.value || month)}
+                style={{ width: 170 }}
+              />
+            )}
+          </Field>
+        }
+      >
+        <div className="stack g-4">
+          {err ? <Note tone="error">{err}</Note> : null}
+
+          {loading ? (
+            <SkeletonStats />
+          ) : data ? (
+            <>
+              <div className="stats">
+                <Stat
+                  feature
+                  label={running ? "Owed so far" : `Due on the ${payDay}th`}
+                  value={money(data.totals.dueCents)}
+                  sub={`${plural(data.rows.filter((r) => r.dueCents > 0).length, "vendor")} to pay`}
+                  icon="dollar"
+                />
+                <Stat
+                  label="Their sales"
+                  value={money(data.totals.salesGrossCents - data.totals.marketShareCents)}
+                  sub={`${money(data.totals.salesGrossCents)} rung up`}
+                />
+                <Stat
+                  label="Rent charged"
+                  value={money(data.totals.rentChargedCents)}
+                  sub={
+                    data.totals.closureCreditCents
+                      ? `less ${money(data.totals.closureCreditCents)} for closed days`
+                      : "no closed days credited"
+                  }
+                  icon="bank"
+                />
+                <Stat
+                  label="Days open"
+                  value={`${openDays} of ${data.totalDays}`}
+                  sub={data.closedDays ? `${plural(data.closedDays, "day")} closed` : "open every day"}
+                />
+                {data.totals.owedToMarketCents ? (
+                  <Stat
+                    label="Owing the market"
+                    value={money(data.totals.owedToMarketCents)}
+                    sub={`${plural(data.rows.filter((r) => r.closingBalanceCents < 0).length, "vendor")} behind`}
+                  />
+                ) : null}
+              </div>
+
+              {/* The sum, written out. Somebody is going to be asked how the
+                  number was arrived at, and "the app said so" is not an
+                  answer a vendor accepts. */}
+              <div className="stack g-2">
+                <button
+                  type="button"
+                  className="link-quiet"
+                  onClick={() => setShowWorking((v) => !v)}
+                  style={{ alignSelf: "flex-start", background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--muted)" }}
+                >
+                  {showWorking ? "Hide how this adds up" : "How does this add up?"}
+                </button>
+                {showWorking ? (
+                  <Note tone="info">
+                    For each vendor: <b>what their goods rang up</b> less <b>the market&rsquo;s share</b> gives their
+                    sales. Take off <b>the month&rsquo;s rent</b>, add back <b>a day&rsquo;s rent for every day the
+                    market didn&rsquo;t open</b>, add anything <b>carried in</b> from before, take off anything
+                    <b> already paid</b> this month — and that is the cheque. A vendor whose rent came to more than
+                    they sold shows as owing instead, and nothing is paid to them. <b>Tap any vendor</b> to see their
+                    month written out line by line.
+                  </Note>
+                ) : null}
+              </div>
+
+              <DataTable
+                rows={data.rows}
+                columns={columns}
+                rowKey={(r) => r.vendorId}
+                mobileCards
+                dense
+                onRowClick={(r) => setDetail(r)}
+                defaultSort={{ key: "due", dir: "desc" }}
+                empty={
+                  <EmptyState
+                    icon="dollar"
+                    title={`Nothing on the books for ${monthLabel(month)}`}
+                    body="No sales, no rent and no balances in that month. Pick another month above."
+                  />
+                }
+              />
+            </>
+          ) : null}
+        </div>
+      </Card>
+
+      {/* ---- the days the doors stayed shut --------------------------------- */}
+      <Card
+        title="Days the market wasn't open"
+        subtitle="Enter them here and every vendor gets that share of the month's rent back."
+      >
+        <div className="stack g-4">
+          <div className="row wrap g-3 items-end">
+            <Field label="Day closed" className="grow">
+              {(p) => (
+                <Input
+                  {...p}
+                  type="date"
+                  value={newDay}
+                  onChange={(e) => setNewDay(e.target.value)}
+                  style={{ maxWidth: 190 }}
+                />
+              )}
+            </Field>
+            <Field label="Why" className="grow" hint="Optional — it shows on the vendor's statement.">
+              {(p) => (
+                <Input
+                  {...p}
+                  value={newReason}
+                  placeholder="Ice storm"
+                  maxLength={120}
+                  onChange={(e) => setNewReason(e.target.value)}
+                />
+              )}
+            </Field>
+            <Button
+              icon="plus"
+              disabled={busy || working || !newDay}
+              onClick={async () => {
+                await closureCall("POST", { day: newDay, reason: newReason });
+                setNewDay("");
+                setNewReason("");
+              }}
+            >
+              Mark closed
+            </Button>
+          </div>
+
+          {data?.closures.length ? (
+            <div className="stack g-2">
+              {data.closures.map((c) => (
+                <div
+                  key={c.id}
+                  className="row g-3 items-center"
+                  style={{ justifyContent: "space-between", borderBottom: "1px solid var(--border)", paddingBottom: "var(--sp-2)" }}
+                >
+                  <div className="stack g-0">
+                    <b>{fmtDateShort(c.day)}</b>
+                    {c.reason ? <span className="t-dim t-sm">{c.reason}</span> : null}
+                  </div>
+                  <IconButton
+                    icon="close"
+                    label={`${fmtDateShort(c.day)} was open after all`}
+                    disabled={busy || working}
+                    onClick={() => void closureCall("DELETE", { day: c.day })}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Note tone="info">
+              No closed days recorded for {monthLabel(month)}. Everybody is being charged the full month&rsquo;s rent.
+            </Note>
+          )}
+
+          {/* POSTING IS A SEPARATE, DELIBERATE ACT. Opening this screen to
+              look at a figure must never change what a vendor owes — the
+              office will look at it a dozen times before the 15th. */}
+          {data && data.closedDays > 0 ? (
+            data.creditsPosted ? (
+              <Note tone="success">
+                The closed-day credits for {monthLabel(month)} are on the vendors&rsquo; ledgers. The figures above
+                include them.
+              </Note>
+            ) : (
+              <div className="stack g-3" style={{ borderTop: "1px solid var(--border)", paddingTop: "var(--sp-4)" }}>
+                <Note tone="warn">
+                  The credit above is worked out but <b>not yet on anybody&rsquo;s ledger</b>. Post it once, when the
+                  month is finished — about <b>{money(data.totals.closureCreditCents)}</b> across{" "}
+                  {plural(data.rows.filter((r) => r.closureCreditCents > 0).length, "vendor")}. Pressing it twice is
+                  harmless.
+                </Note>
+                <Button
+                  variant="primary"
+                  icon="check"
+                  disabled={busy || working || data.totals.closureCreditCents === 0}
+                  onClick={() => void postCredits()}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  Post the closed-day credits
+                </Button>
+              </div>
+            )
+          ) : null}
+        </div>
+      </Card>
+
+      {/* One vendor's month, written out the way it would be on paper. This is
+          what gets read down the phone when somebody asks why the cheque is
+          the size it is. */}
+      <Modal
+        open={!!detail}
+        onClose={() => setDetail(null)}
+        title={detail ? `${detail.vendorName} — ${monthLabel(month)}` : ""}
+        description={detail ? detail.vendorCode : undefined}
+        width="md"
+        footer={<Button onClick={() => setDetail(null)}>Close</Button>}
+      >
+        {detail ? (
+          <DescList
+            items={[
+              { label: "Rang up at the till", value: <span className="num">{money(detail.salesGrossCents)}</span> },
+              {
+                label: "Less the market's share",
+                value: <span className="num">{detail.marketShareCents ? `−${money(detail.marketShareCents)}` : "—"}</span>,
+              },
+              { label: "Their sales", value: <b className="num">{money(detail.salesNetCents)}</b> },
+              ...(detail.refundsCents
+                ? [{ label: "Refunds given back", value: <span className="num">−{money(detail.refundsCents)}</span> }]
+                : []),
+              { label: "Rent for the month", value: <span className="num">{detail.rentChargedCents ? `−${money(detail.rentChargedCents)}` : "—"}</span> },
+              ...(detail.closureCreditCents
+                ? [{
+                    label: `Credit for ${plural(data?.closedDays || 0, "closed day")}`,
+                    value: <span className="num">+{money(detail.closureCreditCents)}</span>,
+                  }]
+                : []),
+              ...(detail.rentPaidCents
+                ? [{ label: "Rent they paid in", value: <span className="num">+{money(detail.rentPaidCents)}</span> }]
+                : []),
+              ...(detail.adjustmentsCents
+                ? [{
+                    label: "Adjusted by hand",
+                    value: <span className="num">{detail.adjustmentsCents > 0 ? "+" : "−"}{money(Math.abs(detail.adjustmentsCents))}</span>,
+                  }]
+                : []),
+              ...(detail.paidOutCents
+                ? [{ label: "Already paid out this month", value: <span className="num">−{money(detail.paidOutCents)}</span> }]
+                : []),
+              ...(detail.otherCents
+                ? [{
+                    label: "Other ledger activity",
+                    value: <span className="num">{detail.otherCents > 0 ? "+" : "−"}{money(Math.abs(detail.otherCents))}</span>,
+                  }]
+                : []),
+              ...(detail.openingBalanceCents
+                ? [{
+                    label: "Carried in from before",
+                    value: <span className="num">{detail.openingBalanceCents > 0 ? "+" : "−"}{money(Math.abs(detail.openingBalanceCents))}</span>,
+                  }]
+                : []),
+              {
+                label: detail.closingBalanceCents < 0 ? "They owe the market" : `To pay on the ${payDay}th`,
+                value:
+                  detail.closingBalanceCents < 0 ? (
+                    <Badge tone="warn">{money(-detail.closingBalanceCents)}</Badge>
+                  ) : (
+                    <b className="num">{money(detail.dueCents)}</b>
+                  ),
+              },
+            ]}
+          />
+        ) : null}
+      </Modal>
+    </div>
   );
 }
 
@@ -7214,6 +7715,7 @@ export default function AdminPage() {
           { id: "collections", label: behind > 0 ? `Collections (${behind})` : "Collections" },
           { id: "coming", label: "Coming in" },
           { id: "paid", label: "Paid up" },
+          { id: "monthend", label: "Month-end" },
           { id: "payouts", label: pendingPayouts > 0 ? `Payouts (${pendingPayouts})` : "Payouts" },
         ];
         return (
@@ -7278,6 +7780,19 @@ export default function AdminPage() {
             }}
           />
           ) : null}
+        </div>
+      )}
+
+      {/* What each vendor is owed for a whole month, and the days off their
+          rent. Its own view because it is the one question the rest of this
+          page could not answer: the cheque. */}
+      {tab === "bank" && bankView === "monthend" && allowed("financials") && (
+        <div style={{ marginBottom: "var(--sp-4)" }}>
+          <MonthEndStatement
+            payoutDay={upcoming?.payout.day || 15}
+            busy={busy}
+            onPosted={() => { void reloadLedger(); void loadUpcoming(); }}
+          />
         </div>
       )}
 
