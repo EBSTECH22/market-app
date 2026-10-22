@@ -6,8 +6,11 @@ import { recordAudit } from "@/lib/audit";
 import { centralInputToDate } from "@/lib/time";
 import {
   closureCreditCents, closureCreditMarker, closureCreditNote, daysInMonth,
-  dueFromBalance, type StatementRow,
+  dueFromBalance, nextMonthKey, type StatementRow,
 } from "@/lib/monthend";
+import {
+  planRentRun, rentMarker, legacyRentMarker, type RentContract,
+} from "@/lib/rentrun";
 
 export const dynamic = "force-dynamic";
 
@@ -27,24 +30,101 @@ export const dynamic = "force-dynamic";
 const MONTH = /^\d{4}-\d{2}$/;
 
 function monthWindow(month: string) {
-  const [y, m] = month.split("-").map(Number);
   const start = centralInputToDate(`${month}-01T00:00`);
-  const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
-  const end = new Date(centralInputToDate(`${nextMonth}-01T00:00`).getTime() - 1);
+  const end = new Date(centralInputToDate(`${nextMonthKey(month)}-01T00:00`).getTime() - 1);
   return { start, end };
+}
+
+/**
+ * NEXT MONTH'S RENT, WHICH IS THE RENT THAT COMES OFF THIS MONTH'S CHEQUE.
+ *
+ * October's sales are paid on the 15th of November, and by then the rent the
+ * vendor owes is November's — charged on the 1st, a fortnight before the
+ * cheque. October's own rent was charged on the 1st of October and came off the
+ * cheque paid on the 15th of October. So a statement for October has to look
+ * one month FORWARD for its rent line, not at the rent sitting in its own
+ * window.
+ *
+ * The catch, and the reason this function exists: that rent does not exist yet.
+ * Up to the 1st there is nothing on any ledger to subtract, so a statement that
+ * only reads the books showed October as a full month of sales with no rent
+ * against it — a number that was wrong all month and became right overnight.
+ *
+ * So when the rent hasn't posted, this returns what the run WILL post. Not an
+ * estimate of it: `planRentRun` is the same function the cron executes, so the
+ * figure here is the figure that lands. Prorations, final months, prepaid
+ * booths and rent-free vendors are all already decided by it.
+ */
+async function rentForNextMonth(month: string): Promise<{
+  ym: string;
+  perVendor: Map<string, number>;
+  postedVendors: Set<string>;
+}> {
+  const ym = nextMonthKey(month);
+  const { start, end } = monthWindow(ym);
+
+  const contracts = await db.contract.findMany({
+    where: { status: { in: ["ACTIVE", "TERMINATING"] } },
+    include: { vendor: { select: { rentFree: true } } },
+  });
+
+  /* What that month's run has already written. Read by the run's own marker
+     rather than by date, because that is how the cron decides "already
+     charged" — reading it the same way means this screen and the run can't
+     disagree about whether a booth has been billed. */
+  const posted = await db.ledgerEntry.findMany({
+    where: { type: "RENT", createdAt: { gte: start, lte: end } },
+    select: { vendorId: true, note: true, amountCents: true },
+  });
+
+  const boothsPerVendor = new Map<string, number>();
+  for (const c of contracts) boothsPerVendor.set(c.vendorId, (boothsPerVendor.get(c.vendorId) || 0) + 1);
+  const legacy = legacyRentMarker(ym);
+  const isCharged = (c: RentContract) =>
+    posted.some((p) => p.note.includes(rentMarker(ym, c.id))) ||
+    ((boothsPerVendor.get(c.vendorId) || 1) === 1 && posted.some((p) => p.vendorId === c.vendorId && p.note.includes(legacy)));
+
+  const rows: RentContract[] = contracts.map((c) => ({
+    id: c.id, vendorId: c.vendorId, boothLabel: c.boothLabel,
+    monthlyRentCents: c.monthlyRentCents, status: c.status,
+    endDate: c.endDate, paidThrough: c.paidThrough, free: c.vendor.rentFree,
+  }));
+  /* Planned as at the 1st, which is when the run fires — not as at today.
+     Planning it for today would prorate a mid-month move-in against the wrong
+     day and quietly disagree with the charge that actually posts. */
+  const runAt = centralInputToDate(`${ym}-01T01:05`);
+  const plan = planRentRun(rows, ym, runAt, isCharged);
+
+  const perVendor = new Map<string, number>();
+  const postedVendors = new Set<string>();
+
+  /* Already on the books wins over the plan, per vendor. Charges are stored
+     negative, so the sum is negated — and a closed-day credit sitting in that
+     window nets against it, which is right: it is money off that rent. */
+  for (const p of posted) {
+    perVendor.set(p.vendorId, (perVendor.get(p.vendorId) || 0) - p.amountCents);
+    postedVendors.add(p.vendorId);
+  }
+  for (const r of plan.rows) {
+    if (r.amountCents <= 0 || postedVendors.has(r.vendorId)) continue;
+    perVendor.set(r.vendorId, (perVendor.get(r.vendorId) || 0) + r.amountCents);
+  }
+
+  return { ym, perVendor, postedVendors };
 }
 
 async function build(month: string) {
   const { start, end } = monthWindow(month);
   const totalDays = daysInMonth(month);
 
-  const [vendors, closures] = await Promise.all([
+  const [vendors, closures, nextRent] = await Promise.all([
     db.vendor.findMany({
       where: { active: true },
       select: { id: true, code: true, businessName: true },
       orderBy: { code: "asc" },
     }),
     db.marketClosure.findMany({ where: { day: { startsWith: `${month}-` } }, orderBy: { day: "asc" } }),
+    rentForNextMonth(month),
   ]);
   const closedDays = closures.length;
 
@@ -167,6 +247,17 @@ async function build(month: string) {
       a.net - a.rent + a.rentPaid + a.adjust - a.paidOut + a.creditPosted - a.refunds;
     const otherCents = a.ledgerTotal - explained;
 
+    /* THE CHEQUE. Where they stand at the end of the month, less the rent that
+       posts on the 1st and will be withheld from this payment.
+
+       Why next month's rent is subtracted here rather than read out of the
+       books: it is dated the 1st, which is OUTSIDE this month's window, so the
+       closing balance above has never seen it and cannot double-count it. The
+       month's OWN rent is inside the window and is already cancelled there by
+       the payout made on the 15th against it — which is why this works out to
+       "their sales, less next month's rent" once a month has settled. */
+    const nextRentCents = nextRent.perVendor.get(v.id) || 0;
+
     return {
       vendorId: v.id,
       vendorCode: v.code,
@@ -183,12 +274,18 @@ async function build(month: string) {
       otherCents,
       openingBalanceCents,
       closingBalanceCents,
-      dueCents: dueFromBalance(closingBalanceCents),
+      nextRentCents,
+      nextRentMonth: nextRent.ym,
+      nextRentPosted: nextRent.postedVendors.has(v.id),
+      dueCents: dueFromBalance(closingBalanceCents - nextRentCents),
+      owedToMarketCents: Math.max(0, nextRentCents - closingBalanceCents),
     };
   });
 
   const live = rows.filter(
-    (r) => r.salesGrossCents !== 0 || r.rentChargedCents !== 0 || r.closingBalanceCents !== 0 || r.openingBalanceCents !== 0
+    (r) =>
+      r.salesGrossCents !== 0 || r.rentChargedCents !== 0 || r.closingBalanceCents !== 0 ||
+      r.openingBalanceCents !== 0 || r.nextRentCents !== 0
   );
 
   return {
@@ -203,13 +300,19 @@ async function build(month: string) {
       return should === 0 || (a?.creditPosted || 0) !== 0;
     }),
     rows: live,
+    nextRentMonth: nextRent.ym,
+    /* True only when the whole month's rent run has landed. One vendor still
+       on the plan is enough to keep the "not charged yet" marker on the
+       screen, because the total is then still partly a forecast. */
+    nextRentPosted: live.length > 0 && live.every((r) => r.nextRentCents === 0 || r.nextRentPosted),
     totals: {
       salesGrossCents: live.reduce((n, r) => n + r.salesGrossCents, 0),
       marketShareCents: live.reduce((n, r) => n + r.marketShareCents, 0),
       rentChargedCents: live.reduce((n, r) => n + r.rentChargedCents, 0),
       closureCreditCents: live.reduce((n, r) => n + r.closureCreditCents, 0),
+      nextRentCents: live.reduce((n, r) => n + r.nextRentCents, 0),
       dueCents: live.reduce((n, r) => n + r.dueCents, 0),
-      owedToMarketCents: live.reduce((n, r) => n + (r.closingBalanceCents < 0 ? -r.closingBalanceCents : 0), 0),
+      owedToMarketCents: live.reduce((n, r) => n + r.owedToMarketCents, 0),
     },
   };
 }

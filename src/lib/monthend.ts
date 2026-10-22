@@ -14,11 +14,24 @@
  *     what their goods sold for          (gross, what the customer paid)
  *   − the market's share                 (fee and commission, already on the line)
  *   = their sales
- *   − rent charged for the month
  *   + credit for days the market shut
- *   ± anything else adjusted by hand
- *   + what was already owed from before
+ *   ± anything else on the ledger that month
+ *   = where they stand at the end of the month
+ *   − NEXT month's rent                   (charged on the 1st, withheld from this cheque)
  *   = what to pay them on the 15th
+ *
+ * THE RENT LINE IS NEXT MONTH'S, and that is the part everybody gets wrong
+ * first. October's sales are paid on the 15th of November, by which time the
+ * rent the vendor owes is November's — charged on the 1st. October's own rent
+ * was charged on the 1st of October and came off the cheque paid on the 15th
+ * of October, against September's sales. A statement that subtracted the rent
+ * sitting in its own month would subtract a charge that had already been
+ * settled, and leave the one that hasn't.
+ *
+ * It also means the figure cannot come from the books alone: before the 1st,
+ * next month's rent does not exist yet. The route asks the rent planner — the
+ * same function the cron runs — what the 1st will charge, so the total is
+ * right all month instead of being wrong until the 1st and right afterwards.
  *
  * Every figure is from the ledger except the sales split, which comes from the
  * sale lines where it was decided at the moment of sale. Nothing is recomputed
@@ -31,6 +44,12 @@ export type MonthKey = string; // "YYYY-MM"
 export function daysInMonth(month: MonthKey): number {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+/** "2026-12" → "2027-01". The month whose rent comes off this month's cheque. */
+export function nextMonthKey(month: MonthKey): MonthKey {
+  const [y, m] = month.split("-").map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
 }
 
 /** Every day of the month as YYYY-MM-DD. */
@@ -85,10 +104,21 @@ export type StatementRow = {
   otherCents: number;
   /** Their balance at the START of the month. Signed. */
   openingBalanceCents: number;
-  /** Their balance now, after everything above. Signed. */
+  /** Their balance at the END of the month, before next month's rent. Signed. */
   closingBalanceCents: number;
+  /**
+   * The rent that comes off this cheque — NEXT month's, charged on the 1st,
+   * a fortnight before the payout. Positive = will be withheld.
+   */
+  nextRentCents: number;
+  /** Which month that rent is for, e.g. "2026-11". */
+  nextRentMonth: MonthKey;
+  /** False while it is still a forecast of the run rather than a posted charge. */
+  nextRentPosted: boolean;
   /** What to actually hand over. Never negative. */
   dueCents: number;
+  /** What they owe the market instead, when the rent outruns their sales. */
+  owedToMarketCents: number;
 };
 
 /** What to pay: the balance, floored at zero. Owing the market is not a payout. */

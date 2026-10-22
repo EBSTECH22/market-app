@@ -535,7 +535,9 @@ type StatementRow = {
   salesGrossCents: number; marketShareCents: number; salesNetCents: number; refundsCents: number;
   rentChargedCents: number; closureCreditCents: number; rentPaidCents: number;
   adjustmentsCents: number; paidOutCents: number; otherCents: number;
-  openingBalanceCents: number; closingBalanceCents: number; dueCents: number;
+  openingBalanceCents: number; closingBalanceCents: number;
+  nextRentCents: number; nextRentMonth: string; nextRentPosted: boolean;
+  dueCents: number; owedToMarketCents: number;
 };
 type Statement = {
   month: string;
@@ -544,9 +546,11 @@ type Statement = {
   closures: { id: string; day: string; reason: string }[];
   creditsPosted: boolean;
   rows: StatementRow[];
+  nextRentMonth: string;
+  nextRentPosted: boolean;
   totals: {
     salesGrossCents: number; marketShareCents: number; rentChargedCents: number;
-    closureCreditCents: number; dueCents: number; owedToMarketCents: number;
+    closureCreditCents: number; nextRentCents: number; dueCents: number; owedToMarketCents: number;
   };
 };
 
@@ -559,6 +563,12 @@ function statementMonth(now: Date, payoutDay: number): string {
   const d = new Date(now);
   if (d.getDate() <= Math.max(1, Math.min(28, payoutDay || 15))) d.setMonth(d.getMonth() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** "2026-11" → "Nov". For a column heading, where the year is already obvious. */
+function shortMonth(month: string): string {
+  const m = Number(month.split("-")[1]);
+  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1] || month;
 }
 
 /** "2026-09" → "September 2026". Plain text, because this is read aloud. */
@@ -697,13 +707,6 @@ function MonthEndStatement({
       cell: (r) => <span className="num t-dim">{r.marketShareCents ? money(r.marketShareCents) : "—"}</span>,
     },
     {
-      key: "rent",
-      header: "Rent",
-      align: "right",
-      sortBy: (r) => r.rentChargedCents,
-      cell: (r) => <span className="num">{r.rentChargedCents ? `−${money(r.rentChargedCents)}` : "—"}</span>,
-    },
-    {
       key: "credit",
       header: "Closed days back",
       align: "right",
@@ -715,20 +718,28 @@ function MonthEndStatement({
       ),
     },
     {
-      key: "before",
-      header: "Carried in",
+      key: "end",
+      header: `End of ${shortMonth(month)}`,
+      mobileLabel: `Where they stand at the end of ${shortMonth(month)}`,
       align: "right",
       hideBelow: 1100,
-      sortBy: (r) => r.openingBalanceCents,
-      cell: (r) => <span className="num t-dim">{r.openingBalanceCents ? money(r.openingBalanceCents) : "—"}</span>,
+      sortBy: (r) => r.closingBalanceCents,
+      cell: (r) => <span className="num t-dim">{money(r.closingBalanceCents)}</span>,
     },
     {
-      key: "paid",
-      header: "Already paid",
+      key: "rent",
+      header: data ? `${shortMonth(data.nextRentMonth)} rent` : "Rent",
+      mobileLabel: data ? `${shortMonth(data.nextRentMonth)} rent (off this cheque)` : "Rent",
       align: "right",
-      hideBelow: 1100,
-      sortBy: (r) => r.paidOutCents,
-      cell: (r) => <span className="num t-dim">{r.paidOutCents ? `−${money(r.paidOutCents)}` : "—"}</span>,
+      sortBy: (r) => r.nextRentCents,
+      cell: (r) => (
+        <div className="stack g-0" style={{ alignItems: "flex-end" }}>
+          <span className="num">{r.nextRentCents ? `−${money(r.nextRentCents)}` : "—"}</span>
+          {r.nextRentCents && !r.nextRentPosted ? (
+            <span className="t-dim t-xs">not charged yet</span>
+          ) : null}
+        </div>
+      ),
     },
     {
       key: "due",
@@ -736,8 +747,8 @@ function MonthEndStatement({
       align: "right",
       sortBy: (r) => r.dueCents,
       cell: (r) =>
-        r.closingBalanceCents < 0 ? (
-          <Badge tone="warn">owes {money(-r.closingBalanceCents)}</Badge>
+        r.owedToMarketCents > 0 ? (
+          <Badge tone="warn">owes {money(r.owedToMarketCents)}</Badge>
         ) : (
           <b className="num">{money(r.dueCents)}</b>
         ),
@@ -749,9 +760,8 @@ function MonthEndStatement({
       <Card
         title={`What you owe for ${monthLabel(month)}`}
         subtitle={
-          running
-            ? `This month is still running — the figures move as sales come in. Paid out on ${payLabel}.`
-            : `Paid out on ${payLabel}.`
+          (running ? "This month is still running — the figures move as sales come in. " : "") +
+          `Paid out on ${payLabel}, with ${data ? monthLabel(data.nextRentMonth) : "next month"}'s rent withheld.`
         }
         actions={
           <Field label="Month">
@@ -789,14 +799,23 @@ function MonthEndStatement({
                   sub={`${money(data.totals.salesGrossCents)} rung up`}
                 />
                 <Stat
-                  label="Rent charged"
-                  value={money(data.totals.rentChargedCents)}
+                  label={`${monthLabel(data.nextRentMonth)} rent`}
+                  value={money(data.totals.nextRentCents)}
                   sub={
-                    data.totals.closureCreditCents
-                      ? `less ${money(data.totals.closureCreditCents)} for closed days`
-                      : "no closed days credited"
+                    data.nextRentPosted
+                      ? "charged — comes off this payout"
+                      : `not charged until ${shortMonth(data.nextRentMonth)} 1 — this is what the run will post`
                   }
                   icon="bank"
+                />
+                <Stat
+                  label="Closed days back"
+                  value={money(data.totals.closureCreditCents)}
+                  sub={
+                    data.closedDays
+                      ? `${plural(data.closedDays, "day")} of ${data.totalDays}`
+                      : "none recorded"
+                  }
                 />
                 <Stat
                   label="Days open"
@@ -807,7 +826,7 @@ function MonthEndStatement({
                   <Stat
                     label="Owing the market"
                     value={money(data.totals.owedToMarketCents)}
-                    sub={`${plural(data.rows.filter((r) => r.closingBalanceCents < 0).length, "vendor")} behind`}
+                    sub={`${plural(data.rows.filter((r) => r.owedToMarketCents > 0).length, "vendor")} whose rent outran their sales`}
                   />
                 ) : null}
               </div>
@@ -827,11 +846,26 @@ function MonthEndStatement({
                 {showWorking ? (
                   <Note tone="info">
                     For each vendor: <b>what their goods rang up</b> less <b>the market&rsquo;s share</b> gives their
-                    sales. Take off <b>the month&rsquo;s rent</b>, add back <b>a day&rsquo;s rent for every day the
-                    market didn&rsquo;t open</b>, add anything <b>carried in</b> from before, take off anything
-                    <b> already paid</b> this month — and that is the cheque. A vendor whose rent came to more than
-                    they sold shows as owing instead, and nothing is paid to them. <b>Tap any vendor</b> to see their
-                    month written out line by line.
+                    sales. Add back <b>a day&rsquo;s rent for every day the market didn&rsquo;t open</b>, then
+                    everything else their ledger did this month — rent they paid in, refunds, anything you adjusted,
+                    anything already paid out — and that is <b>where they stand at the end of {monthLabel(month)}</b>.
+                    Take off <b>{monthLabel(data.nextRentMonth)}&rsquo;s rent</b>, which is charged on the 1st and
+                    withheld from this cheque, and you have the payment.
+                    <br />
+                    <br />
+                    {monthLabel(month)}&rsquo;s own rent isn&rsquo;t subtracted here — it was charged on the 1st of{" "}
+                    {monthLabel(month)} and came off the cheque you paid on the {payDay}th of {monthLabel(month)},
+                    against the month before. Subtracting it again would charge it twice.
+                    {!data.nextRentPosted ? (
+                      <>
+                        {" "}
+                        {monthLabel(data.nextRentMonth)}&rsquo;s rent hasn&rsquo;t posted yet, so the figure comes from
+                        the rent run itself — the same calculation the 1st will actually charge, prorations and all.
+                      </>
+                    ) : null}
+                    <br />
+                    <br />
+                    <b>Tap any vendor</b> to see their month written out line by line.
                   </Note>
                 ) : null}
               </div>
@@ -981,7 +1015,16 @@ function MonthEndStatement({
               ...(detail.refundsCents
                 ? [{ label: "Refunds given back", value: <span className="num">−{money(detail.refundsCents)}</span> }]
                 : []),
-              { label: "Rent for the month", value: <span className="num">{detail.rentChargedCents ? `−${money(detail.rentChargedCents)}` : "—"}</span> },
+              {
+                /* The month's OWN rent. Shown because it moved on the ledger
+                   inside the month and the lines have to add up to the closing
+                   balance — but named so nobody mistakes it for the rent coming
+                   off this cheque. It was settled on the previous payout, and
+                   the payout that settled it is the "already paid out" line
+                   further down. */
+                label: `${monthLabel(month)} rent — charged on the 1st, already settled`,
+                value: <span className="num">{detail.rentChargedCents ? `−${money(detail.rentChargedCents)}` : "—"}</span>,
+              },
               ...(detail.closureCreditCents
                 ? [{
                     label: `Credit for ${plural(data?.closedDays || 0, "closed day")}`,
@@ -1013,10 +1056,28 @@ function MonthEndStatement({
                   }]
                 : []),
               {
-                label: detail.closingBalanceCents < 0 ? "They owe the market" : `To pay on the ${payDay}th`,
+                label: <b>Where they stand at the end of {monthLabel(month)}</b>,
+                value: <b className="num">{money(detail.closingBalanceCents)}</b>,
+              },
+              {
+                label: (
+                  <>
+                    {monthLabel(detail.nextRentMonth)} rent
+                    {!detail.nextRentPosted ? (
+                      <>
+                        {" "}
+                        <Badge tone="warn">not charged yet</Badge>
+                      </>
+                    ) : null}
+                  </>
+                ),
+                value: <span className="num">{detail.nextRentCents ? `−${money(detail.nextRentCents)}` : "—"}</span>,
+              },
+              {
+                label: detail.owedToMarketCents > 0 ? "They owe the market" : `To pay on the ${payDay}th`,
                 value:
-                  detail.closingBalanceCents < 0 ? (
-                    <Badge tone="warn">{money(-detail.closingBalanceCents)}</Badge>
+                  detail.owedToMarketCents > 0 ? (
+                    <Badge tone="warn">{money(detail.owedToMarketCents)}</Badge>
                   ) : (
                     <b className="num">{money(detail.dueCents)}</b>
                   ),
