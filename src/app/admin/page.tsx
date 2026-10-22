@@ -1555,6 +1555,20 @@ type OpenDrawerRow = {
   expectedCents?: number; adjustments?: DrawerAdjustment[];
 };
 type Ticket = { id: string; number: number; dateStr: string; timeStr: string; status: string; paymentMethod: string; cardName: string; employee: string; totalCents: number; vendorCodes: string[]; drawerId?: string };
+/** One past sale, in full — what the receipt would have said. */
+type SaleFull = {
+  id: string; number: number; status: string; createdAt: string;
+  employee: string; paymentMethod: string; cardName: string;
+  subtotalCents: number; taxCents: number; foodTaxCents: number; standardTaxCents: number;
+  totalCents: number; discountCents: number; saleSavingsCents: number; cardAdjustCents: number;
+  vendorDiscountCents: number; vendorDiscountLabel: string;
+  cashTenderedCents: number; changeCents: number;
+  lines: {
+    id: string; name: string; quantity: number; priceCents: number; basePriceCents: number;
+    optionsText: string; vendorId: string;
+  }[];
+};
+type OpenTicket = { ticket: Ticket; sale: SaleFull; refunded: Record<string, number> };
 type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
 type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[]; hasPin?: boolean; pinSetAt?: string | null };
@@ -2018,6 +2032,15 @@ export default function AdminPage() {
   // tickets
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [ticketQ, setTicketQ] = useState("");
+  /* The ticket you're looking at, lines and all.
+
+     The list could say #1041, Sep 8, card, V02, $18.75 and not one word about
+     what was in the bag. The only way to find out was the print button, which
+     opens the browser's print dialog — so "show me that sale" meant printing
+     a sheet of paper, and until the CSS above was fixed, a blank one. */
+  const [openTicket, setOpenTicket] = useState<OpenTicket | null>(null);
+  const [loadingTicket, setLoadingTicket] = useState<Ticket | null>(null);
+  const [openTicketErr, setOpenTicketErr] = useState("");
   /* When set, the ticket list is one drawer's shift instead of the last 30
      days. Carries the name so the banner can say whose it is. */
   const [ticketDrawer, setTicketDrawer] = useState<{ id: string; employee: string } | null>(null);
@@ -2328,7 +2351,16 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => { probeRole(); loadDrawer(); loadAll(); }, [probeRole, loadDrawer, loadAll]);
-  usePulse(() => { loadDrawer(); loadAll(); });
+  /* The change marker moves within a second of any write anywhere, so this is
+     how the register tab keeps up without a refresh. The ticket list was left
+     out of it: a sale rung on the kiosk, or at a vendor's own booth, or by the
+     cashier on the other till, didn't appear here until you switched tabs or
+     typed in the search box. */
+  usePulse(() => {
+    loadDrawer();
+    loadAll();
+    if (tab === "register") void loadTickets(ticketQ, ticketDrawer?.id || "");
+  });
   useEffect(() => { if (authed && tab === "time") loadTime(); }, [authed, tab, loadTime]);
   useEffect(() => { if (authed && allowed("people") && tab === "team") { loadTeam(); loadAccess(); } }, [authed, caps, tab, loadTeam, loadAccess]);
   useEffect(() => {
@@ -3344,6 +3376,22 @@ export default function AdminPage() {
     setPunchPin("");
     if (!ok) { setPunchMsg(String(data.error || "Failed.")); return; }
     setPunchMsg(String(data.msg));
+  };
+
+  /** Show a past ticket on screen, line by line. */
+  const viewTicket = async (t: Ticket) => {
+    setOpenTicketErr("");
+    setOpenTicket(null);
+    /* The ticket goes up before its lines arrive, so tapping a row does
+       something immediately rather than looking like it missed. */
+    setLoadingTicket(t);
+    const { ok, data } = await safeFetch(`/api/admin/tickets/${t.id}`);
+    if (!ok) { setOpenTicketErr(String(data.error || "Couldn't load that ticket.")); return; }
+    setOpenTicket({
+      ticket: t,
+      sale: data.sale as SaleFull,
+      refunded: (data.refunded as Record<string, number>) || {},
+    });
   };
 
   const openRefund = async (t: Ticket) => {
@@ -5115,6 +5163,7 @@ export default function AdminPage() {
     .reduce((n, i) => n + (navBadge[i.id] || 0), 0);
 
   return (
+    <>
     <div className="shell">
       <a href="#main-content" className="btn btn-primary btn-sm sr-only">Skip to content</a>
 
@@ -6417,6 +6466,15 @@ export default function AdminPage() {
                     align: "right",
                     cell: (t) => (
                       <span className="row end g-1 wrap">
+                        {/* Deliberately a button of its own rather than making
+                            the whole row tappable: the row already carries
+                            Refund and Void, and a clickable row wrapping those
+                            buttons means one tap can do two things — or, in the
+                            mobile card layout, a <button> inside a <button>,
+                            which browsers handle however they like. */}
+                        <Button variant="ghost" size="sm" icon="receipt" onClick={() => void viewTicket(t)}>
+                          Receipt
+                        </Button>
                         <IconButton icon="print" label={`Reprint ticket #${t.number}`} size="sm" onClick={() => printSale(t.id)} />
                         {t.status !== "VOIDED" && t.status !== "REFUNDED" ? (
                           <>
@@ -12427,8 +12485,166 @@ export default function AdminPage() {
         </div>
       </Modal>
 
-      <div id="printzone" ref={printRef}></div>
+      {/* ---- a past ticket, on screen ------------------------------------- */}
+      <Modal
+        open={!!openTicket || !!loadingTicket || !!openTicketErr}
+        onClose={() => { setOpenTicket(null); setLoadingTicket(null); setOpenTicketErr(""); }}
+        title={`Ticket #${openTicket?.ticket.number ?? loadingTicket?.number ?? ""}`}
+        description={
+          openTicket
+            ? `${openTicket.ticket.dateStr} ${openTicket.ticket.timeStr}${openTicket.sale.employee ? ` · rung by ${openTicket.sale.employee}` : ""}`
+            : undefined
+        }
+        width="md"
+        footer={
+          <div className="row g-2 end">
+            {openTicket ? (
+              <Button variant="secondary" icon="print" onClick={() => printSale(openTicket.sale.id)}>
+                Print it
+              </Button>
+            ) : null}
+            <Button onClick={() => { setOpenTicket(null); setLoadingTicket(null); setOpenTicketErr(""); }}>Close</Button>
+          </div>
+        }
+      >
+        {openTicketErr ? (
+          <Note tone="error">{openTicketErr}</Note>
+        ) : !openTicket ? (
+          <div className="stack g-2">
+            <Skeleton height={16} width="70%" />
+            <Skeleton height={16} width="55%" />
+            <Skeleton height={16} width="62%" />
+          </div>
+        ) : (
+          (() => {
+            const s = openTicket.sale;
+            const vcode = new Map(vendors.map((v) => [v.id, v.code] as const));
+            const vname = new Map(vendors.map((v) => [v.id, v.businessName] as const));
+            /* The list total and the receipt total are the same number from two
+               places. If they ever disagree, say so rather than picking one. */
+            const mismatch = s.totalCents !== openTicket.ticket.totalCents;
+            return (
+              <div className="stack g-4">
+                {s.status !== "COMPLETE" ? (
+                  <Note tone={s.status === "VOIDED" ? "error" : "warn"}>
+                    {s.status === "VOIDED"
+                      ? "This ticket was voided. It doesn't count in any report and the items went back on the floor."
+                      : "Some of this ticket has been refunded — the refunded amounts are marked on the lines below."}
+                  </Note>
+                ) : null}
+
+                {mismatch ? (
+                  <Note tone="warn">
+                    The list shows {money(openTicket.ticket.totalCents)} for this ticket and the ticket itself shows{" "}
+                    {money(s.totalCents)}. Worth a look before you refund anything.
+                  </Note>
+                ) : null}
+
+                {/* ---- what they actually bought ---------------------------- */}
+                <div className="stack g-2">
+                  <span className="t-label">What they bought</span>
+                  {s.lines.length === 0 ? (
+                    <Note tone="warn">This ticket has no lines on it at all.</Note>
+                  ) : (
+                    s.lines.map((l) => {
+                      const back = openTicket.refunded[l.id] || 0;
+                      const charged = l.priceCents * l.quantity;
+                      const listed = (l.basePriceCents || l.priceCents) * l.quantity;
+                      return (
+                        <div
+                          key={l.id}
+                          className="row between g-3"
+                          style={{ borderBottom: "1px solid var(--border)", paddingBottom: "var(--sp-2)" }}
+                        >
+                          <div className="stack g-0" style={{ minWidth: 0 }}>
+                            <span>
+                              <b className="num">{l.quantity}×</b> {l.name}
+                            </span>
+                            {l.optionsText ? <span className="t-dim t-sm">{l.optionsText}</span> : null}
+                            <span className="t-dim t-xs">
+                              {vname.get(l.vendorId) || "Unknown vendor"}
+                              {vcode.get(l.vendorId) ? ` · ${vcode.get(l.vendorId)}` : ""}
+                            </span>
+                            {back > 0 ? (
+                              <span style={{ marginTop: 2 }}>
+                                <Badge tone="warn">{back} refunded</Badge>
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="stack g-0" style={{ alignItems: "flex-end" }}>
+                            <b className="num">{money(charged)}</b>
+                            {listed !== charged ? (
+                              <span className="t-dim t-xs num" style={{ textDecoration: "line-through" }}>
+                                {money(listed)}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* ---- and what it came to --------------------------------- */}
+                <DescList
+                  items={[
+                    { label: "Subtotal", value: <span className="num">{money(s.subtotalCents + (s.saleSavingsCents || 0))}</span> },
+                    ...(s.saleSavingsCents
+                      ? [{ label: "Sale savings", value: <span className="num">−{money(s.saleSavingsCents)}</span> }]
+                      : []),
+                    ...(s.vendorDiscountCents
+                      ? [{
+                          label: s.vendorDiscountLabel || "Vendor discount",
+                          value: <span className="num">−{money(s.vendorDiscountCents)}</span>,
+                        }]
+                      : []),
+                    ...(s.cardAdjustCents
+                      ? [{ label: "Non-cash adjustment", value: <span className="num">{money(s.cardAdjustCents)}</span> }]
+                      : []),
+                    ...(s.foodTaxCents && s.standardTaxCents
+                      ? [
+                          { label: "Tax (general)", value: <span className="num">{money(s.standardTaxCents)}</span> },
+                          { label: "Tax (food)", value: <span className="num">{money(s.foodTaxCents)}</span> },
+                        ]
+                      : [{ label: "Tax", value: <span className="num">{money(s.taxCents)}</span> }]),
+                    ...(s.discountCents
+                      ? [{ label: "Rewards", value: <span className="num">−{money(s.discountCents)}</span> }]
+                      : []),
+                    { label: "Total", value: <b className="num">{money(s.totalCents)}</b> },
+                    {
+                      label: "Paid by",
+                      value: (
+                        <span className="row end g-2 wrap">
+                          <Badge tone="neutral" icon={s.paymentMethod === "CASH" ? "cash" : "card"}>
+                            {s.paymentMethod === "CASH" ? "Cash" : "Card"}
+                          </Badge>
+                          {s.cardName ? <span className="t-sm">{s.cardName}</span> : null}
+                        </span>
+                      ),
+                    },
+                    ...(s.cashTenderedCents
+                      ? [
+                          { label: "Cash handed over", value: <span className="num">{money(s.cashTenderedCents)}</span> },
+                          { label: "Change given", value: <span className="num">{money(s.changeCents || 0)}</span> },
+                        ]
+                      : []),
+                  ]}
+                />
+              </div>
+            );
+          })()
+        )}
+      </Modal>
+
     </div>
+    {/* OUTSIDE THE SHELL, like the kiosk has it. The shell is a fixed-height
+        flex column; a receipt inside it inherits that cage, and for a long
+        time the print stylesheet keyed off body's own children, which meant
+        anything nested in here printed a blank sheet. The stylesheet no longer
+        cares where this sits, but keeping it out here costs nothing and means
+        both tills are built the same way. */}
+    <div id="printzone" ref={printRef}></div>
+    </>
   );
 }
 

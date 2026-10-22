@@ -1189,10 +1189,14 @@ export default function RegisterKiosk() {
     }
   };
 
-  /* #printzone must be a DIRECT child of body: the print stylesheet is
-     `body.receiptmode > *:not(#printzone) { display: none }`, so nesting it
-     inside the page wrapper would hide the wrapper and the receipt with it.
-     That's why it's a sibling of the shell rather than inside it. */
+  /* #printzone sits OUTSIDE the page wrapper, as a sibling of the shell.
+     It used to have to: the print stylesheet was
+     `body.receiptmode > *:not(#printzone) { display: none }`, which only looks
+     at body's own children, so anything nested inside the wrapper hid the
+     wrapper and the receipt with it — the admin page had exactly that bug and
+     every reprint came out blank. The stylesheet now hides by visibility and
+     works at any depth, but this stays where it is: a receipt inside the shell
+     also inherits the shell's fixed height. */
   const frame = (top: React.ReactNode, inner: React.ReactNode) => (
     <>
       <style>{TILL_CSS}</style>

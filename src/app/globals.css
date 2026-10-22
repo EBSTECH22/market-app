@@ -1440,9 +1440,48 @@ body.scroll-locked { overflow: hidden; }
   a[href]::after { content: ""; }
 }
 
-/* Receipt printing: hide everything except the receipt node. */
+/* Receipt printing: hide everything except the receipt node.
+
+   HIDDEN BY VISIBILITY, NOT BY DISPLAY, and that is the whole point. The old
+   rule was `body.receiptmode > *:not(#printzone) { display: none }`, which
+   only ever looks at body's OWN children. #printzone lives several levels
+   down — inside the page's shell, inside the dialog and toast providers — so
+   that rule hid the wrapper the receipt was sitting in, and `#printzone
+   { display: block }` could not bring back a node whose parent was gone. Every
+   browser reprint came out a blank sheet.
+
+   `visibility: hidden` doesn't have that problem: a visible child of a hidden
+   parent still paints. So everything goes invisible, the receipt and its own
+   contents come back, and it is lifted to the top of the page so it doesn't
+   print on page three of an empty admin screen. */
 #printzone { display: none; }
 @media print {
-  body.receiptmode > *:not(#printzone) { display: none !important; }
-  body.receiptmode #printzone { display: block !important; }
+  body.receiptmode * { visibility: hidden !important; }
+  body.receiptmode #printzone,
+  body.receiptmode #printzone * { visibility: visible !important; }
+  body.receiptmode #printzone {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+  /* An open dialog is taken out entirely rather than left invisible: a
+     full-height fixed overlay still takes up pages even when nothing in it
+     paints, which is how a one-page receipt comes out of the printer with two
+     blank sheets behind it. */
+  body.receiptmode .overlay { display: none !important; }
+  /* The shell is a fixed-height flex column on purpose (it's what stops the
+     bottom bar scrolling with the page). On paper that height is a cage, so
+     it comes off for the print. */
+  body.receiptmode .shell,
+  body.receiptmode .shell-main {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
 }
