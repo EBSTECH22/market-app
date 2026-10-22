@@ -533,7 +533,9 @@ function UpcomingMoney({
 type StatementRow = {
   vendorId: string; vendorCode: string; vendorName: string;
   salesGrossCents: number; marketShareCents: number; salesNetCents: number; refundsCents: number;
-  rentChargedCents: number; closureCreditCents: number; rentPaidCents: number;
+  rentChargedCents: number; closureCreditCents: number;
+  creditBasisCents: number; creditPrepaid: boolean; noCreditReason: string;
+  rentPaidCents: number;
   adjustmentsCents: number; paidOutCents: number; otherCents: number;
   openingBalanceCents: number; closingBalanceCents: number;
   nextRentCents: number; nextRentMonth: string; nextRentPosted: boolean;
@@ -712,9 +714,19 @@ function MonthEndStatement({
       align: "right",
       sortBy: (r) => r.closureCreditCents,
       cell: (r) => (
-        <span className="num" style={{ color: r.closureCreditCents ? "var(--success-fg, inherit)" : undefined }}>
-          {r.closureCreditCents ? `+${money(r.closureCreditCents)}` : "—"}
-        </span>
+        <div className="stack g-0" style={{ alignItems: "flex-end" }}>
+          <span className="num">{r.closureCreditCents ? `+${money(r.closureCreditCents)}` : "—"}</span>
+          {/* A column of dashes with no explanation is the thing that makes
+              somebody ask whether the credit is broken. It isn't a blank, it's
+              an answer. */}
+          {r.noCreditReason ? (
+            <span className="t-dim t-xs" style={{ textAlign: "right", maxWidth: 190 }}>
+              {r.noCreditReason}
+            </span>
+          ) : r.creditPrepaid ? (
+            <span className="t-dim t-xs">off their prepaid rent</span>
+          ) : null}
+        </div>
       ),
     },
     {
@@ -1027,10 +1039,24 @@ function MonthEndStatement({
               },
               ...(detail.closureCreditCents
                 ? [{
-                    label: `Credit for ${plural(data?.closedDays || 0, "closed day")}`,
+                    label: (
+                      <>
+                        Credit for {plural(data?.closedDays || 0, "closed day")}
+                        <br />
+                        <span className="t-dim t-xs">
+                          a {data?.closedDays}/{data?.totalDays} share of {money(detail.creditBasisCents)}
+                          {detail.creditPrepaid ? " — the rent on their agreement, since nothing was charged this month" : ""}
+                        </span>
+                      </>
+                    ),
                     value: <span className="num">+{money(detail.closureCreditCents)}</span>,
                   }]
-                : []),
+                : detail.noCreditReason
+                  ? [{
+                      label: "No closed-day credit",
+                      value: <span className="t-dim t-sm">{detail.noCreditReason}</span>,
+                    }]
+                  : []),
               ...(detail.rentPaidCents
                 ? [{ label: "Rent they paid in", value: <span className="num">+{money(detail.rentPaidCents)}</span> }]
                 : []),

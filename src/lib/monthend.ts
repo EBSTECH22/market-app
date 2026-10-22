@@ -94,6 +94,12 @@ export type StatementRow = {
   rentChargedCents: number;
   /** Credit for days the market didn't open. Positive = given back. */
   closureCreditCents: number;
+  /** The month's rent the credit is a slice of — charged, or their agreement's. */
+  creditBasisCents: number;
+  /** True when the basis is their agreement because nothing was charged (prepaid). */
+  creditPrepaid: boolean;
+  /** Why they get no credit, in words. Empty when they get one. */
+  noCreditReason: string;
   /** Rent they paid in this month. */
   rentPaidCents: number;
   /** Anything adjusted by hand this month. Signed. */

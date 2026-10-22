@@ -9,7 +9,7 @@ import {
   dueFromBalance, nextMonthKey, type StatementRow,
 } from "@/lib/monthend";
 import {
-  planRentRun, rentMarker, legacyRentMarker, type RentContract,
+  planRentRun, rentMarker, legacyRentMarker, monthKey, type RentContract,
 } from "@/lib/rentrun";
 
 export const dynamic = "force-dynamic";
@@ -55,18 +55,65 @@ function monthWindow(month: string) {
  * figure here is the figure that lands. Prorations, final months, prepaid
  * booths and rent-free vendors are all already decided by it.
  */
-async function rentForNextMonth(month: string): Promise<{
+type LiveContract = {
+  id: string; vendorId: string; boothLabel: string; monthlyRentCents: number;
+  status: string; startDate: Date; endDate: Date | null; paidThrough: Date | null;
+  vendor: { rentFree: boolean };
+};
+
+/**
+ * WHOSE RENT A CLOSED DAY COMES OFF, and how much of it.
+ *
+ * First attempt based this purely on the rent CHARGED inside the month, so a
+ * vendor with no charge that month got nothing. That silently skipped the
+ * prepaid vendors — anyone whose `paidThrough` runs past today is deliberately
+ * not charged by the monthly run, so there was no charge to take a day off,
+ * even though they had very much paid for those days. The one-time
+ * "credit closed days" button on the bank page CREATES vendors like that: it
+ * pushes `paidThrough` forward. So the people most likely to be owed a credit
+ * were the ones being passed over.
+ *
+ * The basis is therefore: the rent actually charged in the month if there was
+ * one, and otherwise the rent on their agreement — but only when the agreement
+ * genuinely covers the month. Rent-free vendors, agreements that hadn't started
+ * and agreements that had already ended still come out at zero, which is
+ * correct: there is no rent of theirs to give back.
+ */
+function creditBasis(
+  month: string,
+  contracts: LiveContract[],
+  vendorIds: string[],
+  chargedCents: (vendorId: string) => number
+): { basis: Map<string, number>; rentFree: Set<string>; onAgreement: Map<string, number> } {
+  const onAgreement = new Map<string, number>();
+  const rentFree = new Set<string>();
+
+  for (const c of contracts) {
+    if (c.vendor.rentFree) { rentFree.add(c.vendorId); continue; }
+    /* Month keys are "YYYY-MM", so a string compare is a date compare. */
+    if (monthKey(c.startDate) > month) continue;
+    if (c.endDate && monthKey(c.endDate) < month) continue;
+    onAgreement.set(c.vendorId, (onAgreement.get(c.vendorId) || 0) + c.monthlyRentCents);
+  }
+
+  const basis = new Map<string, number>();
+  /* Every vendor, not just the ones with a live agreement: somebody whose
+     agreement ended last week was still charged rent for this month, and that
+     charge is theirs to have a day taken off. */
+  for (const vendorId of new Set([...vendorIds, ...contracts.map((c) => c.vendorId)])) {
+    const charged = chargedCents(vendorId);
+    basis.set(vendorId, charged > 0 ? charged : onAgreement.get(vendorId) || 0);
+  }
+  return { basis, rentFree, onAgreement };
+}
+
+async function rentForNextMonth(month: string, contracts: LiveContract[]): Promise<{
   ym: string;
   perVendor: Map<string, number>;
   postedVendors: Set<string>;
 }> {
   const ym = nextMonthKey(month);
   const { start, end } = monthWindow(ym);
-
-  const contracts = await db.contract.findMany({
-    where: { status: { in: ["ACTIVE", "TERMINATING"] } },
-    include: { vendor: { select: { rentFree: true } } },
-  });
 
   /* What that month's run has already written. Read by the run's own marker
      rather than by date, because that is how the cron decides "already
@@ -113,9 +160,18 @@ async function rentForNextMonth(month: string): Promise<{
   return { ym, perVendor, postedVendors };
 }
 
-async function build(month: string) {
+async function compute(month: string) {
   const { start, end } = monthWindow(month);
   const totalDays = daysInMonth(month);
+
+  const contracts: LiveContract[] = await db.contract.findMany({
+    where: { status: { in: ["ACTIVE", "TERMINATING"] } },
+    select: {
+      id: true, vendorId: true, boothLabel: true, monthlyRentCents: true,
+      status: true, startDate: true, endDate: true, paidThrough: true,
+      vendor: { select: { rentFree: true } },
+    },
+  });
 
   const [vendors, closures, nextRent] = await Promise.all([
     db.vendor.findMany({
@@ -124,7 +180,7 @@ async function build(month: string) {
       orderBy: { code: "asc" },
     }),
     db.marketClosure.findMany({ where: { day: { startsWith: `${month}-` } }, orderBy: { day: "asc" } }),
-    rentForNextMonth(month),
+    rentForNextMonth(month, contracts),
   ]);
   const closedDays = closures.length;
 
@@ -221,6 +277,13 @@ async function build(month: string) {
     }
   }
 
+  const { basis, rentFree, onAgreement } = creditBasis(
+    month,
+    contracts,
+    vendors.map((v) => v.id),
+    (vendorId) => acc.get(vendorId)?.rent || 0
+  );
+
   const rows: StatementRow[] = vendors.map((v) => {
     const a = acc.get(v.id) || zero();
     const openingBalanceCents = openingOf.get(v.id) || 0;
@@ -231,8 +294,21 @@ async function build(month: string) {
        was never billed for it is the market giving money away, and it would
        leave the collections screen showing rent credited against a charge that
        does not exist. */
+    const creditBasisCents = basis.get(v.id) || 0;
     const credit =
-      a.creditPosted !== 0 ? a.creditPosted : closureCreditCents(a.rent, month, closedDays);
+      a.creditPosted !== 0 ? a.creditPosted : closureCreditCents(creditBasisCents, month, closedDays);
+
+    /* WHY A VENDOR GETS NOTHING, said out loud on the row. Zeroes scattered
+       down a column look like a bug whether they are one or not, and the only
+       way to find out used to be to ask. */
+    const noCreditReason =
+      credit !== 0 ? ""
+      : closedDays === 0 ? ""
+      : rentFree.has(v.id) ? "Rent-free — no booth rent to credit."
+      : onAgreement.has(v.id) ? "Their rent for this month rounds to nothing."
+      : contracts.some((c) => c.vendorId === v.id)
+        ? `Their agreement doesn't cover ${month} — it started after it or had already ended.`
+        : "No active booth agreement, so no rent to credit.";
 
     /* Opening balance plus everything the ledger did this month, full stop.
        The closed-day credit is in there only once it has actually been posted —
@@ -268,6 +344,9 @@ async function build(month: string) {
       refundsCents: a.refunds,
       rentChargedCents: a.rent,
       closureCreditCents: credit,
+      creditBasisCents,
+      creditPrepaid: a.rent === 0 && creditBasisCents > 0,
+      noCreditReason,
       rentPaidCents: a.rentPaid,
       adjustmentsCents: a.adjust,
       paidOutCents: a.paidOut,
@@ -285,7 +364,7 @@ async function build(month: string) {
   const live = rows.filter(
     (r) =>
       r.salesGrossCents !== 0 || r.rentChargedCents !== 0 || r.closingBalanceCents !== 0 ||
-      r.openingBalanceCents !== 0 || r.nextRentCents !== 0
+      r.openingBalanceCents !== 0 || r.nextRentCents !== 0 || r.closureCreditCents !== 0
   );
 
   return {
@@ -293,13 +372,17 @@ async function build(month: string) {
     totalDays,
     closedDays,
     closures,
-    /* Posted when every vendor who is due one already has it on their ledger. */
-    creditsPosted: live.length > 0 && live.every((r) => {
-      const a = acc.get(r.vendorId);
-      const should = closureCreditCents(a?.rent || 0, month, closedDays);
-      return should === 0 || (a?.creditPosted || 0) !== 0;
+    /* Posted when every vendor who is due one already has it on their ledger.
+       Measured over ALL rows, not the visible ones: a prepaid vendor with no
+       sales and no charge that month is due a credit and would be the one left
+       out if this only looked at the rows on screen. */
+    creditsPosted: rows.length > 0 && rows.every((r) => {
+      const should = closureCreditCents(r.creditBasisCents, month, closedDays);
+      return should === 0 || (acc.get(r.vendorId)?.creditPosted || 0) !== 0;
     }),
     rows: live,
+    /* Unfiltered, for POST. Never sent to the browser — see build(). */
+    allRows: rows,
     nextRentMonth: nextRent.ym,
     /* True only when the whole month's rent run has landed. One vendor still
        on the plan is enough to keep the "not charged yet" marker on the
@@ -315,6 +398,13 @@ async function build(month: string) {
       owedToMarketCents: live.reduce((n, r) => n + r.owedToMarketCents, 0),
     },
   };
+}
+
+/** The statement as the browser gets it — without the unfiltered working set. */
+async function build(month: string) {
+  const { allRows, ...rest } = await compute(month);
+  void allRows;
+  return rest;
 }
 
 export async function GET(req: NextRequest) {
@@ -339,17 +429,18 @@ export async function POST(req: NextRequest) {
 
     const totalDays = daysInMonth(month);
     const marker = closureCreditMarker(month);
+    const { end } = monthWindow(month);
 
-    /* The rent that was actually charged in the month, vendor by vendor. Not
-       the figure on the agreement — see the note in build(). Charges are
-       stored negative, so the sum is negated to get what was billed, and a
-       vendor who was never billed sums to zero and is skipped. */
-    const { start, end } = monthWindow(month);
-    const charged = await db.ledgerEntry.groupBy({
-      by: ["vendorId"],
-      where: { type: "RENT", createdAt: { gte: start, lte: end } },
-      _sum: { amountCents: true },
-    });
+    /* POSTED FROM THE SAME NUMBERS THE SCREEN SHOWED. This used to work the
+       credit out again from its own query, which is how a screen and a ledger
+       come to disagree about the same month — one of them gets a rule the
+       other didn't. There is one calculation now, in compute(), and this
+       writes down what it said.
+
+       Unfiltered rows, deliberately: a prepaid vendor with no sales and no
+       charge that month is still owed a credit, and they are exactly who falls
+       off a list trimmed to "vendors with activity". */
+    const { allRows } = await compute(month);
 
     /* Who already has it. Checked per vendor rather than once for the month,
        so a vendor added halfway through still gets theirs when the button is
@@ -362,10 +453,9 @@ export async function POST(req: NextRequest) {
 
     let posted = 0;
     let totalCents = 0;
-    for (const row of charged) {
+    for (const row of allRows) {
       if (have.has(row.vendorId)) continue;
-      const rent = -(row._sum.amountCents || 0);
-      const credit = closureCreditCents(rent, month, closures);
+      const credit = closureCreditCents(row.creditBasisCents, month, closures);
       if (credit <= 0) continue;
       await db.ledgerEntry.create({
         data: {
