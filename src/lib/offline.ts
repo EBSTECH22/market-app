@@ -39,6 +39,18 @@ export type QueuedLine = {
   /** Carried for the on-screen list — the server prices from the item id. */
   name: string;
   priceCents: number;
+  /**
+   * The choices made at the till, as group id → chosen option ids.
+   *
+   * Has to travel with the queued sale. The server validates and prices the
+   * options itself, so a queued lemonade that arrives without them is either
+   * refused outright (a required question with no answer) or booked as a plain
+   * one at the wrong price — the drink the customer actually got, charged as
+   * something else.
+   */
+  options?: Record<string, string[]>;
+  /** The choices in words, for the offline list on screen. */
+  optionsText?: string;
 };
 
 export type QueuedSale = {
@@ -151,7 +163,7 @@ export async function syncQueuedSales(): Promise<SyncResult> {
           cashTenderedCents: sale.cashTenderedCents,
           /* The price the customer actually paid travels with the line. The
              server only honours it on an offline sale — see the sale route. */
-          lines: sale.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity, priceCents: l.priceCents })),
+          lines: sale.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity, priceCents: l.priceCents, options: l.options })),
           idemKey: sale.key,
           offline: true,
           soldAtIso: sale.createdAtIso,

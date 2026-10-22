@@ -39,10 +39,20 @@ const IDLE_LOCK_MS = 5 * 60 * 1000;
 type FloorItem = {
   id: string; sku: string; name: string; priceCents: number; basePriceCents: number;
   quantity: number; vendorName: string; vendorCode: string; taxClass?: string;
+  /** Whether tapping it has to ask something first. */
+  hasOptions?: boolean;
 };
+type OptChoice = { id: string; name: string; priceDeltaCents: number; soldOut: boolean };
+type OptGroup = { id: string; name: string; required: boolean; minChoices: number; maxChoices: number; options: OptChoice[] };
 type CartLine = {
   itemId: string; sku: string; name: string; vendorName: string;
   priceCents: number; basePriceCents: number; quantity: number; taxClass?: string;
+  /* `lineKey` is the ticket line's identity, NOT the sku. Two lemonades with
+     different syrups are two lines; a second identical one adds to the first.
+     Keying on sku alone merged drinks nobody ordered together. */
+  lineKey: string;
+  options?: Record<string, string[]>;
+  optionsText?: string;
 };
 type Drawer = { id: string; employee: string; openedAt: string; openTotalCents: number; cashSalesCents: number; adjustTotalCents?: number };
 
@@ -104,6 +114,20 @@ export default function RegisterKiosk() {
   const [closing, setClosing] = useState(false);
 
   const [floor, setFloor] = useState<FloorItem[]>([]);
+  /* THE QUESTIONS AN ITEM ASKS, ASKED HERE.
+  
+     This screen had no notion of options at all, while the server has validated
+     them since the day they shipped. So a lemonade with a required flavour went
+     on the ticket with no answer, and /api/admin/sale refused the whole sale
+     with "Choose a flavour" — a message about a question the till had never
+     asked and could not show. The vendor could not ring anything up. */
+  const [optAsk, setOptAsk] = useState<{
+    item: { id: string; sku: string; name: string; vendorName: string; taxClass?: string };
+    groups: OptGroup[];
+    picked: Record<string, string[]>;
+  } | null>(null);
+  const [optErr, setOptErr] = useState("");
+  const [optBusy, setOptBusy] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [scan, setScan] = useState("");
   const [scanErr, setScanErr] = useState("");
@@ -198,6 +222,7 @@ export default function RegisterKiosk() {
     try { await fetch("/api/staff/pin-login", { method: "DELETE" }); } catch {}
     setWho(null); setPin(""); setPinErr("");
     setCart([]); setPay("NONE"); setReceipt(null); setCardRef("");
+    setOptAsk(null); setOptErr("");
     if (!quiet) toast.success("Locked");
   }, [toast]);
 
@@ -633,18 +658,70 @@ export default function RegisterKiosk() {
 
   /* ---------------------------------------------------------------- cart -- */
 
-  const addItem = (i: { id: string; sku: string; name: string; priceCents: number; basePriceCents: number; vendorName: string; taxClass?: string }) => {
+  /** A ticket line's identity: the code, plus whatever was chosen on it. */
+  const keyFor = (sku: string, options?: Record<string, string[]>) => {
+    const ids = Object.values(options || {}).flat().sort();
+    return ids.length ? `${sku}|${ids.join(",")}` : sku;
+  };
+
+  const addItem = (i: {
+    id: string; sku: string; name: string; priceCents: number; basePriceCents: number;
+    vendorName: string; taxClass?: string;
+    options?: Record<string, string[]>; optionsText?: string;
+  }) => {
     setScanErr("");
-    setLastSku(i.sku);
+    const lineKey = keyFor(i.sku, i.options);
+    setLastSku(lineKey);
     setCart((c) => {
-      const line = c.find((l) => l.sku === i.sku);
-      if (line) return c.map((l) => (l.sku === i.sku ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { itemId: i.id, sku: i.sku, name: i.name, vendorName: i.vendorName, priceCents: i.priceCents, basePriceCents: i.basePriceCents, quantity: 1, taxClass: i.taxClass }];
+      const line = c.find((l) => l.lineKey === lineKey);
+      if (line) return c.map((l) => (l.lineKey === lineKey ? { ...l, quantity: l.quantity + 1 } : l));
+      return [...c, {
+        itemId: i.id, sku: i.sku, lineKey, name: i.name, vendorName: i.vendorName,
+        priceCents: i.priceCents, basePriceCents: i.basePriceCents, quantity: 1,
+        taxClass: i.taxClass, options: i.options, optionsText: i.optionsText,
+      }];
     });
   };
 
-  const setQty = (sku: string, q: number) =>
-    setCart((c) => (q <= 0 ? c.filter((l) => l.sku !== sku) : c.map((l) => (l.sku === sku ? { ...l, quantity: q } : l))));
+  const setQty = (lineKey: string, q: number) =>
+    setCart((c) => (q <= 0 ? c.filter((l) => l.lineKey !== lineKey) : c.map((l) => (l.lineKey === lineKey ? { ...l, quantity: q } : l))));
+
+  /**
+   * Open the chooser for an item that asks something.
+   *
+   * The menu is fetched for the one item somebody actually tapped rather than
+   * loaded with the floor — a till that downloaded every option on every
+   * refresh would be slower at the thing it does most.
+   */
+  const askOptions = async (sku: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(sku)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setScanErr(String(data.error || `Couldn't open ${sku}.`)); return true; }
+      const groups: OptGroup[] = data.item?.optionGroups || [];
+      if (!groups.length) return false;
+      setOptErr("");
+      setOptAsk({
+        item: {
+          id: data.item.id, sku: data.item.sku, name: data.item.name,
+          vendorName: data.item.vendor?.businessName || "", taxClass: data.item.taxClass,
+        },
+        groups,
+        picked: {},
+      });
+      return true;
+    } catch {
+      setScanErr("No connection — that item's choices couldn't be loaded.");
+      return true;
+    }
+  };
+
+  /** Add it, or ask first. Everything with no questions goes straight on. */
+  const addOrAsk = async (i: FloorItem) => {
+    if (!i.hasOptions) { addItem(i); return; }
+    if (await askOptions(i.sku)) return;
+    addItem(i);
+  };
 
   const doScan = async (raw?: string) => {
     /* The value is passed in when a scanner triggered this, because the timer
@@ -666,10 +743,24 @@ export default function RegisterKiosk() {
        — it always starts CH- and a SKU never does — and a cashier who scans one
        into the ring-up box means "find this order", not "sell me something". */
     if (isPickupCode(code)) { setScanErr(""); await lookupPickup(code); return; }
-    const inCart = cart.find((l) => l.sku === code);
-    if (inCart) { addItem({ id: inCart.itemId, sku: inCart.sku, name: inCart.name, priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents, vendorName: inCart.vendorName, taxClass: inCart.taxClass }); return; }
+    /* Scanning the same code twice repeats the line already on the ticket,
+       choices and all — the common case is a second identical drink, and
+       asking the questions again would be the till arguing with the cashier.
+       Only when exactly ONE line carries that code; with two different drinks
+       on the ticket there is no "the same again" to repeat, so it asks. */
+    const sameCode = cart.filter((l) => l.sku === code);
+    const inCart = sameCode.length === 1 ? sameCode[0] : null;
+    if (inCart) {
+      addItem({
+        id: inCart.itemId, sku: inCart.sku, name: inCart.name,
+        priceCents: inCart.priceCents, basePriceCents: inCart.basePriceCents,
+        vendorName: inCart.vendorName, taxClass: inCart.taxClass,
+        options: inCart.options, optionsText: inCart.optionsText,
+      });
+      return;
+    }
     const onFloor = floor.find((i) => i.sku === code);
-    if (onFloor) { addItem(onFloor); return; }
+    if (onFloor) { await addOrAsk(onFloor); return; }
     try {
       const res = await fetch(`/api/admin/lookup?sku=${encodeURIComponent(code)}`);
       const data = await res.json().catch(() => ({}));
@@ -682,6 +773,20 @@ export default function RegisterKiosk() {
           String(data.error || `Nothing found for ${code}.`) +
             (looksLikeUpc ? ` That's the maker's own barcode — to scan these, set the item's code to ${code}.` : "")
         );
+        return;
+      }
+      /* A drink can't go on the ticket until somebody says which drink. */
+      const groups: OptGroup[] = data.item.optionGroups || [];
+      if (groups.length) {
+        setOptErr("");
+        setOptAsk({
+          item: {
+            id: data.item.id, sku: data.item.sku, name: data.item.name,
+            vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass,
+          },
+          groups,
+          picked: {},
+        });
         return;
       }
       addItem({ id: data.item.id, sku: data.item.sku, name: data.item.name, priceCents: data.item.priceCents, basePriceCents: data.item.basePriceCents, vendorName: data.item.vendor.businessName, taxClass: data.item.taxClass });
@@ -858,7 +963,7 @@ export default function RegisterKiosk() {
         cashTenderedCents: method === "CASH" ? tenderedCents : 0,
         totalCents: dueCents,
         changeCents: method === "CASH" && tenderedCents > 0 ? Math.max(0, tenderedCents - dueCents) : 0,
-        lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, name: l.name, priceCents: l.priceCents })),
+        lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, name: l.name, priceCents: l.priceCents, options: l.options, optionsText: l.optionsText })),
       });
       await refreshQueue();
       setOnline(false);
@@ -872,7 +977,7 @@ export default function RegisterKiosk() {
         paymentMethod: method,
         offline: true,
       });
-      setCart([]); setPay("NONE"); setCardRef("");
+      setCart([]); setPay("NONE"); setCardRef(""); setOptAsk(null);
       return true;
     } catch {
       /* IndexedDB itself refused — private browsing, or a full disk. This is
@@ -917,7 +1022,7 @@ export default function RegisterKiosk() {
           paymentMethod: method,
           cardName: method === "CARD" ? (terminal?.cardLabel || cardRef) : "",
           cashTenderedCents: method === "CASH" ? tenderedCents : 0,
-          lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+          lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, options: l.options })),
           idemKey: key,
           printHere: true,
           ...(terminal ? { terminalPaymentIntentId: terminal.paymentIntentId } : {}),
@@ -942,7 +1047,7 @@ export default function RegisterKiosk() {
          above prints it. */
       sendToPrinter(d);
       setReceipt({ ...(d.sale as Receipt), paymentMethod: method, cardName: terminal?.cardLabel || "" });
-      setCart([]); setPay("NONE"); setCardRef(""); setCharge(null);
+      setCart([]); setPay("NONE"); setCardRef(""); setCharge(null); setOptAsk(null);
       chargeKeyRef.current = "";
       void loadDrawer(); void loadFloor();
     } catch {
@@ -1016,7 +1121,7 @@ export default function RegisterKiosk() {
       const r = await fetch("/api/admin/terminal/charge", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+          lines: cart.map((l) => ({ itemId: l.itemId, quantity: l.quantity, options: l.options })),
           idemKey: chargeKeyRef.current,
         }),
       });
@@ -1211,9 +1316,138 @@ export default function RegisterKiosk() {
         {top}
         {inner}
       </div>
+      {optChooser}
       <div id="printzone" ref={printRef} />
     </>
   );
+
+  /**
+   * WHICH DRINK. Big targets, one screen, no scrolling for a two-question menu.
+   *
+   * Deliberately not the shared Modal component: this is a till being operated
+   * with a thumb over a counter, and a dialog sized for a desktop admin screen
+   * puts eight flavours behind a scroll. The price comes back from the server
+   * rather than being added up here — the till working out deltas itself would
+   * have to know the vendor's fee and repeat the rounding, and the first
+   * disagreement would be a screen promising one price while the drawer took
+   * another.
+   */
+  const optReady = (() => {
+    if (!optAsk) return false;
+    return optAsk.groups.every((g) => {
+      const n = (optAsk.picked[g.id] || []).length;
+      const min = g.required ? Math.max(1, g.minChoices) : g.minChoices;
+      return n >= min;
+    });
+  })();
+
+  const closeOpt = () => { setOptAsk(null); setOptErr(""); };
+
+  const confirmOpt = async () => {
+    if (!optAsk) return;
+    setOptBusy(true);
+    setOptErr("");
+    try {
+      const res = await fetch("/api/admin/lookup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku: optAsk.item.sku, options: optAsk.picked }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setOptErr(String(data.error || "That combination didn't price.")); return; }
+      addItem({
+        id: optAsk.item.id, sku: optAsk.item.sku, name: optAsk.item.name,
+        vendorName: optAsk.item.vendorName, taxClass: optAsk.item.taxClass,
+        priceCents: Number(data.priceCents), basePriceCents: Number(data.basePriceCents),
+        options: optAsk.picked, optionsText: String(data.optionsText || ""),
+      });
+      closeOpt();
+    } catch {
+      setOptErr("No connection — that couldn't be priced. Add it once you're back online.");
+    } finally { setOptBusy(false); }
+  };
+
+  const optChooser = optAsk ? (
+    <div className="rg-ask" role="dialog" aria-modal="true" aria-label={`Choices for ${optAsk.item.name}`}>
+      <div className="rg-askbox">
+        <div className="rg-askhead">
+          <div className="stack g-0" style={{ minWidth: 0 }}>
+            <b>{optAsk.item.name}</b>
+            <small>{optAsk.item.vendorName}</small>
+          </div>
+          <button type="button" className="rg-iconbtn" aria-label="Cancel" onClick={closeOpt}>
+            <Icon name="close" size={22} />
+          </button>
+        </div>
+
+        <div className="rg-askbody">
+          {optAsk.groups.map((g) => {
+            const picked = optAsk.picked[g.id] || [];
+            const single = Math.max(1, g.maxChoices) === 1;
+            const min = g.required ? Math.max(1, g.minChoices) : g.minChoices;
+            return (
+              <div key={g.id} className="rg-askgroup">
+                <div className="rg-asklabel">
+                  <b>{g.name}</b>
+                  {min > 0
+                    ? <span className="rg-askreq">{single ? "Pick one" : `Pick at least ${min}`}</span>
+                    : <span className="rg-askopt">Optional{single ? "" : " — add as many as you like"}</span>}
+                </div>
+                <div className="rg-askrow">
+                  {g.options.map((o) => {
+                    const on = picked.includes(o.id);
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        className={`rg-askbtn${on ? " on" : ""}${o.soldOut ? " out" : ""}`}
+                        disabled={o.soldOut}
+                        onClick={() =>
+                          setOptAsk((f) => {
+                            if (!f) return f;
+                            const cur = f.picked[g.id] || [];
+                            /* One answer replaces the last; a many-answer group
+                               toggles and stops at its own limit. */
+                            const next = single
+                              ? (on ? [] : [o.id])
+                              : on
+                                ? cur.filter((x) => x !== o.id)
+                                : cur.length >= Math.max(1, g.maxChoices) ? cur : [...cur, o.id];
+                            return { ...f, picked: { ...f.picked, [g.id]: next } };
+                          })
+                        }
+                      >
+                        <span>{o.name}</span>
+                        {o.soldOut
+                          ? <small>sold out</small>
+                          : o.priceDeltaCents > 0
+                            ? <small>+{money(tag(o.priceDeltaCents))}</small>
+                            : o.priceDeltaCents < 0
+                              ? <small>−{money(tag(Math.abs(o.priceDeltaCents)))}</small>
+                              : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          {optErr ? <Note tone="error">{optErr}</Note> : null}
+        </div>
+
+        <div className="rg-askfoot">
+          <button type="button" className="rg-askcancel" onClick={closeOpt}>Cancel</button>
+          <button
+            type="button"
+            className="rg-askadd"
+            disabled={optBusy || !optReady}
+            onClick={() => void confirmOpt()}
+          >
+            {optBusy ? "Adding…" : optReady ? "Add to ticket" : "Choose above"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   const center = (inner: React.ReactNode) => <div className="rg-center">{inner}</div>;
 
@@ -1568,9 +1802,12 @@ export default function RegisterKiosk() {
   const itemCount = cart.reduce((n, l) => n + l.quantity, 0);
 
   const itemTile = (i: FloorItem) => (
-    <button key={i.id} type="button" className={`rg-tile${i.quantity === 0 ? " out" : ""}`} onClick={() => addItem(i)}>
+    <button key={i.id} type="button" className={`rg-tile${i.quantity === 0 ? " out" : ""}`} onClick={() => void addOrAsk(i)}>
       <b>{i.name}</b>
-      <span className="meta"><span>{i.quantity === 0 ? "Out" : `${i.quantity} left`}</span><span className="num">{money(tag(i.priceCents))}</span></span>
+      <span className="meta">
+        <span>{i.quantity === 0 ? "Out" : `${i.quantity} left`}</span>
+        <span className="num">{i.hasOptions ? "from " : ""}{money(tag(i.priceCents))}</span>
+      </span>
     </button>
   );
 
@@ -1592,18 +1829,19 @@ export default function RegisterKiosk() {
           </div>
         ) : (
           cart.map((l) => (
-            <div key={l.sku} id={`rg-line-${l.sku}`} className={`rg-line${l.sku === lastSku ? " is-new" : ""}`}>
+            <div key={l.lineKey} id={`rg-line-${l.lineKey}`} className={`rg-line${l.lineKey === lastSku ? " is-new" : ""}`}>
               {pay === "NONE" ? (
                 <span className="rg-qty">
-                  <button type="button" aria-label={`One fewer ${l.name}`} onClick={() => setQty(l.sku, l.quantity - 1)}>−</button>
+                  <button type="button" aria-label={`One fewer ${l.name}`} onClick={() => setQty(l.lineKey, l.quantity - 1)}>−</button>
                   <span>{l.quantity}</span>
-                  <button type="button" aria-label={`One more ${l.name}`} onClick={() => { setQty(l.sku, l.quantity + 1); setLastSku(l.sku); }}>+</button>
+                  <button type="button" aria-label={`One more ${l.name}`} onClick={() => { setQty(l.lineKey, l.quantity + 1); setLastSku(l.lineKey); }}>+</button>
                 </span>
               ) : (
                 <span className="num" style={{ fontWeight: 700, minWidth: 36 }}>{l.quantity}×</span>
               )}
               <span className="rg-name">
                 <b>{l.name}</b>
+                {l.optionsText ? <small className="rg-opts">{l.optionsText}</small> : null}
                 <small>{l.vendorName} · {money(tag(l.priceCents))} each</small>
               </span>
               <span className="rg-amt">{money(tag(l.priceCents) * l.quantity)}</span>
@@ -1738,7 +1976,7 @@ export default function RegisterKiosk() {
             if (e.key === "Enter" || e.key === "Tab") {
               e.preventDefault();
               const exact = floor.some((i) => i.sku === scan.trim().toUpperCase());
-              if (!exact && hits.length === 1) { addItem(hits[0]); setScan(""); return; }
+              if (!exact && hits.length === 1) { void addOrAsk(hits[0]); setScan(""); return; }
               void doScan();
             }
           }}
@@ -1891,6 +2129,36 @@ export default function RegisterKiosk() {
 /* The till's own layout. Kept here rather than in globals.css because nothing
    else in the app looks like a cash register, and nothing else should. */
 const TILL_CSS = `
+/* ---- the choices an item asks for -------------------------------------- */
+.rg-ask { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; padding: 14px; background: rgba(0,0,0,.55); }
+.rg-askbox { display: flex; flex-direction: column; width: 100%; max-width: 760px; max-height: 94vh; max-height: 94dvh; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
+.rg-askhead { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.rg-askhead b { font-size: var(--fs-lg); }
+.rg-askhead small { color: var(--muted); font-size: var(--fs-sm); }
+.rg-askbody { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 14px 16px; display: flex; flex-direction: column; gap: 18px; }
+.rg-askgroup { display: flex; flex-direction: column; gap: 8px; }
+.rg-asklabel { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.rg-asklabel b { font-size: var(--fs-md); }
+.rg-askreq { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--warn-text); }
+.rg-askopt { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.rg-askrow { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.rg-askbtn { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-height: 64px; padding: 10px 12px; border-radius: 12px; border: 2px solid var(--border); background: var(--surface); color: var(--text); font-size: var(--fs-md); font-weight: 650; text-align: left; }
+.rg-askbtn small { font-weight: 600; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.rg-askbtn.on { border-color: var(--accent); background: var(--accent-soft); }
+.rg-askbtn.on small { color: var(--text); }
+.rg-askbtn.out { opacity: .45; }
+.rg-askbtn:active { background: var(--surface-active); }
+.rg-askfoot { flex: 0 0 auto; display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.rg-askcancel { flex: 0 0 auto; min-width: 120px; min-height: 60px; padding: 0 18px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: var(--fs-md); font-weight: 650; }
+.rg-askadd { flex: 1 1 auto; min-height: 60px; border-radius: 12px; border: 0; background: var(--accent); color: var(--accent-contrast, #fff); font-size: var(--fs-lg); font-weight: 750; }
+.rg-askadd:disabled { opacity: .5; }
+.rg-askadd:active:not(:disabled) { filter: brightness(.94); }
+.rg-opts { color: var(--text) !important; font-weight: 600; }
+@media (max-width: 560px) {
+  .rg-askrow { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .rg-askbtn { min-height: 58px; }
+}
+
 .rg { height: 100dvh; display: flex; flex-direction: column; background: var(--bg-sunken); overflow: hidden; }
 .rg-top { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 52px; background: var(--surface); border-bottom: 1px solid var(--border); overflow: hidden; }
 .rg-who { font-weight: 700; font-size: var(--fs-md); white-space: nowrap; }

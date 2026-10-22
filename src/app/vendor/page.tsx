@@ -3877,8 +3877,14 @@ export default function VendorDashboard() {
                     icon="plus"
                     disabled={optBusy || !newGroup.trim()}
                     onClick={async () => {
+                      /* OPTIONAL UNTIL YOU SAY OTHERWISE. These started out
+                         required, which turned a list of flavours into a
+                         question every customer had to answer before any drink
+                         could be rung up at all — including the plain one.
+                         "Make required" is one tap away for a question that
+                         genuinely has to be answered, like a size. */
                       const ok = await optCall(editing.id, "POST", {
-                        kind: "group", name: newGroup, required: true, appliesToAll: newGroupAll,
+                        kind: "group", name: newGroup, required: false, appliesToAll: newGroupAll,
                       });
                       if (ok) setNewGroup("");
                     }}

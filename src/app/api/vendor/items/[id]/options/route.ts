@@ -72,7 +72,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (count >= 8) {
       return NextResponse.json({ error: "Eight questions per item is plenty — a longer menu than that stops people ordering." }, { status: 400 });
     }
-    const required = body.required !== false;
+    /* Opt IN to required, rather than out of it. A question nobody answered
+       the `required` flag for is an add-on — a flavour, an extra — and a
+       missing answer must not be able to refuse the sale. */
+    const required = body.required === true;
     /* A required group must take at least one, and a group can never want
        more than it allows. Both are easy to set wrong in a form and
        impossible to recover from on the ordering page, where it would simply
