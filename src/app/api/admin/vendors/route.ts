@@ -19,7 +19,7 @@ export async function GET() {
          and the only screens that could answer it were scoped to money the
          market currently owes or to an open payout run — so a vendor sitting
          at a zero balance appeared in neither. */
-      select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true, rentFree: true, payoutsEnabled: true, payoutStatusNote: true },
+      select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true, rentFree: true, payoutsEnabled: true, payoutStatusNote: true, payoutNudgeAt: true },
     });
     const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
     const map = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));

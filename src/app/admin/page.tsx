@@ -21,7 +21,7 @@ import { newSaleKey } from "@/lib/offline";
 import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; payoutsEnabled?: boolean; payoutStatusNote?: string; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; payoutsEnabled?: boolean; payoutStatusNote?: string; payoutNudgeAt?: string | null; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean; discountLabel?: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 /* `lineKey` is the ticket line's identity, NOT the sku. Two large lemonades
@@ -2218,6 +2218,54 @@ export default function AdminPage() {
   const [showInactive, setShowInactive] = useState(false);
   /** Vendors tab, narrowed to whoever still has to set up direct deposit. */
   const [bankOnly, setBankOnly] = useState(false);
+
+  /**
+   * Ask a vendor — or everyone outstanding — to connect their bank.
+   *
+   * The email points at their portal rather than carrying a Stripe link:
+   * Stripe's onboarding links are single-use, die within minutes, and belong
+   * to whoever is logged in when they're minted.
+   */
+  const nudgePayout = async (v?: Vendor) => {
+    const count = vendors.filter((x) => x.active && !x.payoutsEnabled).length;
+    const yes = await dialog.confirm({
+      title: v ? `Ask ${v.businessName} to set up direct deposit?` : `Ask ${plural(count, "vendor")} to set up direct deposit?`,
+      body: (
+        <>
+          <p>
+            {v
+              ? "They get an email explaining how to connect their bank in their portal, and what they're owed in the meantime."
+              : "Everybody still showing \u201cNot set up\u201d gets an email explaining how to connect their bank in their portal. Anybody already connected is skipped."}
+          </p>
+          <p style={{ marginTop: 8 }}>
+            It doesn&rsquo;t contain a bank form — their details go to Stripe from their own login, never through an
+            email and never through us.
+          </p>
+        </>
+      ),
+      confirmLabel: v ? "Send it" : `Send ${count}`,
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/payout-nudge", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(v ? { vendorId: v.id } : { all: true }),
+      });
+      if (!ok) { toast.error("Couldn't send it", String(data.error || "")); return; }
+      const failed = (data.failed as string[]) || [];
+      const n = Number(data.sent) || 0;
+      if (failed.length) {
+        toast.warn(
+          `Asked ${plural(n, "vendor")}`,
+          `${failed.join(", ")} couldn't be emailed — no address on file, or the mailer refused. Tell them another way.`
+        );
+      } else {
+        toast.success(`Asked ${plural(n, "vendor")}`, "They'll find the button under Money in their portal.");
+      }
+      await loadAll();
+    } finally { setBusy(false); }
+  };
   /* Note: the per-application notes/contract form and its PATCH handler used to
      live here too. That workflow now has its own screen at /admin/applications,
      so this page only needs the read-only pipeline view. */
@@ -8703,6 +8751,14 @@ export default function AdminPage() {
                     : `No direct deposit (${vendors.filter((v) => v.active && !v.payoutsEnabled).length})`}
                 </Button>
               ) : null}
+              {/* Only offered on the filtered list, where it is obvious who is
+                  about to be emailed. On the full roster it would be a button
+                  that mails people you can't see. */}
+              {bankOnly && allowed("financials") && vendors.some((v) => v.active && !v.payoutsEnabled) ? (
+                <Button size="sm" variant="secondary" icon="mail" disabled={busy} onClick={() => void nudgePayout()}>
+                  Ask them all
+                </Button>
+              ) : null}
             </div>
             <DataTable
               rows={[...vendors]
@@ -8772,6 +8828,10 @@ export default function AdminPage() {
                         {v.payoutStatusNote ? (
                           <span className="t-dim t-xs" style={{ maxWidth: 220 }}>{v.payoutStatusNote}</span>
                         ) : null}
+                        {/* So a chase list says who has already been chased. */}
+                        <span className="t-dim t-xs">
+                          {v.payoutNudgeAt ? `Asked ${relTime(v.payoutNudgeAt)}` : "Never asked"}
+                        </span>
                       </div>
                     ),
                 },
@@ -8888,6 +8948,40 @@ export default function AdminPage() {
                       },
                     ]}
                   />
+
+                  {/* ---- how they get paid ------------------------------ */}
+                  {v.active && allowed("financials") ? (
+                    <div className="stack g-2">
+                      <p className="t-label">How they get paid</p>
+                      {v.payoutsEnabled ? (
+                        <Note tone="success">
+                          Their bank is connected — payouts go straight to them.
+                        </Note>
+                      ) : (
+                        <>
+                          <Note tone="warn" title="No direct deposit yet">
+                            {v.payoutStatusNote
+                              ? <>Stripe is still waiting on something: {v.payoutStatusNote}</>
+                              : <>They have to connect a bank from the Money tab of their own portal — there is no link
+                                 anyone can send them, because Stripe&rsquo;s are single-use and tied to their login.</>}
+                            {v.balance > 0 ? <> They&rsquo;re owed <b>{money(v.balance)}</b> in the meantime.</> : null}
+                          </Note>
+                          <Button
+                            variant="secondary"
+                            icon="mail"
+                            disabled={busy}
+                            onClick={() => void nudgePayout(v)}
+                            style={{ alignSelf: "flex-start" }}
+                          >
+                            {v.payoutNudgeAt ? "Ask them again" : "Ask them to set it up"}
+                          </Button>
+                          {v.payoutNudgeAt ? (
+                            <span className="t-dim t-xs">Last asked {relTime(v.payoutNudgeAt)}.</span>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  ) : null}
 
                   {/* Left-aligned in its own block rather than squeezed into the
                       right-hand column of the list — these are buttons, not values. */}

@@ -103,6 +103,10 @@ model Vendor {
   // What Stripe is still waiting on, in plain words, so the vendor portal can
   // say something more useful than "pending".
   payoutStatusNote String  @default("")
+  // When the office last asked them to connect a bank. Shown on the vendors
+  // list so a chase list says who has already been chased — without it the
+  // only way to know was to remember.
+  payoutNudgeAt    DateTime?
   publicBlurb       String   @default("")
   // The storefront. publicBlurb stays as the one-line summary that shows in
   // listings; these are the page itself.

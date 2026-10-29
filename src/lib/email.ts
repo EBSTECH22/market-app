@@ -567,6 +567,53 @@ export async function sendRentLinkEmail(to: string, businessName: string, booth:
   await send(to, `Rent payment link — booth ${booth} \u00b7 Community Harvest`, shell(inner));
 }
 
+/**
+ * "Connect your bank so we can pay you."
+ *
+ * There was no email for this at all, which is why most of the market still
+ * had no direct deposit: the only way to ask was to catch somebody in person.
+ *
+ * NO LINK TO STRIPE IN HERE, deliberately. Stripe's onboarding links are
+ * single-use, expire within minutes, and are minted against the vendor's own
+ * logged-in session — one pasted into an email is dead before they read it.
+ * So this points at their portal, where the button mints a fresh one.
+ */
+export async function sendPayoutSetupEmail(
+  to: string,
+  businessName: string,
+  owedCents: number,
+  unfinished: boolean
+) {
+  const owedLine =
+    owedCents > 0
+      ? `<div style="text-align:left;background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin-bottom:16px;font-size:14px;color:#92400e;">
+           You have <b>$${(owedCents / 100).toFixed(2)}</b> waiting. It stays on your account until there&rsquo;s somewhere to send it.
+         </div>`
+      : "";
+
+  const inner = `
+    <div style="font-size:34px;line-height:1;">\ud83c\udfe6</div>
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:6px 0 8px;letter-spacing:-0.02em;">${
+      unfinished ? "Your bank setup isn&rsquo;t finished" : "Set up direct deposit"
+    }</h2>
+    <p style="font-size:14px;color:#6b7280;margin:0 0 14px;">Hi ${businessName} — ${
+      unfinished
+        ? "you started connecting your bank but Stripe is still waiting on something. Finishing takes a minute."
+        : "connect your bank once and what you sell gets sent straight to you, instead of waiting on a check."
+    }</p>
+    ${owedLine}
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;font-size:13.5px;color:#374151;">
+      <b style="display:block;margin-bottom:8px;">How to do it</b>
+      1. Log in to your vendor portal<br>
+      2. Open the <b>Money</b> tab<br>
+      3. Under <b>Where your money goes</b>, press the button<br>
+      4. Fill in Stripe&rsquo;s form — bank details and a photo ID
+    </div>
+    <a href="${baseUrl()}/vendor#money" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:15px;padding:14px 30px;border-radius:10px;text-decoration:none;">Open my Money tab</a>
+    <p style="font-size:12px;color:#9ca3af;margin:16px 0 0;">Your bank details go to Stripe, not to us \u2014 the market never sees your account number or your ID. Still prefer cash or a check? Tell us and we&rsquo;ll keep paying you that way.</p>`;
+  await send(to, `Set up direct deposit \u00b7 Community Harvest`, shell(inner));
+}
+
 export async function sendViewingEmail(to: string, contactName: string, businessName: string, when: string) {
   const inner = `
     <div style="font-size:34px;line-height:1;">\ud83d\udccd</div>
