@@ -80,7 +80,25 @@ export async function GET() {
     );
 
     const rows = applications.map((a) => {
-      const vendor = (a.vendorId ? vById.get(a.vendorId) : null) ?? vByEmail.get(a.email.toLowerCase()) ?? null;
+      /* MATCHING BY EMAIL IS ONLY FOR APPLICATIONS WE'VE ALREADY ACTED ON.
+
+         The fallback exists for rows accepted before the vendor id was stamped
+         on them. Applied to an application nobody has decided yet, it says the
+         wrong thing: an existing vendor who applies again for a SECOND booth
+         has no vendorId on the new application — that absence is the whole
+         point, it means "not accepted yet" — and the email lookup filled it in
+         from their first booth. `phaseFor` then read a vendor id and an
+         agreement and filed the brand-new application under "Agreement in
+         progress", showing the first booth's agreement. The one button that
+         application needed, Create agreement, only appears in the NEW phase,
+         so there was no way to raise the second agreement at all.
+
+         An undecided application therefore resolves only through its own
+         stamp, which is nothing — exactly as it should be. */
+      const decided = !!a.decidedAt || (a.status !== "PENDING" && a.status !== "WAITLIST");
+      const vendor =
+        (a.vendorId ? vById.get(a.vendorId) : null) ??
+        (decided ? vByEmail.get(a.email.toLowerCase()) ?? null : null);
       const contract = vendor ? contracts.find((c) => c.vendorId === vendor.id) ?? null : null;
       const delivery = contract ? deliveryFor(contract) : null;
       const balance = vendor ? balMap[vendor.id] || 0 : 0;
@@ -92,6 +110,7 @@ export async function GET() {
         hasAgreement: !!contract,
         vendorPortalLocked: vendor ? vendor.portalLocked : null,
         agreementStatus: contract?.status ?? null,
+        agreementExecuted: contract ? !!contract.vendorSignedAt && !!contract.marketSignedAt : undefined,
       });
 
       return {

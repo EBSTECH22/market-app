@@ -100,6 +100,8 @@ export function phaseFor(a: {
   vendorPortalLocked: boolean | null;
   /** Status of their most recent agreement, if any. */
   agreementStatus?: string | null;
+  /** Whether that agreement is signed by both sides. Undefined when unknown. */
+  agreementExecuted?: boolean;
 }): Phase {
   /* Checked before DECLINED: someone who pulled out is a different thing from
      someone we turned down, and it's the one the office wants to see
@@ -118,6 +120,13 @@ export function phaseFor(a: {
      get pulled back into the queue, and after the two exits above so a
      withdrawal still reads as a withdrawal. */
   if (a.status === "WAITLIST" && !a.vendorId && !a.hasAgreement) return "WAITLIST";
+  /* AN UNSIGNED AGREEMENT IS STILL IN PROGRESS, even for a vendor who is
+     already selling. Checked before the LIVE test, which only looks at whether
+     their portal is open: an existing vendor taking a SECOND booth has an
+     unlocked portal from the first one, so their new agreement went straight
+     to "Selling at the market" and the chase-the-signature buttons — which
+     live in "Agreement in progress" — were nowhere to be found. */
+  if (a.hasAgreement && a.agreementExecuted === false) return "IN_PROGRESS";
   if (a.vendorId && a.vendorPortalLocked === false) return "LIVE";
   if (a.vendorId || a.hasAgreement) return "IN_PROGRESS";
   return "NEW";

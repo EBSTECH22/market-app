@@ -840,6 +840,98 @@ export default function ApplicationsPage() {
     return { awaitingSignature, stale, awaitingCountersign, awaitingRent, owedCents };
   }, [inProgress]);
 
+  /**
+   * RAISING AN AGREEMENT, FROM WHEREVER THE APPLICANT IS SITTING.
+   *
+   * One button and one dialog, offered on every card and every row that has no
+   * agreement against it — whatever list it is in. It used to be an inline
+   * block inside the New-applications card only, which made every other list a
+   * dead end: "Add as vendor" moves an application to Agreement in progress
+   * without raising anything, and every button there acts on an agreement, so
+   * the card read "No agreement raised yet" and offered no way to supply one.
+   * Somebody on the waiting list, or marked live, or reopened after backing
+   * out, was stuck the same way.
+   *
+   * A dialog rather than an inline panel because the other lists are tables,
+   * and a form that only fits in a card is how this ended up in one place to
+   * begin with.
+   */
+  const openAgreementForm = (a: App) =>
+    setForm({ id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) });
+
+  /** Shown wherever there is no agreement yet. */
+  const createAgreementButton = (a: App, size?: "sm") =>
+    a.agreement ? null : (
+      <Button variant="primary" icon="contract" size={size} disabled={busy} onClick={() => openAgreementForm(a)}>
+        Create agreement
+      </Button>
+    );
+
+  const formApp = form ? apps.find((x) => x.id === form.id) ?? null : null;
+
+  const agreementDialog = (
+    <Modal
+      open={!!form && !!formApp}
+      onClose={() => setForm(null)}
+      title="Create agreement"
+      description={formApp ? formApp.vendor?.businessName || formApp.businessName : undefined}
+      width="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
+          <Button
+            variant="primary"
+            icon="mail"
+            loading={busy}
+            disabled={!form?.booth.trim() || !(Number(form?.rent) > 0) || !form?.start}
+            onClick={() => formApp && submitContract(formApp)}
+          >
+            Create &amp; send for signature
+          </Button>
+        </>
+      }
+    >
+      {form ? (
+        <div className="stack g-4">
+          <Note tone="info">First month is full rent, charged once they sign. Month two prorates back to the calendar.</Note>
+
+          <Field label="Booth label" required>
+            {(p) => (
+              <Input
+                {...p}
+                value={form.booth}
+                placeholder="A3"
+                onChange={(e) => setForm((f) => f && ({ ...f, booth: e.target.value }))}
+              />
+            )}
+          </Field>
+
+          <Field label="Monthly rent" hint="Dollars. Billed on the first of each month." required>
+            {(p) => (
+              <MoneyInput
+                {...p}
+                value={form.rent}
+                placeholder="96"
+                onChange={(e) => setForm((f) => f && ({ ...f, rent: e.target.value }))}
+              />
+            )}
+          </Field>
+
+          <Field label="Start date" required>
+            {(p) => (
+              <Input
+                {...p}
+                type="date"
+                value={form.start}
+                onChange={(e) => setForm((f) => f && ({ ...f, start: e.target.value }))}
+              />
+            )}
+          </Field>
+        </div>
+      ) : null}
+    </Modal>
+  );
+
   const liveColumns: Column<App>[] = [
     {
       key: "business",
@@ -859,6 +951,16 @@ export default function ApplicationsPage() {
       header: "Booth",
       cell: (a) => a.agreement?.boothLabel || "—",
       sortBy: (a) => a.agreement?.boothLabel ?? "",
+    },
+    {
+      key: "raise",
+      header: <span className="sr-only">Agreement</span>,
+      align: "right",
+      mobileLabel: "Agreement",
+      /* Every list gets this, because "they have no agreement" is a thing that
+         can be true of someone in any of them — waiting on a space, marked
+         live off an earlier booth, or reopened after backing out. */
+      cell: (a) => createAgreementButton(a, "sm") ?? <span className="t-dim t-sm">Raised</span>,
     },
     {
       key: "openVendor",
@@ -924,6 +1026,17 @@ export default function ApplicationsPage() {
         </Button>
       ),
     },
+    {
+      key: "raise",
+      header: <span className="sr-only">Agreement</span>,
+      align: "right",
+      mobileLabel: "Agreement",
+      /* "They have no agreement" can be true of somebody in any of these
+         lists — waiting on a space, marked live off an earlier booth, or
+         reopened after backing out — so every list offers the way to raise
+         one rather than sending you round the houses to find it. */
+      cell: (a) => createAgreementButton(a, "sm") ?? <span className="t-dim t-sm">Raised</span>,
+    },
   ];
 
   const declinedColumns: Column<App>[] = [
@@ -957,6 +1070,17 @@ export default function ApplicationsPage() {
           {a.decidedAt ? <span className="t-xs t-muted">{fmtDate(a.decidedAt)}</span> : null}
         </span>
       ),
+    },
+    {
+      key: "raise",
+      header: <span className="sr-only">Agreement</span>,
+      align: "right",
+      mobileLabel: "Agreement",
+      /* "They have no agreement" can be true of somebody in any of these
+         lists — waiting on a space, marked live off an earlier booth, or
+         reopened after backing out — so every list offers the way to raise
+         one rather than sending you round the houses to find it. */
+      cell: (a) => createAgreementButton(a, "sm") ?? <span className="t-dim t-sm">Raised</span>,
     },
   ];
 
@@ -1044,6 +1168,17 @@ export default function ApplicationsPage() {
         </span>
       ),
     },
+    {
+      key: "raise",
+      header: <span className="sr-only">Agreement</span>,
+      align: "right",
+      mobileLabel: "Agreement",
+      /* "They have no agreement" can be true of somebody in any of these
+         lists — waiting on a space, marked live off an earlier booth, or
+         reopened after backing out — so every list offers the way to raise
+         one rather than sending you round the houses to find it. */
+      cell: (a) => createAgreementButton(a, "sm") ?? <span className="t-dim t-sm">Raised</span>,
+    },
   ];
 
   /* ----------------------------------------------------------- new cards -- */
@@ -1126,14 +1261,7 @@ export default function ApplicationsPage() {
                 you'd clicked through two other steps first. These cards are all
                 pre-agreement by definition (the NEW phase), so there is nothing
                 here to protect against. */}
-            <Button
-              variant="primary"
-              icon="contract"
-              disabled={busy}
-              onClick={() => setForm(form?.id === a.id ? null : { id: a.id, booth: a.boothRequest || "", rent: "", start: new Date().toISOString().slice(0, 10) })}
-            >
-              Create agreement
-            </Button>
+            {createAgreementButton(a)}
 
             <Button icon="user" disabled={busy} onClick={() => addAsVendor(a)}>
               Add as vendor
@@ -1196,60 +1324,6 @@ export default function ApplicationsPage() {
             </div>
           )}
 
-          {form?.id === a.id && (
-            <div className="card card-pad-sm stack g-4" style={{ background: "var(--bg-inset)" }}>
-              <div>
-                <h3 className="t-card">Create agreement</h3>
-                <p className="t-xs t-muted">First month is full rent; month two prorates.</p>
-              </div>
-
-              <Field label="Booth label" required>
-                {(p) => (
-                  <Input
-                    {...p}
-                    value={form.booth}
-                    placeholder="A3"
-                    onChange={(e) => setForm((f) => f && ({ ...f, booth: e.target.value }))}
-                  />
-                )}
-              </Field>
-
-              <Field label="Monthly rent" hint="Dollars. Billed on the first of each month." required>
-                {(p) => (
-                  <MoneyInput
-                    {...p}
-                    value={form.rent}
-                    placeholder="96"
-                    onChange={(e) => setForm((f) => f && ({ ...f, rent: e.target.value }))}
-                  />
-                )}
-              </Field>
-
-              <Field label="Start date" required>
-                {(p) => (
-                  <Input
-                    {...p}
-                    type="date"
-                    value={form.start}
-                    onChange={(e) => setForm((f) => f && ({ ...f, start: e.target.value }))}
-                  />
-                )}
-              </Field>
-
-              <div className="row wrap g-2">
-                <Button
-                  variant="primary"
-                  icon="mail"
-                  loading={busy}
-                  disabled={!form.booth.trim() || !(Number(form.rent) > 0) || !form.start}
-                  onClick={() => submitContract(a)}
-                >
-                  Create &amp; send for signature
-                </Button>
-                <Button variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
-              </div>
-            </div>
-          )}
         </div>
       </Card>
     );
@@ -1290,6 +1364,14 @@ export default function ApplicationsPage() {
           <ContactActions email={a.email} phone={a.phone} />
 
           <div className="row wrap g-2">
+            {/* THE WAY OUT OF "No agreement raised yet".
+            
+                Every other button on this card acts on an agreement, so an
+                applicant who was added as a vendor first — which stamps the
+                vendor id, moves them here, and raises nothing — had no button
+                at all. The card said what was missing and gave no means to
+                supply it. */}
+            {createAgreementButton(a)}
             {canRemind && ag ? (
               <Button variant="primary" icon="mail" disabled={busy} onClick={() => sendReminder(a)}>
                 {del?.state === "DRAFT" ? "Send the agreement" : "Send reminder"}
@@ -1627,6 +1709,8 @@ export default function ApplicationsPage() {
           ) : null}
         </div>
       )}
+
+      {agreementDialog}
     </main>
   );
 }
