@@ -21,7 +21,7 @@ import { newSaleKey } from "@/lib/offline";
 import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
 
-type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
+type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; payoutsEnabled?: boolean; payoutStatusNote?: string; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean; discountLabel?: string };
 type Overview = { today: { count: number; totalCents: number; taxCents: number }; month: { count: number; totalCents: number; taxCents: number }; vendors: number; floor: FloorItem[] };
 /* `lineKey` is the ticket line's identity, NOT the sku. Two large lemonades
@@ -2216,6 +2216,8 @@ export default function AdminPage() {
     try { localStorage.setItem("bankView", v); } catch { /* private window */ }
   };
   const [showInactive, setShowInactive] = useState(false);
+  /** Vendors tab, narrowed to whoever still has to set up direct deposit. */
+  const [bankOnly, setBankOnly] = useState(false);
   /* Note: the per-application notes/contract form and its PATCH handler used to
      live here too. That workflow now has its own screen at /admin/applications,
      so this page only needs the read-only pipeline view. */
@@ -4243,7 +4245,9 @@ export default function AdminPage() {
       });
       if (!ok) { setCMsg(String(data.error || "Couldn't create it.")); return; }
       setCMsg("");
-      const prorate = `First month prorates to ${money(Number(data.firstMonthCents) || 0)} and is on their balance.`;
+      /* Says "once they sign" because nothing posts before that — and since
+         the rent run now skips unsigned agreements, nothing will. */
+      const prorate = `First month is ${money(Number(data.firstMonthCents) || 0)} in full, charged once they sign. The second month prorates back to the calendar.`;
       if (data.emailed) {
         toast.success("Agreement created and sent", `Signing link emailed to ${String(data.to || "them")}. ${prorate}`);
       } else {
@@ -8682,10 +8686,28 @@ export default function AdminPage() {
                 placeholder="Search code, business, contact, or email…"
                 aria-label="Search vendors"
               />
+              {/* A column tells you one vendor's state; this turns it into the
+                  list you chase. Only offered when somebody is actually
+                  outstanding — a button that always filters to nothing is just
+                  another thing to read. */}
+              {vendors.some((v) => v.active && !v.payoutsEnabled) ? (
+                <Button
+                  size="sm"
+                  variant={bankOnly ? "primary" : "secondary"}
+                  icon="bank"
+                  aria-pressed={bankOnly}
+                  onClick={() => setBankOnly((x) => !x)}
+                >
+                  {bankOnly
+                    ? "Show everyone"
+                    : `No direct deposit (${vendors.filter((v) => v.active && !v.payoutsEnabled).length})`}
+                </Button>
+              ) : null}
             </div>
             <DataTable
               rows={[...vendors]
                 .filter((v) => v.active || showInactive)
+                .filter((v) => !bankOnly || !v.payoutsEnabled)
                 .filter((v) => {
                   const q = vendorQ.trim().toLowerCase();
                   if (!q) return true;
@@ -8732,6 +8754,28 @@ export default function AdminPage() {
                   ),
                 },
                 {
+                  key: "bank",
+                  header: "Bank",
+                  hideBelow: 760,
+                  /* Not-set-up sorts to the top, because that is the list
+                     somebody is actually trying to read off this column. */
+                  sortBy: (v) => (v.payoutsEnabled ? 1 : 0),
+                  cell: (v) =>
+                    v.payoutsEnabled ? (
+                      <Badge tone="success" dot>Direct deposit</Badge>
+                    ) : (
+                      <div className="stack g-0">
+                        <Badge tone="warn" dot>Not set up</Badge>
+                        {/* Stripe's own reason, when it gave one — usually ID
+                            verification or the bank account itself. Saves
+                            opening the payouts screen to find out why. */}
+                        {v.payoutStatusNote ? (
+                          <span className="t-dim t-xs" style={{ maxWidth: 220 }}>{v.payoutStatusNote}</span>
+                        ) : null}
+                      </div>
+                    ),
+                },
+                {
                   key: "status",
                   header: "Status",
                   sortBy: (v) => (!v.active ? 2 : v.portalLocked ? 1 : 0),
@@ -8754,7 +8798,14 @@ export default function AdminPage() {
               caption="Vendors, balances, and account status"
               onRowClick={(v) => { setVendorOpen(v.id); setEditV(null); }}
               empty={
-                vendorQ.trim() ? (
+                bankOnly ? (
+                  <EmptyState
+                    icon="bank"
+                    title="Everybody's bank details are in"
+                    body="Every active vendor can be paid by direct deposit."
+                    action={<Button variant="secondary" onClick={() => setBankOnly(false)}>Show everyone</Button>}
+                  />
+                ) : vendorQ.trim() ? (
                   <EmptyState
                     icon="search"
                     title="No vendors match that search"

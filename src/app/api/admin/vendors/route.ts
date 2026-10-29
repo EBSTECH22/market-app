@@ -14,7 +14,12 @@ export async function GET() {
     { const denied = await denyUnless("market"); if (denied) return denied; }
     const vendors = await db.vendor.findMany({
       orderBy: { code: "asc" },
-      select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true, rentFree: true },
+      /* `payoutsEnabled` and the note Stripe left come along because "who
+         still has to set up their bank" is a question about the vendor roster,
+         and the only screens that could answer it were scoped to money the
+         market currently owes or to an open payout run — so a vendor sitting
+         at a zero balance appeared in neither. */
+      select: { id: true, code: true, businessName: true, contactName: true, email: true, phone: true, commissionPercent: true, active: true, allowSelfCheckout: true, portalLocked: true, rentFree: true, payoutsEnabled: true, payoutStatusNote: true },
     });
     const balances = await db.ledgerEntry.groupBy({ by: ["vendorId"], _sum: { amountCents: true } });
     const map = Object.fromEntries(balances.map((b) => [b.vendorId, b._sum.amountCents || 0]));
