@@ -376,14 +376,12 @@ model TimeEntry {
   note       String    @default("")
 }
 
-/**
- * One week's payroll, from draft to paid.
- *
- * A run is the thing that freezes. While it is DRAFT every figure on it can be
- * recomputed from the timeclock or typed over; once it is PAID the stubs stop
- * moving, because a paystub somebody has already been handed has to still say
- * the same thing next March.
- */
+/// One week's payroll, from draft to paid.
+///
+/// A run is the thing that freezes. While it is DRAFT every figure on it can be
+/// recomputed from the timeclock or typed over; once it is PAID the stubs stop
+/// moving, because a paystub somebody has already been handed has to still say
+/// the same thing next March.
 model PayRun {
   id         String   @id @default(cuid())
   /// Monday of the period, YYYY-MM-DD, market time. The run's natural key.
@@ -411,14 +409,12 @@ model PayRun {
   @@index([status])
 }
 
-/**
- * One person's paycheck on one run.
- *
- * Every figure is stored rather than recomputed on read, and the W-4 and the
- * deduction list are SNAPSHOTTED as text. Same reason the booth agreements
- * snapshot their clauses: change somebody's filing status in March and last
- * year's stub must not quietly restate itself.
- */
+/// One person's paycheck on one run.
+///
+/// Every figure is stored rather than recomputed on read, and the W-4 and the
+/// deduction list are SNAPSHOTTED as text. Same reason the booth agreements
+/// snapshot their clauses: change somebody's filing status in March and last
+/// year's stub must not quietly restate itself.
 model Paystub {
   id         String  @id @default(cuid())
   payRunId   String
