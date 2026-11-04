@@ -614,6 +614,73 @@ export async function sendPayoutSetupEmail(
   await send(to, `Set up direct deposit \u00b7 Community Harvest`, shell(inner));
 }
 
+/**
+ * A vendor's statement for a period, emailed.
+ *
+ * Deliberately a SUMMARY with the detail behind a link rather than every line
+ * inline: a busy month is hundreds of rows, which no mail client renders well
+ * and nobody reads on a phone. The figures that matter — what sold, what the
+ * market took, what they were charged, where the account stands — are in the
+ * body, and the line-by-line sits on the page they can print.
+ */
+export async function sendVendorStatementEmail(s: {
+  vendor: { code: string; businessName: string; email: string };
+  from: string;
+  to: string;
+  openingBalanceCents: number;
+  closingBalanceCents: number;
+  totals: {
+    salesGrossCents: number; marketShareCents: number; refundsCents: number;
+    rentChargedCents: number; rentPaidCents: number; paidOutCents: number;
+    adjustmentsCents: number; unitsSold: number;
+  };
+  sales: unknown[];
+  lines: unknown[];
+}) {
+  const m = (c: number) => `$${(c / 100).toFixed(2)}`;
+  const nice = (iso: string) =>
+    new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+
+  const row = (label: string, value: string, strong = false) => `
+    <div style="display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;${strong ? "border-top:1px solid #d1d5db;font-weight:700;margin-top:4px;padding-top:8px;" : ""}">
+      <span>${label}</span><b>${value}</b>
+    </div>`;
+
+  const owed = s.closingBalanceCents;
+  const standing =
+    owed > 0
+      ? `<div style="text-align:left;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:14px 16px;margin:14px 0;font-size:14px;color:#065f46;">
+           The market owes you <b>${m(owed)}</b> as of ${nice(s.to)}.
+         </div>`
+      : owed < 0
+        ? `<div style="text-align:left;background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin:14px 0;font-size:14px;color:#92400e;">
+             Your account is <b>${m(-owed)}</b> behind as of ${nice(s.to)}.
+           </div>`
+        : `<div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin:14px 0;font-size:14px;color:#374151;">
+             Your account is square as of ${nice(s.to)}.
+           </div>`;
+
+  const inner = `
+    <h2 style="font-size:20px;font-weight:800;color:#111827;margin:0 0 4px;letter-spacing:-0.02em;">Your statement</h2>
+    <p style="font-size:13px;color:#6b7280;margin:0 0 14px;">${nice(s.from)} to ${nice(s.to)} \u00b7 ${s.vendor.businessName} (${s.vendor.code})</p>
+    ${standing}
+    <div style="text-align:left;background:#fafafa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;">
+      ${row("Balance at the start", m(s.openingBalanceCents))}
+      ${row(`Sold at the market${s.totals.unitsSold ? ` (${s.totals.unitsSold} item${s.totals.unitsSold === 1 ? "" : "s"})` : ""}`, m(s.totals.salesGrossCents))}
+      ${row("Less the market's share", `\u2212${m(s.totals.marketShareCents)}`)}
+      ${s.totals.refundsCents ? row("Refunds to customers", `\u2212${m(s.totals.refundsCents)}`) : ""}
+      ${s.totals.rentChargedCents ? row("Booth rent charged", `\u2212${m(s.totals.rentChargedCents)}`) : ""}
+      ${s.totals.rentPaidCents ? row("Rent you paid", `+${m(s.totals.rentPaidCents)}`) : ""}
+      ${s.totals.adjustmentsCents ? row("Adjustments", `${s.totals.adjustmentsCents > 0 ? "+" : "\u2212"}${m(Math.abs(s.totals.adjustmentsCents))}`) : ""}
+      ${s.totals.paidOutCents ? row("Already paid out to you", `\u2212${m(s.totals.paidOutCents)}`) : ""}
+      ${row("Balance at the end", m(s.closingBalanceCents), true)}
+    </div>
+    <p style="margin:18px 0 6px;"><a href="${baseUrl()}/vendor#money" style="background:#111827;color:#ffffff;padding:13px 26px;text-decoration:none;font-weight:600;font-size:14px;border-radius:10px;display:inline-block;">See every line in your portal</a></p>
+    <p style="font-size:12px;color:#9ca3af;margin:14px 0 0;">Every sale, refund and charge with its date and time is in your portal under \ud83d\udcb5 MONEY. This is a record of what moved through the market\u2019s books for you \u2014 it isn\u2019t tax advice and it isn\u2019t a 1099. Anything that looks wrong, tell the office and we\u2019ll go through it with you.</p>`;
+
+  await send(s.vendor.email, `Your statement \u00b7 ${nice(s.from)} to ${nice(s.to)}`, shell(inner));
+}
+
 export async function sendViewingEmail(to: string, contactName: string, businessName: string, when: string) {
   const inner = `
     <div style="font-size:34px;line-height:1;">\ud83d\udccd</div>

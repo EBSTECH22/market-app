@@ -1943,6 +1943,10 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     through toISOString() either — that shifts by the whole UTC offset. */
 const localInput = (d: Date): string => isoDateTime(d);
 
+/** A plain YYYY-MM-DD read as that calendar day. Handing the bare string to
+    fmtDate parses it as UTC midnight and prints the day before in Central. */
+const dayLabel = (iso: string): string => (iso ? fmtDate(`${iso}T12:00:00`) : "—");
+
 /** The Y-M-D of one month-grid square. These are synthetic dates built from
     local parts to represent a calendar cell, NOT points in time, so they are
     read back with the same local parts rather than converted to Central. */
@@ -2147,6 +2151,17 @@ export default function AdminPage() {
   const [repFrom, setRepFrom] = useState("");
   const [repTo, setRepTo] = useState("");
   const [report, setReport] = useState<Report | null>(null);
+
+  /* vendor statements — one date range serves both entry points: the block on
+     a vendor's own record and the send-to-everybody card under Reports, so a
+     vendor ringing up about theirs is looking at the same period the office
+     is. Opens on the month so far, which is what gets asked for. */
+  const [stFrom, setStFrom] = useState(() => `${isoDate().slice(0, 7)}-01`);
+  const [stTo, setStTo] = useState(() => isoDate());
+  const [stWho, setStWho] = useState<{
+    vendors: { id: string; code: string; businessName: string; email: string }[];
+    withoutEmail: string[];
+  } | null>(null);
 
   // bank
   const [bank, setBank] = useState<{ configured: boolean; available?: number; pending?: number; payouts?: { id: string; amount: number; status: string; arrival: string }[]; error?: string } | null>(null);
@@ -2820,6 +2835,92 @@ export default function AdminPage() {
      `loadPickups` is defined further down — hoisting the effect above its own
      callback is a build error, not just a lint warning. */
   useEffect(() => { if (authed && tab === "register") void loadPickups(); }, [authed, tab, loadPickups]);
+
+  /* ---- vendor statements ----------------------------------------------- */
+
+  /* Who would get one, counted before anything is sent. A button that says
+     "Email 23 vendors" and names the ones with no address on file is the
+     difference between a deliberate send and a surprise. */
+  const loadStatementWho = useCallback(async (from: string, to: string) => {
+    if (!from || !to) { setStWho(null); return; }
+    const { ok, data } = await safeFetch(
+      `/api/admin/vendor-statement?who=1&from=${from}&to=${to}`
+    );
+    if (!ok) { setStWho(null); return; }
+    setStWho({
+      vendors: (data.vendors as { id: string; code: string; businessName: string; email: string }[]) || [],
+      withoutEmail: (data.withoutEmail as string[]) || [],
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (authed && allowed("financials") && tab === "reports") void loadStatementWho(stFrom, stTo);
+  }, [authed, caps, tab, stFrom, stTo, loadStatementWho]);
+
+  /**
+   * Email a statement — to one vendor, or to everybody with activity.
+   *
+   * The confirm names the period and the count, because "send to everyone" is
+   * not a button anybody should be able to press by accident, and a statement
+   * that goes out for the wrong month has to be explained to every vendor who
+   * got it.
+   */
+  const emailStatement = async (v?: Vendor) => {
+    if (!stFrom || !stTo) {
+      toast.warn("Pick a period first", "A statement needs a start and an end date.");
+      return;
+    }
+    const period = `${dayLabel(stFrom)} – ${dayLabel(stTo)}`;
+    const count = stWho?.vendors.filter((x) => x.email).length ?? 0;
+    if (!v && count === 0) {
+      toast.warn("Nobody to send to", "Nothing happened on anybody's account in that period.");
+      return;
+    }
+    const yes = await dialog.confirm({
+      title: v ? `Email ${v.businessName} their statement?` : `Email ${plural(count, "vendor")} their statement?`,
+      body: (
+        <>
+          <p>Covering <b>{period}</b>.</p>
+          <p style={{ marginTop: 8 }}>
+            {v
+              ? "They get every sale, refund, rent charge and payout on their account for those dates, with their closing balance."
+              : "Everybody who had activity in those dates — or is carrying a balance — gets their own statement. Nobody sees anybody else's."}
+          </p>
+          {!v && stWho?.withoutEmail.length ? (
+            <p style={{ marginTop: 8 }}>
+              {stWho.withoutEmail.join(", ")} {stWho.withoutEmail.length === 1 ? "has" : "have"} no email on file and
+              will be skipped — print theirs instead.
+            </p>
+          ) : null}
+        </>
+      ),
+      confirmLabel: v ? "Send it" : `Send ${count}`,
+    });
+    if (!yes) return;
+    setBusy(true);
+    try {
+      const { ok, data } = await safeFetch("/api/admin/vendor-statement", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(v ? { vendorId: v.id, from: stFrom, to: stTo } : { all: true, from: stFrom, to: stTo }),
+      });
+      if (!ok) { toast.error("Couldn't send it", String(data.error || "")); return; }
+      const sent = Number(data.sent) || 0;
+      const noEmail = (data.noEmail as string[]) || [];
+      const failed = (data.failed as string[]) || [];
+      if (failed.length || noEmail.length) {
+        toast.warn(
+          `${plural(sent, "statement")} sent`,
+          [
+            noEmail.length ? `${noEmail.join(", ")} — no email on file.` : "",
+            failed.length ? `${failed.join(", ")} — the mailer refused.` : "",
+          ].filter(Boolean).join(" ")
+        );
+      } else {
+        toast.success(`${plural(sent, "statement")} sent`, `For ${period}.`);
+      }
+    } finally { setBusy(false); }
+  };
 
   const buildPayoutRun = async () => {
     setPayErr("");
@@ -7514,6 +7615,64 @@ export default function AdminPage() {
             </>
           )}
 
+          {/* ---- statements out to every vendor at once -------------------
+              Its own dates, deliberately not the sales-report period above:
+              statements go out for a settled month while somebody is still
+              poking at today's takings, and sharing one date range would mean
+              the send button quietly followed whatever was last clicked. */}
+          {allowed("financials") ? (
+            <Card
+              title="Vendor statements"
+              subtitle="Everything that happened on each account for a set of dates — sales, refunds, rent, payouts, closing balance."
+            >
+              <div className="stack g-4">
+                <div className="row wrap g-3">
+                  <Field label="From" className="grow">
+                    {(p) => <Input {...p} type="date" value={stFrom} onChange={(e) => setStFrom(e.target.value)} />}
+                  </Field>
+                  <Field label="To" className="grow">
+                    {(p) => <Input {...p} type="date" value={stTo} onChange={(e) => setStTo(e.target.value)} />}
+                  </Field>
+                </div>
+
+                {stWho ? (
+                  <Note tone={stWho.vendors.length === 0 ? "warn" : "info"}>
+                    {stWho.vendors.length === 0 ? (
+                      <>Nothing happened on anybody&rsquo;s account between {dayLabel(stFrom)} and {dayLabel(stTo)}.</>
+                    ) : (
+                      <>
+                        {plural(stWho.vendors.filter((x) => x.email).length, "vendor")} would be emailed for{" "}
+                        {dayLabel(stFrom)} – {dayLabel(stTo)}.
+                        {stWho.withoutEmail.length ? (
+                          <> {stWho.withoutEmail.join(", ")} {stWho.withoutEmail.length === 1 ? "has" : "have"} no
+                            email on file and {stWho.withoutEmail.length === 1 ? "is" : "are"} skipped — print theirs
+                            from their record.</>
+                        ) : null}
+                      </>
+                    )}
+                  </Note>
+                ) : (
+                  <Skeleton />
+                )}
+
+                <div className="row wrap g-2">
+                  <Button
+                    icon="mail"
+                    disabled={busy || !stWho || stWho.vendors.filter((x) => x.email).length === 0}
+                    onClick={() => void emailStatement()}
+                    style={{ alignSelf: "flex-start" }}
+                  >
+                    Email every vendor
+                  </Button>
+                </div>
+
+                <p className="t-xs t-muted">
+                  One vendor at a time — and printing or a CSV — is on their own record, under Statement.
+                </p>
+              </div>
+            </Card>
+          ) : null}
+
           {/* ---- what actually goes on the sales tax return ---------------- */}
           <Card
             title="Sales tax return"
@@ -8790,6 +8949,57 @@ export default function AdminPage() {
                           ) : null}
                         </>
                       )}
+                    </div>
+                  ) : null}
+
+                  {/* ---- statement -------------------------------------
+                      Their own copy of the account: every sale, refund, rent
+                      charge and payout for whatever dates are asked for, with
+                      the closing balance. Printed across the counter or
+                      emailed — same figures either way, because all three come
+                      out of one builder. */}
+                  {allowed("financials") ? (
+                    <div className="stack g-2">
+                      <p className="t-label">Statement</p>
+                      <div className="row wrap g-3">
+                        <Field label="From" className="grow">
+                          {(p) => <Input {...p} type="date" value={stFrom} onChange={(e) => setStFrom(e.target.value)} />}
+                        </Field>
+                        <Field label="To" className="grow">
+                          {(p) => <Input {...p} type="date" value={stTo} onChange={(e) => setStTo(e.target.value)} />}
+                        </Field>
+                      </div>
+                      <div className="row wrap g-2">
+                        <LinkButton
+                          href={`/admin/vendor-statement/${v.id}?from=${stFrom}&to=${stTo}`}
+                          size="sm"
+                          icon="print"
+                          external
+                        >
+                          Print it
+                        </LinkButton>
+                        <LinkButton
+                          href={`/api/admin/vendor-statement?vendorId=${v.id}&from=${stFrom}&to=${stTo}&csv=1`}
+                          size="sm"
+                          variant="secondary"
+                          icon="download"
+                          external
+                        >
+                          CSV
+                        </LinkButton>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon="mail"
+                          disabled={busy || !v.email}
+                          onClick={() => void emailStatement(v)}
+                        >
+                          Email it to them
+                        </Button>
+                      </div>
+                      {!v.email ? (
+                        <span className="t-dim t-xs">No email on file — print it instead.</span>
+                      ) : null}
                     </div>
                   ) : null}
 
