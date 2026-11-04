@@ -634,6 +634,8 @@ export async function sendVendorStatementEmail(s: {
     rentChargedCents: number; rentPaidCents: number; paidOutCents: number;
     adjustmentsCents: number; unitsSold: number;
   };
+  /** Built by buildVendorStatement, from the market's own payout day. */
+  settlementNote: string;
   sales: unknown[];
   lines: unknown[];
 }) {
