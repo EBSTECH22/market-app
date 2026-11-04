@@ -129,7 +129,13 @@ export async function GET(req: NextRequest) {
           taxYear: existing.taxYear, periodsPerYear: existing.periodsPerYear,
           paidAt: existing.paidAt, paidBy: existing.paidBy, note: existing.note,
         },
-        rows: existing.stubs.map(shape),
+        /* payType comes off the employee, not the stub — so a 1099 row is
+           labelled on a started run the same way it is on the preview.
+           Without it the badge only appeared before the run existed. */
+        rows: existing.stubs.map((st) => ({
+          ...shape(st),
+          payType: employees.find((e) => e.id === st.employeeId)?.payType || "W2",
+        })),
         clockHundredths: Object.fromEntries(hundredths),
         openPunches: Object.fromEntries(open),
         canPay: existing.status === "DRAFT" && existing.stubs.every((s) => (JSON.parse(s.missingJson || "[]") as string[]).length === 0),
@@ -152,10 +158,22 @@ export async function GET(req: NextRequest) {
         ytdGrossCents: prior.gross,
         ytdSsWagesCents: prior.gross,
       });
+      /* The stub is spread FIRST and the identity fields added after, so
+         nothing it carries can be silently overwritten by a duplicate — the
+         hours and rate it was built with are the ones to report.
+
+         `otherDedCents` is renamed on the way out: the engine calls it
+         `otherDeductionsCents` and the screen (and the stored row) call it
+         `otherDedCents`. Spreading alone left it undefined on the preview,
+         which rendered as NaN in the deductions box. */
+      const { otherDeductionsCents, totalWithheldCents, ...rest } = stub;
+      void totalWithheldCents;
       return {
-        employeeId: e.id, employeeName: e.name, payType: e.payType,
-        hourHundredths: hh, rateCents: e.payRateCents,
-        ...stub,
+        ...rest,
+        otherDedCents: otherDeductionsCents,
+        employeeId: e.id,
+        employeeName: e.name,
+        payType: e.payType,
         deductions: mine.map((d) => ({ name: d.name, amountCents: d.amountCents })),
       };
     });
