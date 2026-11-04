@@ -610,7 +610,7 @@ export async function sendPayoutSetupEmail(
       4. Fill in Stripe&rsquo;s form — bank details and a photo ID
     </div>
     <a href="${baseUrl()}/vendor#money" style="display:inline-block;background:#111827;color:#ffffff;font-weight:600;font-size:15px;padding:14px 30px;border-radius:10px;text-decoration:none;">Open my Money tab</a>
-    <p style="font-size:12px;color:#9ca3af;margin:16px 0 0;">Your bank details go to Stripe, not to us \u2014 the market never sees your account number or your ID. Still prefer cash or a check? Tell us and we&rsquo;ll keep paying you that way.</p>`;
+    <p style="font-size:12px;color:#9ca3af;margin:16px 0 0;">Direct deposit is how the market pays its vendors. Your bank details go to Stripe, not to us \u2014 we never see your account number or your ID.</p>`;
   await send(to, `Set up direct deposit \u00b7 Community Harvest`, shell(inner));
 }
 

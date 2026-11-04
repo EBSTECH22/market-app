@@ -320,7 +320,35 @@ model Employee {
   name        String   @unique
   pinHash     String
   payRateCents Int     @default(0)
+  /// The old free-text W-4 notes. Kept because it holds what was typed before
+  /// the fields below existed, and nothing reads it any more.
   w4Json      String   @default("{}")
+
+  /// W-2 or 1099. Withholding only happens for W2; a contractor's stub shows
+  /// gross with nothing taken off.
+  payType     String   @default("W2")
+
+  /// THE W-4, AS FIELDS RATHER THAN NOTES.
+  ///
+  /// Defaults to SINGLE with nothing else, which is what the IRS says to
+  /// withhold at when an employee has handed in no Form W-4 — and is why
+  /// these are real columns with defaults rather than a JSON blob that starts
+  /// empty. An empty blob has no filing status at all, so there is nothing to
+  /// withhold from until somebody types one.
+  fedFilingStatus     String @default("SINGLE")
+  fedStep2            Boolean @default(false)
+  /// Step 3 — annual dependant credit, in cents.
+  fedDependentsCents  Int    @default(0)
+  /// Step 4(a) — other annual income, in cents.
+  fedOtherIncomeCents Int    @default(0)
+  /// Step 4(b) — annual deductions beyond the standard, in cents.
+  fedDeductionsCents  Int    @default(0)
+  /// Step 4(c) — extra withheld EACH PAY PERIOD, in cents. Not annual.
+  fedExtraCents       Int    @default(0)
+
+  okFilingStatus String @default("SINGLE")
+  okAllowances   Int    @default(0)
+  okExtraCents   Int    @default(0)
   active      Boolean  @default(true)
   // OWNER | MANAGER | EMPLOYEE. Everyone who already exists becomes EMPLOYEE,
   // which is exactly the access they have today — nobody is promoted by a
@@ -346,6 +374,98 @@ model TimeEntry {
   clockIn    DateTime  @default(now())
   clockOut   DateTime?
   note       String    @default("")
+}
+
+/**
+ * One week's payroll, from draft to paid.
+ *
+ * A run is the thing that freezes. While it is DRAFT every figure on it can be
+ * recomputed from the timeclock or typed over; once it is PAID the stubs stop
+ * moving, because a paystub somebody has already been handed has to still say
+ * the same thing next March.
+ */
+model PayRun {
+  id         String   @id @default(cuid())
+  /// Monday of the period, YYYY-MM-DD, market time. The run's natural key.
+  periodFrom String
+  /// Sunday of the period, YYYY-MM-DD.
+  periodTo   String
+  /// The Friday they are paid, YYYY-MM-DD.
+  payDate    String
+  /// DRAFT | PAID
+  status     String   @default("DRAFT")
+  /// Pay periods in a year, stored so a reprint divides by what was used at
+  /// the time rather than by whatever the schedule is now.
+  periodsPerYear Int  @default(52)
+  /// The tax year whose tables were used. A run opened in January against
+  /// last year's tables is a wrong run, and this is what catches it.
+  taxYear    Int
+  note       String   @default("")
+  createdAt  DateTime @default(now())
+  createdBy  String   @default("")
+  paidAt     DateTime?
+  paidBy     String   @default("")
+  stubs      Paystub[]
+
+  @@unique([periodFrom])
+  @@index([status])
+}
+
+/**
+ * One person's paycheck on one run.
+ *
+ * Every figure is stored rather than recomputed on read, and the W-4 and the
+ * deduction list are SNAPSHOTTED as text. Same reason the booth agreements
+ * snapshot their clauses: change somebody's filing status in March and last
+ * year's stub must not quietly restate itself.
+ */
+model Paystub {
+  id         String  @id @default(cuid())
+  payRunId   String
+  payRun     PayRun  @relation(fields: [payRunId], references: [id], onDelete: Cascade)
+  employeeId String
+  /// Copied, not joined — a stub has to print correctly for somebody who has
+  /// since left and been deactivated.
+  employeeName String @default("")
+
+  /// Hundredths of an hour. 8.25 hours is 825.
+  hourHundredths Int  @default(0)
+  rateCents      Int  @default(0)
+  grossCents     Int  @default(0)
+
+  ssCents        Int  @default(0)
+  medicareCents  Int  @default(0)
+  federalCents   Int  @default(0)
+  stateCents     Int  @default(0)
+  otherDedCents  Int  @default(0)
+  netCents       Int  @default(0)
+
+  /// Year to date INCLUDING this stub, frozen when the run is paid.
+  ytdGrossCents    Int @default(0)
+  ytdSsCents       Int @default(0)
+  ytdMedicareCents Int @default(0)
+  ytdFederalCents  Int @default(0)
+  ytdStateCents    Int @default(0)
+  ytdNetCents      Int @default(0)
+
+  /// The W-4 as it stood when this was worked out.
+  w4Json         String @default("{}")
+  /// The named deductions that were applied, with their amounts.
+  deductionsJson String @default("[]")
+  /// Which figures were typed by hand: ["gross","federal",...].
+  manualJson     String @default("[]")
+  /// Which figures have no table and no hand-entered value. Non-empty means
+  /// the stub is not finished and the run cannot be paid.
+  missingJson    String @default("[]")
+  /// Hours came from the timeclock, or were entered by hand.
+  hoursFromClock Boolean @default(true)
+  note           String  @default("")
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([payRunId, employeeId])
+  @@index([employeeId])
 }
 
 model Deduction {

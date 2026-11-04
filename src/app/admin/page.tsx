@@ -18,8 +18,8 @@ import { subscribeToPush } from "@/lib/pushclient";
 import { type Capability, type Role, ROLE_LABEL, ROLE_BLURB } from "@/lib/roles";
 import { auditLabel, actorLabel } from "@/lib/auditkinds";
 import { newSaleKey } from "@/lib/offline";
-import { recentPeriods, periodFor, isComplete } from "@/lib/payperiod";
 import { NonPaymentNotice } from "@/components/NonPaymentNotice";
+import { PayrollRun, AddPunch } from "@/components/admin/PayrollRun";
 
 type Vendor = { id: string; code: string; businessName: string; contactName: string; email: string; phone: string; commissionPercent: number; active: boolean; allowSelfCheckout: boolean; rentFree?: boolean; marketFeePercent?: number | null; curbsideEnabled?: boolean; payoutsEnabled?: boolean; payoutStatusNote?: string; payoutNudgeAt?: string | null; balance: number; applicationId?: string | null; portalLocked?: boolean; hasSignedContract?: boolean; holdReleased?: { boothLabel: string; at: string | null } | null };
 type FloorItem = { id: string; sku: string; name: string; priceCents: number; basePriceCents?: number; salePercent?: number; quantity: number; taxClass?: string; vendorName: string; vendorCode: string; lowStockAt?: number; hasOptions?: boolean; discountLabel?: string };
@@ -1660,7 +1660,6 @@ type Employee = { id: string; name: string };
 type W4 = { filingStatus?: string; dependentsDollars?: string; otherIncomeDollars?: string; extraWithholdingDollars?: string; notes?: string };
 type TeamMember = { id: string; name: string; payRateCents: number; w4: W4; deductions: { id: string; name: string; amountCents: number }[]; docs: { id: string; kind: string; filename: string; createdAt: string }[]; hasPin?: boolean; pinSetAt?: string | null };
 type Punch = { id: string; day: string; inAt: string; outAt: string; hours: number; note: string };
-type PayrollRow = { id: string; name: string; payRateCents: number; hours: number; grossCents: number; dedCents: number; netCents: number; deductions: { name: string; amountCents: number }[]; openEntries: number; punches?: Punch[] };
 type Report = {
   start: string; end: string; gross: number; tax: number; cash: number; card: number; tickets: number; refundTotal?: number;
   vGross: number; vNet: number; units: number;
@@ -2067,11 +2066,6 @@ export default function AdminPage() {
   const [timeData, setTimeData] = useState<{ open: { id: string; clockIn: string } | null; entries: { id: string; dayStr: string; inStr: string; outStr: string | null; hours: number | null }[] } | null>(null);
   const [timeMsg, setTimeMsg] = useState("");
   const [team, setTeam] = useState<TeamMember[]>([]);
-  const [payFrom, setPayFrom] = useState("");
-  const [payTo, setPayTo] = useState("");
-  const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
-  /* Whose punches are expanded on the payroll report. */
-  const [openPunches, setOpenPunches] = useState<string>("");
   const [teamMsg, setTeamMsg] = useState("");
   const [applications, setApplications] = useState<{ id: string; status: string; businessName: string; contactName: string; email: string; phone: string; category: string; products: string; madeByYou: string; links: string; licenses: string; insurance: string; availability: string; boothRequest: string; heardFrom: string; phoneType?: string; notes: string; adminNotes?: string; stage?: string; viewingAt?: string; createdAt: string }[]>([]);
   const [appOpen, setAppOpen] = useState<string | null>(null);
@@ -3640,14 +3634,6 @@ export default function AdminPage() {
     await loadTickets(ticketQ, ticketDrawer?.id || ""); await loadDrawer(); await loadAll();
   };
 
-  const runPayroll = async () => {
-    setTeamMsg("");
-    if (!payFrom || !payTo) { setTeamMsg("Pick both dates first."); return; }
-    setOpenPunches("");
-    const { ok, data } = await safeFetch(`/api/admin/payroll?from=${payFrom}&to=${payTo}`);
-    if (!ok) { setTeamMsg(String(data.error || "Failed.")); return; }
-    setPayroll(data.rows as PayrollRow[]);
-  };
 
   // ---------- drawer ----------
   const countTotal = () => DENOMS.reduce((t, [k, , cents]) => t + Math.max(0, Math.round(Number(counts[k]) || 0)) * cents, 0);
@@ -6969,185 +6955,9 @@ export default function AdminPage() {
             </div>
           </Card>
 
-          <Card
-            className="mb-4"
-            title="Payroll run"
-            subtitle="Monday to Sunday, paid the following Friday. Hours come straight off the time clock."
-          >
-            <div className="stack g-4">
-              {/* THE WEEK, NOT TWO DATES.
-                  
-                  The period here is always Monday to Sunday and always paid
-                  the Friday after. Typing both ends by hand every time is how
-                  somebody eventually pays a week that runs Sunday to Saturday
-                  and nobody notices until a cashier queries their hours. */}
-              <div className="stack g-2">
-                <span className="t-label">Pay period</span>
-                <div className="row wrap g-2">
-                  {recentPeriods(isoDate(), 6).map((per) => {
-                    const on = payFrom === per.from && payTo === per.to;
-                    const done = isComplete(per, isoDate());
-                    return (
-                      <Button
-                        key={per.from}
-                        size="sm"
-                        variant={on ? "primary" : "secondary"}
-                        disabled={busy}
-                        onClick={() => { setPayFrom(per.from); setPayTo(per.to); setPayroll(null); setTeamMsg(""); }}
-                      >
-                        {per.label}{done ? "" : " (open)"}
-                      </Button>
-                    );
-                  })}
-                </div>
-                {payFrom && payTo ? (
-                  <span className="t-xs t-muted">
-                    {periodFor(payFrom).from === payFrom && periodFor(payFrom).to === payTo
-                      ? `Monday to Sunday · ${periodFor(payFrom).payLabel}`
-                      : "Custom range — not a Monday-to-Sunday week, so no pay date is worked out."}
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="grid-auto" style={{ ["--min" as string]: "180px" }}>
-                <Field label="From" hint="First day of the pay period.">
-                  {(p) => <Input {...p} type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} />}
-                </Field>
-                <Field label="To" hint="Last day, counted in full.">
-                  {(p) => <Input {...p} type="date" value={payTo} onChange={(e) => setPayTo(e.target.value)} />}
-                </Field>
-              </div>
-
-              <div className="row wrap g-2">
-                <Button
-                  icon="chart"
-                  loading={pending === "payroll"}
-                  onClick={async () => {
-                    setPending("payroll");
-                    try { await runPayroll(); } finally { setPending(""); }
-                  }}
-                >
-                  Run payroll report
-                </Button>
-                {payroll ? (
-                  <Button variant="ghost" icon="close" onClick={() => { setPayroll(null); setTeamMsg(""); }}>
-                    Clear results
-                  </Button>
-                ) : null}
-              </div>
-
-              {teamMsg ? <Note tone="error" title="That didn't go through">{teamMsg}</Note> : null}
-
-              {payroll ? (
-                <div className="stack g-3">
-                  {/* What week this is and when it gets paid, stated on the
-                      report itself — it is the thing somebody writes on the
-                      cheque stub, and it should not have to be worked out. */}
-                  {periodFor(payFrom).from === payFrom && periodFor(payFrom).to === payTo ? (
-                    <Note tone={isComplete(periodFor(payFrom), isoDate()) ? "neutral" : "warn"}>
-                      <b>{periodFor(payFrom).label}</b> · Monday to Sunday · <b>{periodFor(payFrom).payLabel}</b>
-                      {isComplete(periodFor(payFrom), isoDate())
-                        ? null
-                        : " — this week isn't finished yet, so these hours will still change."}
-                    </Note>
-                  ) : null}
-
-                  <DataTable
-                    rows={payroll}
-                    columns={[
-                      {
-                        key: "name",
-                        header: "Employee",
-                        primary: true,
-                        sortBy: (r) => r.name,
-                        cell: (r) => (
-                          <div className="stack g-1" style={{ minWidth: 0 }}>
-                            <b className="truncate">{r.name}</b>
-                            {r.openEntries > 0 ? (
-                              <Badge tone="warn" dot>Still clocked in</Badge>
-                            ) : null}
-                            {/* The punches behind the number. A total nobody
-                                can take apart is a total nobody can argue
-                                with — including when the employee is right. */}
-                            {r.punches && r.punches.length > 0 ? (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                style={{ alignSelf: "flex-start", paddingLeft: 0 }}
-                                onClick={() => setOpenPunches((cur) => (cur === r.id ? "" : r.id))}
-                              >
-                                {openPunches === r.id ? "Hide" : `${plural(r.punches.length, "punch", "punches")}`}
-                              </button>
-                            ) : null}
-                            {openPunches === r.id && r.punches ? (
-                              <div className="stack g-1" style={{ paddingTop: "var(--sp-1)" }}>
-                                {r.punches.map((t) => (
-                                  <span key={t.id} className="t-xs t-muted">
-                                    <b>{t.day}</b> {t.inAt}
-                                    {t.outAt ? ` – ${t.outAt}` : " – still in"}
-                                    {t.outAt ? <span className="num"> · {t.hours.toFixed(2)} hrs</span> : null}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        ),
-                      },
-                      { key: "hours", header: "Hours", align: "right", sortBy: (r) => r.hours, cell: (r) => <span className="num">{r.hours.toFixed(2)}</span> },
-                      { key: "rate", header: "Rate", align: "right", hideBelow: 760, sortBy: (r) => r.payRateCents, cell: (r) => <span className="num">{money(r.payRateCents)}/hr</span> },
-                      { key: "gross", header: "Gross", align: "right", sortBy: (r) => r.grossCents, cell: (r) => <span className="num">{money(r.grossCents)}</span> },
-                      { key: "ded", header: "Deductions", align: "right", sortBy: (r) => r.dedCents, cell: (r) => <span className="num">{r.dedCents > 0 ? `− ${money(r.dedCents)}` : "—"}</span> },
-                      { key: "net", header: "Net", align: "right", sortBy: (r) => r.netCents, cell: (r) => <b className="num">{money(r.netCents)}</b> },
-                    ]}
-                    rowKey={(r) => r.id}
-                    loading={pending === "payroll"}
-                    skeletonRows={4}
-                    mobileCards
-                    caption={`Payroll ${payFrom} to ${payTo}`}
-                    defaultSort={{ key: "net", dir: "desc" }}
-                    empty={
-                      <EmptyState
-                        icon="clock"
-                        title="Nobody worked in that range"
-                        body="No clocked hours fell between those two dates. Try a wider period."
-                      />
-                    }
-                  />
-
-                  {payroll.length > 0 ? (
-                    <div className="row between wrap g-3" style={{ padding: "var(--sp-3) 0 0", borderTop: "1px solid var(--border)" }}>
-                      <span className="t-label">
-                        Totals — {plural(payroll.length, "person", "people")}
-                      </span>
-                      <span className="row wrap g-4">
-                        <span className="t-sm">
-                          <span className="t-muted">Hours </span>
-                          <b className="num">{payroll.reduce((s, r) => s + r.hours, 0).toFixed(2)}</b>
-                        </span>
-                        <span className="t-sm">
-                          <span className="t-muted">Gross </span>
-                          <b className="num">{money(payroll.reduce((s, r) => s + r.grossCents, 0))}</b>
-                        </span>
-                        <span className="t-sm">
-                          <span className="t-muted">Deductions </span>
-                          <b className="num">{money(payroll.reduce((s, r) => s + r.dedCents, 0))}</b>
-                        </span>
-                        <span className="t-sm">
-                          <span className="t-muted">Net </span>
-                          <b className="num">{money(payroll.reduce((s, r) => s + r.netCents, 0))}</b>
-                        </span>
-                      </span>
-                    </div>
-                  ) : null}
-
-                  <Note tone="info" title="This is the timesheet side only">
-                    Gross = hours × rate. Net = gross − the recurring deductions on each person&rsquo;s record.
-                    Withholding is yours to compute at Eldridge.
-                  </Note>
-                </div>
-              ) : null}
-            </div>
-          </Card>
+          <PayrollRun allowed={allowed("people")} />
+          <div className="mb-4" />
+          <AddPunch employees={team.map((t) => ({ id: t.id, name: t.name }))} onAdded={() => { void loadTime(); }} />
 
           {/* The roster used to print every person's whole file inline, so the
               page was a wall of forms. It's a list now; the detail lives in a
