@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
-import { TZ, centralInputToDate } from "@/lib/time";
-import { shiftDays } from "@/lib/payperiod";
+import { TZ, centralInputToDate, centralDayEnd } from "@/lib/time";
 
 /**
  * Everything that happened on one vendor's account between two dates.
@@ -91,17 +90,15 @@ const LABEL: Record<string, string> = {
 };
 
 /**
- * Central midnight to Central midnight.
+ * Central midnight to 11:59:59.999 PM Central.
  *
- * The end is the NEXT day's midnight less a millisecond rather than the start
- * plus 24 hours, because a range that ends on the day the clocks go back is 25
- * hours long — and +24h would drop the last hour of trading off the statement.
+ * centralDayEnd rather than the start plus 24 hours, because a day the clocks
+ * go back on is 25 hours long and +24h would drop the last hour of trading off
+ * the statement. Shared with the reports and the payout runs, so a vendor's
+ * statement covers exactly the days the run that paid them covered.
  */
 function window_(from: string, to: string) {
-  return {
-    start: centralInputToDate(`${from}T00:00`),
-    end: new Date(centralInputToDate(`${shiftDays(to, 1)}T00:00`).getTime() - 1),
-  };
+  return { start: centralInputToDate(`${from}T00:00`), end: centralDayEnd(to) };
 }
 
 const dateStr = (d: Date) =>

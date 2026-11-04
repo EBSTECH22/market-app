@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
-import { centralInputToDate, centralMonthStart } from "@/lib/time";
+import { centralInputToDate, centralDayEnd, centralMonthStart } from "@/lib/time";
 import { transferToVendor, stripeBalanceCents, getPayoutFee, feeFor, refreshAccountStatus } from "@/lib/payouts";
 
 export const dynamic = "force-dynamic";
@@ -120,9 +120,10 @@ export async function GET(req: NextRequest) {
       const from = p.get("from");
       const to = p.get("to");
       const periodStart = from ? centralInputToDate(`${from}T00:00`) : centralMonthStart(new Date());
-      const periodEnd = to
-        ? new Date(centralInputToDate(`${to}T00:00`).getTime() + 24 * 60 * 60 * 1000 - 1)
-        : new Date();
+      /* 11:59:59.999 PM Central on the end date — centralDayEnd, never
+         "+24 hours", which loses an hour on the Sunday the clocks go back and
+         borrows one from Monday on the Sunday they go forward. */
+      const periodEnd = to ? centralDayEnd(to) : new Date();
       const rows = await buildRows(periodStart, periodEnd);
       return NextResponse.json({
         preview: true,
@@ -219,8 +220,11 @@ export async function POST(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       return NextResponse.json({ error: "Pick a start and end date for the period." }, { status: 400 });
     }
+    /* Central midnight to 11:59:59.999 PM Central, and the end is STAMPED ON
+       THE RUN — so a run paid for October is still a run for October next
+       March, whatever anybody later types into the date boxes. */
     const periodStart = centralInputToDate(`${from}T00:00`);
-    const periodEnd = new Date(centralInputToDate(`${to}T00:00`).getTime() + 24 * 60 * 60 * 1000 - 1);
+    const periodEnd = centralDayEnd(to);
     if (periodEnd <= periodStart) {
       return NextResponse.json({ error: "The end date has to be after the start date." }, { status: 400 });
     }

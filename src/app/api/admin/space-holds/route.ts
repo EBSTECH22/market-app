@@ -4,6 +4,7 @@ import { runRoute } from "@/lib/handler";
 import { denyUnless } from "@/lib/perm";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
 import { activeHolds, releaseHold, takeOne, expireHolds } from "@/lib/spaceholds";
+import { centralDayEnd } from "@/lib/time";
 import { sendSpaceHeldEmail, noticeSigner } from "@/lib/email";
 import { firstName } from "@/lib/nonpayment";
 
@@ -51,8 +52,10 @@ export async function POST(req: NextRequest) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(rawUntil)) {
         return NextResponse.json({ error: "Use a date like 2026-10-03, or leave it empty." }, { status: 400 });
       }
-      /* End of that day, Central — a hold "until Friday" includes Friday. */
-      holdUntil = new Date(`${rawUntil}T23:59:59-05:00`);
+      /* End of that day, Central — a hold "until Friday" includes Friday.
+         centralDayEnd, not a hardcoded -05:00: that offset is CDT, so between
+         November and March every hold expired an hour early. */
+      holdUntil = centralDayEnd(rawUntil);
       if (holdUntil.getTime() < Date.now()) {
         return NextResponse.json({ error: "That date has already passed." }, { status: 400 });
       }

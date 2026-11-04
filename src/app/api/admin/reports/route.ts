@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-import { TZ, centralDayStart, centralMonthStart, centralInputToDate } from "@/lib/time";
+import { TZ, centralDayStart, centralDayEnd, centralMonthStart, centralInputToDate } from "@/lib/time";
 import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +21,12 @@ export async function GET(req: NextRequest) {
 
   let start: Date, end = now;
   if (period === "custom") {
+    /* A custom range is whole Central days: midnight on the from date through
+       11:59:59.999 PM on the to date. centralDayEnd rather than "+24 hours",
+       which is an hour short on the Sunday the clocks go back and an hour long
+       on the Sunday they go forward. */
     start = p.get("from") ? centralInputToDate(`${p.get("from")}T00:00`) : new Date(0);
-    end = p.get("to") ? new Date(centralInputToDate(`${p.get("to")}T00:00`).getTime() + 24 * 60 * 60 * 1000 - 1) : now;
+    end = p.get("to") ? centralDayEnd(String(p.get("to"))) : now;
   } else if (period === "week") start = centralWeekStart(now);
   else if (period === "month") start = centralMonthStart(now);
   else if (period === "quarter") {

@@ -3,8 +3,8 @@ import { db } from "@/lib/db";
 import { denyUnless } from "@/lib/perm";
 import { runRoute } from "@/lib/handler";
 import { recordAudit, currentAuditActor } from "@/lib/audit";
-import { centralInputToDate } from "@/lib/time";
-import { periodFor, shiftDays } from "@/lib/payperiod";
+import { centralInputToDate, centralDayEnd } from "@/lib/time";
+import { periodFor } from "@/lib/payperiod";
 import { buildStub, DEFAULT_W4, isComplete, type Stub, type W4 } from "@/lib/paystub";
 import { YEAR as TAX_YEAR, type FilingStatus, type OkStatus } from "@/lib/taxtables";
 
@@ -59,7 +59,7 @@ function w4Of(e: {
  */
 async function clockHours(from: string, to: string) {
   const start = centralInputToDate(`${from}T00:00`);
-  const end = new Date(centralInputToDate(`${shiftDays(to, 1)}T00:00`).getTime() - 1);
+  const end = centralDayEnd(to);
   const entries = await db.timeEntry.findMany({ where: { clockIn: { gte: start, lte: end } } });
 
   const hundredths = new Map<string, number>();

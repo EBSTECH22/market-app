@@ -50,11 +50,18 @@ export async function GET(req: NextRequest) {
     const from = toDate(url.searchParams.get("from"));
     const to = toDate(url.searchParams.get("to"));
 
-    // Default window: this month plus a generous margin either side, so a
-    // month grid always has its leading and trailing days filled in.
-    const now = new Date();
-    const start = from ?? new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const end = to ?? new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59);
+    /* Default window: this month plus a generous margin either side, so a
+       month grid always has its leading and trailing days filled in. Built
+       from the CENTRAL month, not the server's — on Vercel the server is UTC,
+       so for the last six hours of the last day of a month the old code
+       skipped a month ahead and the grid came back missing its events. */
+    const nowYm = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit" })
+      .format(new Date()).slice(0, 7);
+    const [cy, cm] = nowYm.split("-").map(Number);
+    const monthFirst = (y: number, m: number) =>
+      new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
+    const start = from ?? centralInputToDate(`${monthFirst(cy, cm - 1)}T00:00`);
+    const end = to ?? new Date(centralInputToDate(`${monthFirst(cy, cm + 2)}T00:00`).getTime() - 1);
 
     const events = await db.calendarEvent.findMany({
       where: { startAt: { gte: start, lte: end } },

@@ -36,6 +36,27 @@ export function centralDayStart(now = new Date()): Date {
   return centralInputToDate(`${centralYmd(now)}T00:00`);
 }
 
+/**
+ * The last instant of a Central calendar day — 11:59:59.999 PM Central.
+ *
+ * ONE PLACE, because every report and every payout run needs this and the
+ * tempting shortcut is wrong twice a year. "Midnight plus 24 hours less a
+ * millisecond" is right for 363 days: the Sunday the clocks go back is 25
+ * hours long, so +24h stops at 11pm and drops the last hour of trading off
+ * the period; the Sunday they go forward is 23 hours, so +24h runs an hour
+ * into Monday and counts it in both periods.
+ *
+ * Taking the NEXT day's Central midnight and stepping back a millisecond is
+ * right every time, because the offset is worked out for that day rather than
+ * assumed. Date.UTC does the calendar arithmetic, so month and year ends roll
+ * over on their own.
+ */
+export function centralDayEnd(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  return new Date(centralInputToDate(`${next}T00:00`).getTime() - 1);
+}
+
 export function centralMonthStart(now = new Date()): Date {
   const [y, m] = centralYmd(now).split("-");
   return centralInputToDate(`${y}-${m}-01T00:00`);

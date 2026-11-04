@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-import { centralInputToDate, TZ } from "@/lib/time";
-import { periodFor, shiftDays as nextDayBy } from "@/lib/payperiod";
+import { centralInputToDate, centralDayEnd, TZ } from "@/lib/time";
+import { periodFor } from "@/lib/payperiod";
 
-/** The calendar day after an ISO date, in plain date arithmetic. */
-const nextDay = (iso: string) => nextDayBy(iso, 1);
 import { denyUnless } from "@/lib/perm";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +26,7 @@ export async function GET(req: NextRequest) {
      Taking Central midnight of the NEXT day and stepping back a millisecond
      is correct every time, because the conversion does the offset itself. */
   const start = centralInputToDate(`${from}T00:00`);
-  const end = new Date(centralInputToDate(`${nextDay(to)}T00:00`).getTime() - 1);
+  const end = centralDayEnd(to);
 
   const employees = await db.employee.findMany({ where: { active: true }, orderBy: { name: "asc" } });
   const entries = await db.timeEntry.findMany({ where: { clockIn: { gte: start, lte: end } } });
