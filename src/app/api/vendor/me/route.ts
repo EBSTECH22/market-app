@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { currentVendorId } from "@/lib/auth";
 import { centralMonthStart } from "@/lib/time";
 import { payBlockFor } from "@/lib/spacehold";
+import { getPayoutDay } from "@/lib/schedule";
 import { getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 import { marketFeeFor } from "@/lib/marketfee";
 
@@ -41,5 +42,10 @@ export async function GET() {
      (the vendor's price plus this) next to the price the vendor set. */
   const cardPercent = await getCardAdjustPercent();
   const feePercent = marketFeeFor(vendor as { marketFeePercent?: number | null }, await getMarketFeePercent());
-  return NextResponse.json({ vendor, items, ledger, balance, monthSales, monthNet, hold, cardPercent, feePercent });
+  /* The day of the month the market pays. The portal needs it to tell a
+     vendor when last month's statement settles, and it has to be the market's
+     own setting rather than a number written into the portal — otherwise
+     changing the payout day would leave every vendor reading the old one. */
+  const payoutDay = await getPayoutDay();
+  return NextResponse.json({ vendor, items, ledger, balance, monthSales, monthNet, hold, cardPercent, feePercent, payoutDay });
 }

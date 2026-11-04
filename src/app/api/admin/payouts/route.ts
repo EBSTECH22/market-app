@@ -46,14 +46,39 @@ type PeriodRow = {
   grossCents: number;
   commissionCents: number;
   refundCents: number;
+  /** The balance AS AT 11:59:59.999 PM on the end date — what the run pays against. */
   balanceCents: number;
+  /** Already paid to them since the period closed, so a re-run can't pay twice. */
+  paidSinceCents: number;
+  /** Their balance at this moment, period or no period. Shown, never paid. */
+  liveBalanceCents: number;
   netCents: number;
   /** Whether Stripe will accept a transfer to them right now. */
   payoutsEnabled: boolean;
   hasAccount: boolean;
 };
 
-/** What each vendor sold in the window, and what the books say they're owed now. */
+/**
+ * What each vendor sold in the window, and what they're owed FOR THAT WINDOW.
+ *
+ * THE BALANCE IS TAKEN AS AT THE END OF THE PERIOD, not as at right now, and
+ * that is the important line in this file. October's run is paid on the 15th of
+ * November, by which point two weeks of November sales and the whole of
+ * November's rent are already sitting on every vendor's account. Paying the
+ * live balance would hand them half of November early and quietly net it
+ * against rent that isn't due yet — so the cheque would not be "October", which
+ * is what the statement says and what the vendor was told.
+ *
+ * Anything paid out SINCE the period closed is added back (payout entries are
+ * negative), so re-opening October in December shows nothing left to pay rather
+ * than offering to pay it a second time. In one sentence, and this is what goes
+ * on the statement: what the books said you were owed at the end of the period,
+ * less anything we have paid you since.
+ *
+ * Still the balance and not the period's sales, for the original reason: the
+ * ledger already nets refunds, rent charged and rent paid. Paying a period's
+ * sales would pay for goods since refunded and ignore rent owed.
+ */
 async function buildRows(periodStart: Date, periodEnd: Date): Promise<PeriodRow[]> {
   const vendors = await db.vendor.findMany({
     where: { active: true },
@@ -74,13 +99,32 @@ async function buildRows(periodStart: Date, periodEnd: Date): Promise<PeriodRow[
     select: { vendorId: true, amountCents: true },
   });
 
-  const balances = await db.ledgerEntry.groupBy({
-    by: ["vendorId"],
-    _sum: { amountCents: true },
-  });
-  const balanceOf = new Map<string, number>(
-    balances.map((b) => [b.vendorId, b._sum.amountCents || 0] as [string, number])
-  );
+  /* Three sums, each answering a different question:
+       asAt   — everything up to the end of the period: what is being paid.
+       since  — payouts made after it: what has already gone out against it.
+       live   — everything, full stop: shown so the office can see the
+                difference between the period and today without doing sums. */
+  const [asAt, since, live] = await Promise.all([
+    db.ledgerEntry.groupBy({
+      by: ["vendorId"],
+      where: { createdAt: { lte: periodEnd } },
+      _sum: { amountCents: true },
+    }),
+    db.ledgerEntry.groupBy({
+      by: ["vendorId"],
+      where: { createdAt: { gt: periodEnd }, type: { in: ["PAYOUT", "PAYOUT_FEE"] } },
+      _sum: { amountCents: true },
+    }),
+    db.ledgerEntry.groupBy({
+      by: ["vendorId"],
+      _sum: { amountCents: true },
+    }),
+  ]);
+  const sums = (rows: { vendorId: string; _sum: { amountCents: number | null } }[]) =>
+    new Map<string, number>(rows.map((b) => [b.vendorId, b._sum.amountCents || 0] as [string, number]));
+  const asAtOf = sums(asAt);
+  const paidSinceOf = sums(since);
+  const liveOf = sums(live);
 
   const gross = new Map<string, number>();
   const commission = new Map<string, number>();
@@ -93,7 +137,11 @@ async function buildRows(periodStart: Date, periodEnd: Date): Promise<PeriodRow[
 
   return vendors
     .map((v) => {
-      const balanceCents = balanceOf.get(v.id) || 0;
+      const balanceCents = asAtOf.get(v.id) || 0;
+      /* Payout entries are stored negative, so adding them back is what
+         subtracts what has already been paid against this period. */
+      const paidSinceCents = paidSinceOf.get(v.id) || 0;
+      const owed = balanceCents + paidSinceCents;
       return {
         vendorId: v.id,
         vendorCode: v.code,
@@ -102,12 +150,14 @@ async function buildRows(periodStart: Date, periodEnd: Date): Promise<PeriodRow[
         commissionCents: commission.get(v.id) || 0,
         refundCents: refunded.get(v.id) || 0,
         balanceCents,
-        netCents: balanceCents > 0 ? balanceCents : 0,
+        paidSinceCents,
+        liveBalanceCents: liveOf.get(v.id) || 0,
+        netCents: owed > 0 ? owed : 0,
         payoutsEnabled: !!v.payoutsEnabled,
         hasAccount: !!v.stripeAccountId,
       };
     })
-    .filter((r) => r.grossCents > 0 || r.balanceCents !== 0)
+    .filter((r) => r.grossCents > 0 || r.balanceCents !== 0 || r.liveBalanceCents !== 0)
     .sort((a, b) => b.netCents - a.netCents);
 }
 

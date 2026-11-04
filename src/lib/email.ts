@@ -651,6 +651,7 @@ export async function sendVendorStatementEmail(s: {
     owed > 0
       ? `<div style="text-align:left;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:14px 16px;margin:14px 0;font-size:14px;color:#065f46;">
            The market owes you <b>${m(owed)}</b> as of ${nice(s.to)}.
+           <div style="font-size:12.5px;margin-top:6px;color:#047857;">${s.settlementNote}</div>
          </div>`
       : owed < 0
         ? `<div style="text-align:left;background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin:14px 0;font-size:14px;color:#92400e;">

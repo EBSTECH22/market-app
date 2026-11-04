@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { TZ, centralInputToDate, centralDayEnd } from "@/lib/time";
+import { getPayoutDay } from "@/lib/schedule";
 
 /**
  * Everything that happened on one vendor's account between two dates.
@@ -61,6 +62,10 @@ export type VendorStatement = {
   closingBalanceCents: number;
   lines: StatementLine[];
   sales: StatementSale[];
+  /** Day of the month the market pays, from its own setting. 0 = none set. */
+  payoutDay: number;
+  /** One sentence saying when this period is settled. */
+  settlementNote: string;
   totals: {
     salesGrossCents: number;
     marketShareCents: number;
@@ -75,6 +80,58 @@ export type VendorStatement = {
     otherCents: number;
   };
 };
+
+/**
+ * WHEN A PERIOD IS SETTLED. One sentence, built from the market's own payout
+ * day — the setting under Money, not a number typed into this file.
+ *
+ * It is printed on the statement because the first question a vendor asks when
+ * they read a closing balance is "so when do I get it", and an answer on the
+ * page is one fewer phone call — and one fewer vendor who believes they were
+ * paid late. Set the payout day to 15 and October's statement says "settled on
+ * November 15, 2026" by itself, every month, for ever.
+ */
+
+/** Is this range exactly one whole calendar month? */
+function isWholeMonth(from: string, to: string): boolean {
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm, td] = to.split("-").map(Number);
+  if (fy !== ty || fm !== tm || fd !== 1) return false;
+  /* Day 0 of the next month is the last day of this one — so this is right in
+     February, and right in a leap February. */
+  return td === new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+}
+
+/** The date a whole month is settled, as YYYY-MM-DD. Null if no day is set. */
+export function settlementDateOf(from: string, to: string, payoutDay: number): string | null {
+  if (!payoutDay || payoutDay < 1 || payoutDay > 28) return null;
+  if (!isWholeMonth(from, to)) return null;
+  const [y, m] = from.split("-").map(Number);
+  return new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, payoutDay)).toISOString().slice(0, 10);
+}
+
+export function settlementNote(from: string, to: string, payoutDay: number): string {
+  const partial = !isWholeMonth(from, to);
+  const iso = settlementDateOf(from, to, payoutDay);
+
+  if (partial) {
+    return payoutDay
+      ? `A full calendar month is settled on the ${payoutDay}${ordinal(payoutDay)} of the month after it. This statement covers part of a month, so it shows where the account stands rather than a payment.`
+      : "This statement covers part of a month, so it shows where the account stands rather than a payment.";
+  }
+  const [y, m] = from.split("-").map(Number);
+  const month = new Date(Date.UTC(y, m - 1, 15)).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  if (!iso) {
+    return `${month} closed at 11:59 PM on the last day of the month. It is settled once the month's payout run goes out.`;
+  }
+  const nice = new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+  });
+  return `${month} closed at 11:59 PM on the last day of the month, Central time. It is settled on ${nice}.`;
+}
+
+const ordinal = (n: number) =>
+  n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
 
 /** What each ledger type is called on a statement a vendor reads. */
 const LABEL: Record<string, string> = {
@@ -118,6 +175,7 @@ export async function buildVendorStatement(
   if (!vendor) return null;
 
   const { start, end } = window_(from, to);
+  const payoutDay = await getPayoutDay();
 
   /* Where the account stood the instant before the period opened. Without it
      the movements below are a list rather than a statement. */
@@ -222,6 +280,8 @@ export async function buildVendorStatement(
     vendor,
     from,
     to,
+    payoutDay,
+    settlementNote: settlementNote(from, to, payoutDay),
     openingBalanceCents,
     closingBalanceCents: openingBalanceCents + movement,
     lines: statementLines,
@@ -259,6 +319,7 @@ export function statementCsv(s: VendorStatement): string {
   const rows: string[] = [];
   rows.push(cell(`Statement for ${s.vendor.businessName} (${s.vendor.code})`));
   rows.push(cell(`${s.from} to ${s.to}`));
+  rows.push(cell(s.settlementNote));
   rows.push("");
   rows.push("Account activity");
   rows.push(["Date", "Time", "What", "Detail", "Amount", "Balance"].map(cell).join(","));

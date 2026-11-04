@@ -1774,6 +1774,10 @@ type PayoutRow = {
   commissionCents: number;
   refundCents: number;
   balanceCents: number;
+  /** Paid against this period since it closed. Preview only. */
+  paidSinceCents?: number;
+  /** Their balance right now. Preview only — shown, never paid. */
+  liveBalanceCents?: number;
   netCents: number;
   method: string;
   reference: string;
@@ -8254,9 +8258,10 @@ export default function AdminPage() {
               {payErr ? <Note tone="error">{payErr}</Note> : null}
 
               <Note tone="info">
-                The amount paid is each vendor&rsquo;s <b>current balance</b>, not the period&rsquo;s sales — so rent
-                they owe, refunds since, and anything you&rsquo;ve already paid them are all netted off first. The
-                dates decide what the statement covers.
+                The amount paid is what the books said each vendor was owed at <b>11:59 PM on the end date</b>, less
+                anything you&rsquo;ve paid them since. So rent they owed and refunds given inside the period are
+                netted off — and sales or rent from <i>after</i> the end date are not, which is what makes an October
+                run an October run even when you press it in November.
               </Note>
 
               {payouts.length ? (
@@ -8289,6 +8294,27 @@ export default function AdminPage() {
                       sub={`${payouts.filter((p) => p.balanceCents < 0).length} vendors behind`}
                     />
                   </div>
+
+                  {/* The period is one thing, today is another, and the gap
+                      between them is the trading since the period closed. Shown
+                      rather than left to be noticed, because somebody will
+                      compare this screen to the balances on the Vendors tab
+                      and need to know why they differ. */}
+                  {(() => {
+                    const haveLive = payouts.some((p) => typeof p.liveBalanceCents === "number");
+                    if (!haveLive) return null;
+                    const periodOwed = payouts.reduce((n, p) => n + (p.balanceCents > 0 ? p.balanceCents : 0), 0);
+                    const liveOwed = payouts.reduce((n, p) => n + Math.max(0, p.liveBalanceCents || 0), 0);
+                    const gap = liveOwed - periodOwed;
+                    if (gap === 0) return null;
+                    return (
+                      <Note tone="neutral">
+                        Their balances add up to <b>{money(liveOwed)}</b> right now, {money(Math.abs(gap))}{" "}
+                        {gap > 0 ? "more" : "less"} than this period — that difference is everything that has
+                        happened since the end date, and it belongs to the next run, not this one.
+                      </Note>
+                    );
+                  })()}
 
                   {(() => {
                     const pending = payouts.filter((p) => p.status === "PENDING" && p.netCents > 0);

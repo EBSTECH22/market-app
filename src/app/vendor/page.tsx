@@ -13,6 +13,50 @@ import { VendorMessages } from "@/components/vendor/VendorMessages";
 import { subscribeToPush } from "@/lib/pushclient";
 import { fmtLength, fmtSize, sqFt, bounds, centreOf, type Pt } from "@/lib/floorplan";
 
+/**
+ * The last 13 complete calendar months, newest first.
+ *
+ * Built from the CENTRAL date, not the browser's — a vendor checking on their
+ * phone from a different state must not be offered a different set of months
+ * from the one the market's books are keeping.
+ *
+ * The month in progress is deliberately left out: it is a running total, and
+ * labelling that a statement is how a vendor comes to believe they were paid
+ * short. It shows up as "Sold this month" instead.
+ */
+function monthOptions(): { key: string; label: string; from: string; to: string }[] {
+  const ym = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit" })
+    .format(new Date()).slice(0, 7);
+  const [y, m] = ym.split("-").map(Number);
+  const out: { key: string; label: string; from: string; to: string }[] = [];
+  for (let back = 1; back <= 13; back++) {
+    const first = new Date(Date.UTC(y, m - 1 - back, 1));
+    const last = new Date(Date.UTC(y, m - back, 0));
+    const from = first.toISOString().slice(0, 10);
+    out.push({
+      key: from.slice(0, 7),
+      label: first.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+      from,
+      to: last.toISOString().slice(0, 10),
+    });
+  }
+  return out;
+}
+
+/**
+ * When a month gets settled — the market's payout day, in the month after.
+ *
+ * The day comes from the office's own setting rather than being written in
+ * here, so if the market ever moves payday the portal moves with it instead of
+ * telling every vendor the old date.
+ */
+function settledOn(monthKey: string, payoutDay: number): string | null {
+  if (!payoutDay || payoutDay < 1 || payoutDay > 28) return null;
+  const [y, m] = monthKey.split("-").map(Number);
+  return new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, payoutDay))
+    .toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
 type BoothSpot = {
   id: string; label: string; roomName: string;
   xIn: number; yIn: number; widthIn: number; depthIn: number; rotationDeg: number;
@@ -113,6 +157,8 @@ type Ledger = { id: string; type: string; amountCents: number; note: string; cre
 type Me = {
   vendor: { code: string; businessName: string; email: string; commissionPercent: number; mustChangePassword?: boolean; acceptsPreorders?: boolean; acceptsRequests?: boolean; publicBlurb?: string; tagline?: string; story?: string; instagramUrl?: string; facebookUrl?: string; websiteUrl?: string; allowSelfCheckout?: boolean; lowStockThreshold?: number; cardLast4?: string; curbsideEnabled?: boolean; discountEnabled?: boolean; discountLabel?: string; discountMode?: string; discountPercent?: number; discountCents?: number; contracts?: { id: string; status: string; vendorSignedAt: string | null }[] };
   items: Item[]; ledger: Ledger[]; balance: number; monthSales: number; monthNet: number;
+  /** Day of the month the market pays out. 0 when the office hasn't set one. */
+  payoutDay?: number;
   /** Set when the market let go of the hold on their space over an unpaid invoice. */
   hold?: { boothLabel: string; releasedAt: string; blocked: boolean; reason?: string } | null;
 };
@@ -396,6 +442,10 @@ export default function VendorDashboard() {
   };
   const [statement, setStatement] = useState<Statement | null>(null);
   const [statementYear, setStatementYear] = useState<number | null>(null);
+  /* Which month's statement they're looking at. Opens on the last COMPLETE
+     month, because that's the one that gets settled — the month in progress is
+     a running total, not a statement. */
+  const [stMonth, setStMonth] = useState(() => monthOptions()[0].key);
   const [myPosts, setMyPosts] = useState<{ id: string; body: string; photoId: string | null; createdAt: string }[]>([]);
   const dialog = useDialog();
   const toast = useToast();
@@ -2814,6 +2864,68 @@ export default function VendorDashboard() {
                 <Stat label="Sold this month" value={money(me.monthSales)} sub={`Your net ${money(me.monthNet)}`} icon="receipt" />
                 <Stat label="Market commission" value={`${me.vendor.commissionPercent}%`} sub="Taken off each sale" icon="chart" />
               </div>
+
+              {/* ---- the monthly statement ---------------------------------
+                  The one a vendor actually wants: what they sold last month,
+                  what the market kept, what they're owed and the date it
+                  lands. Same builder as the office's copy, so the figure here
+                  is the figure in the office. */}
+              {(() => {
+                const months = monthOptions();
+                const sel = months.find((o) => o.key === stMonth) || months[0];
+                return (
+                  <Card
+                    title="Monthly statement"
+                    subtitle="Every sale, refund, rent charge and payout for one month — with the date it gets settled."
+                    actions={
+                      <Select
+                        value={sel.key}
+                        aria-label="Statement month"
+                        onChange={(e) => setStMonth(e.target.value)}
+                      >
+                        {months.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                      </Select>
+                    }
+                  >
+                    <div className="stack g-3">
+                      {(() => {
+                        const when = settledOn(sel.key, me.payoutDay || 0);
+                        return (
+                          <Note tone="info">
+                            {sel.label} ran from the 1st through 11:59 PM Central on the last day of the month.
+                            {when ? <> It is settled on <b>{when}</b>.</> : null}
+                          </Note>
+                        );
+                      })()}
+
+                      <div className="row wrap g-2">
+                        <LinkButton
+                          href={`/vendor/statement?from=${sel.from}&to=${sel.to}`}
+                          variant="primary"
+                          icon="receipt"
+                          external
+                        >
+                          Open {sel.label}
+                        </LinkButton>
+                        <LinkButton
+                          href={`/api/vendor/period-statement?from=${sel.from}&to=${sel.to}&csv=1`}
+                          variant="secondary"
+                          icon="download"
+                          external
+                        >
+                          Spreadsheet
+                        </LinkButton>
+                      </div>
+
+                      <p className="t-xs t-muted">
+                        It opens as a printable sheet — print it or save it as a PDF from your browser. The month
+                        you&rsquo;re in now isn&rsquo;t listed because it hasn&rsquo;t finished; it&rsquo;s the
+                        &ldquo;sold this month&rdquo; figure above until it does.
+                      </p>
+                    </div>
+                  </Card>
+                );
+              })()}
 
               {/* Every vendor in every market does this with a shoebox in
                   January. The numbers are already in the ledger. */}
