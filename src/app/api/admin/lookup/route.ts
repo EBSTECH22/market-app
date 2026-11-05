@@ -7,22 +7,27 @@ import { marketFeeFor } from "@/lib/marketfee";
 import { denyUnless } from "@/lib/perm";
 import { validateSelection, resolveSelection, unitVendorCents, type Selection } from "@/lib/itemoptions";
 import { groupsForItem } from "@/lib/optiongroups";
+import { resolveSku } from "@/lib/skulookup";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
-  const sku = req.nextUrl.searchParams.get("sku")?.trim().toUpperCase();
-  if (!sku) return NextResponse.json({ error: "No code." }, { status: 400 });
+  const scanned = req.nextUrl.searchParams.get("sku")?.trim().toUpperCase();
+  if (!scanned) return NextResponse.json({ error: "No code." }, { status: 400 });
 
-  const item = await db.item.findUnique({
-    where: { sku },
+  /* Same reason as self-checkout: the punctuation in a SKU is the one
+     character a scan can get wrong while the barcode itself is fine. */
+  const match = await resolveSku(scanned);
+  const sku = match?.sku || scanned;
+  const item = match ? await db.item.findUnique({
+    where: { sku: match.sku },
     include: {
       vendor: { select: { businessName: true, code: true, active: true, marketFeePercent: true } },
       /* So the till can ask the questions before the line goes on the ticket. */
       
     },
-  });
+  }) : null;
   if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
   if (!item.vendor.active) {
     return NextResponse.json({ error: `${item.vendor.businessName} is deactivated — their items can't be sold. Pull it from the floor.` }, { status: 400 });
@@ -50,16 +55,18 @@ export async function POST(req: NextRequest) {
   { const denied = await denyUnless("ops"); if (denied) return denied; }
 
   const body = await req.json().catch(() => ({}));
-  const sku = String(body.sku || "").trim().toUpperCase();
-  if (!sku) return NextResponse.json({ error: "No code given." }, { status: 400 });
+  const scanned = String(body.sku || "").trim().toUpperCase();
+  if (!scanned) return NextResponse.json({ error: "No code given." }, { status: 400 });
 
-  const item = await db.item.findUnique({
-    where: { sku },
+  const match = await resolveSku(scanned);
+  const sku = match?.sku || scanned;
+  const item = match ? await db.item.findUnique({
+    where: { sku: match.sku },
     include: {
       vendor: { select: { businessName: true, active: true, marketFeePercent: true } },
       
     },
-  });
+  }) : null;
   if (!item || !item.active) return NextResponse.json({ error: `No item found for ${sku}.` }, { status: 404 });
 
   const groups = await groupsForItem(item);

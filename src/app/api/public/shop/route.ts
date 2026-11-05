@@ -9,6 +9,7 @@ import { PUBLIC_VENDOR_WHERE } from "@/lib/vendor";
 import { getTaxRates, getCardAdjustPercent, getMarketFeePercent } from "@/lib/settings";
 import { marketFeeFor } from "@/lib/marketfee";
 import { taxFor, normalizeTaxClass } from "@/lib/tax";
+import { resolveSku } from "@/lib/skulookup";
 
 export const dynamic = "force-dynamic";
 
@@ -49,9 +50,16 @@ export async function POST(req: NextRequest) {
   const b = await req.json();
 
   if (b.action === "lookup") {
-    const sku = String(b.sku || "").trim().toUpperCase();
-    if (!sku) return NextResponse.json({ error: "No code." }, { status: 400 });
-    const item = await db.item.findUnique({ where: { sku }, include: { vendor: { select: { businessName: true, active: true, portalLocked: true, allowSelfCheckout: true, marketFeePercent: true } } } });
+    const scanned = String(b.sku || "").trim().toUpperCase();
+    if (!scanned) return NextResponse.json({ error: "No code." }, { status: 400 });
+    /* A camera read can get the separator wrong without the barcode being
+       wrong, so the punctuation doesn't have to match — the letters and
+       digits do. See skulookup for why this is safe. */
+    const match = await resolveSku(scanned);
+    const sku = match?.sku || scanned;
+    const item = match
+      ? await db.item.findUnique({ where: { sku: match.sku }, include: { vendor: { select: { businessName: true, active: true, portalLocked: true, allowSelfCheckout: true, marketFeePercent: true } } } })
+      : null;
     // portalLocked: the vendor is still onboarding — their goods aren't on the
     // floor yet, so a scanned code shouldn't resolve.
     if (!item || !item.active || !item.vendor.active || item.vendor.portalLocked) {
@@ -76,9 +84,13 @@ export async function POST(req: NextRequest) {
        them may carry the fee. */
     const marketRate = await getMarketFeePercent();
     for (const rl of reqLines) {
-      const sku = String(rl.sku || "").trim().toUpperCase();
+      const scannedLine = String(rl.sku || "").trim().toUpperCase();
       const qty = Math.max(1, Math.min(99, Math.round(Number(rl.qty) || 1)));
-      const item = await db.item.findUnique({ where: { sku }, include: { vendor: true } });
+      const lineMatch = await resolveSku(scannedLine);
+      const sku = lineMatch?.sku || scannedLine;
+      const item = lineMatch
+        ? await db.item.findUnique({ where: { sku: lineMatch.sku }, include: { vendor: true } })
+        : null;
       if (!item || !item.active || !item.vendor.active || !item.vendor.allowSelfCheckout) {
         return NextResponse.json({ error: `${sku} isn't available for self-checkout — remove it or pay at the register.` }, { status: 400 });
       }
